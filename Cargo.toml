@@ -40,7 +40,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Configuration
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
+toml = "1.0"
 dirs = "6.0"
 
 # HTTP (for sync/MCP)
