@@ -12,43 +12,39 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Add a new task
-    #[command(alias = "a")]
+    #[command(visible_alias = "a")]
     Add(AddArgs),
 
     /// List tasks
-    #[command(alias = "ls")]
+    #[command(visible_alias = "ls")]
     List(ListArgs),
 
-    /// Start timer on a task
-    #[command(alias = "s")]
+    /// Start/stop timer on a task (no args = pause running task)
+    #[command(visible_alias = "s")]
     Start(StartArgs),
 
-    /// Pause current timer
-    #[command(alias = "p")]
-    Pause,
-
     /// Complete the running task
-    #[command(alias = "d")]
+    #[command(visible_alias = "d")]
     Done,
 
     /// Show running task status
-    #[command(alias = "st")]
+    #[command(visible_alias = "st")]
     Status,
 
     /// Delete a task
-    #[command(alias = "rm")]
+    #[command(visible_alias = "rm")]
     Remove(RemoveArgs),
 
     /// Edit a task's metadata
-    #[command(alias = "e")]
+    #[command(visible_alias = "e")]
     Edit(EditArgs),
 
     /// Add or view notes on a task
-    #[command(alias = "n")]
+    #[command(visible_alias = "n")]
     Note(NoteArgs),
 
     /// Open TUI
-    #[command(alias = "t")]
+    #[command(visible_alias = "t")]
     Tui,
 }
 
@@ -96,6 +92,10 @@ pub struct ListArgs {
     /// Sort order
     #[arg(long, value_enum, default_value = "created")]
     pub sort: SortBy,
+
+    /// Filter by project
+    #[arg(short, long)]
+    pub project: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum, PartialEq)]
@@ -112,8 +112,8 @@ pub enum SortBy {
 
 #[derive(Parser)]
 pub struct StartArgs {
-    /// Task to start (numeric ID or fuzzy text)
-    #[arg(trailing_var_arg = true, required = true)]
+    /// Task to start (numeric ID or fuzzy text). No args = pause running task.
+    #[arg(trailing_var_arg = true)]
     pub task: Vec<String>,
 }
 

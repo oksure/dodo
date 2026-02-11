@@ -1,4 +1,4 @@
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use std::fmt;
 
 #[derive(Clone, Debug)]
@@ -62,11 +62,38 @@ impl Task {
     }
 
     pub fn area_str(&self) -> &'static str {
-        match self.area {
+        match self.effective_area() {
             Area::LongTerm => "LONG",
             Area::ThisWeek => "WEEK",
             Area::Today => "TODAY",
             Area::Completed => "DONE",
+        }
+    }
+
+    /// Compute area from dates. Done tasks → Completed.
+    /// Tasks with dates → computed from earliest of (scheduled, deadline).
+    /// No dates → Today (default).
+    pub fn effective_area(&self) -> Area {
+        if self.status == TaskStatus::Done {
+            return Area::Completed;
+        }
+
+        let today = Local::now().date_naive();
+        let seven_days = today + chrono::Duration::days(7);
+
+        // Use earliest of scheduled/deadline
+        let earliest = match (self.scheduled, self.deadline) {
+            (Some(s), Some(d)) => Some(s.min(d)),
+            (Some(s), None) => Some(s),
+            (None, Some(d)) => Some(d),
+            (None, None) => None,
+        };
+
+        match earliest {
+            Some(date) if date <= today => Area::Today,
+            Some(date) if date <= seven_days => Area::ThisWeek,
+            Some(_) => Area::LongTerm,
+            None => Area::Today, // No dates = defaults to today
         }
     }
 
@@ -144,10 +171,13 @@ impl Task {
 fn format_duration_short(seconds: i64) -> String {
     let hours = seconds / 3600;
     let mins = (seconds % 3600) / 60;
+    let secs = seconds % 60;
     if hours > 0 {
-        format!("{}h{}m", hours, mins)
+        format!("{}h{}m{}s", hours, mins, secs)
+    } else if mins > 0 {
+        format!("{}m{}s", mins, secs)
     } else {
-        format!("{}m", mins)
+        format!("{}s", secs)
     }
 }
 

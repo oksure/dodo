@@ -194,12 +194,14 @@ impl Database {
                 ), 0) as elapsed_seconds
          FROM tasks t LEFT JOIN sessions s ON s.task_id = t.id";
 
-    fn sort_order_sql(sort: SortBy) -> &'static str {
-        match sort {
-            SortBy::Created => "t.created DESC",
-            SortBy::Modified => "COALESCE(t.modified_at, t.created) DESC",
-            SortBy::Area => "CASE t.area WHEN 'LongTerm' THEN 0 WHEN 'ThisWeek' THEN 1 WHEN 'Today' THEN 2 WHEN 'Completed' THEN 3 END, t.created DESC",
-            SortBy::Title => "t.title ASC",
+    fn sort_order_sql(sort: SortBy, is_completed: bool) -> &'static str {
+        match (sort, is_completed) {
+            (SortBy::Created, true) => "t.created DESC",
+            (SortBy::Created, false) => "t.created ASC",
+            (SortBy::Modified, true) => "COALESCE(t.modified_at, t.created) DESC",
+            (SortBy::Modified, false) => "COALESCE(t.modified_at, t.created) ASC",
+            (SortBy::Area, _) => "CASE t.area WHEN 'LongTerm' THEN 0 WHEN 'ThisWeek' THEN 1 WHEN 'Today' THEN 2 WHEN 'Completed' THEN 3 END, t.created ASC",
+            (SortBy::Title, _) => "t.title ASC",
         }
     }
 
@@ -209,11 +211,11 @@ impl Database {
 
     pub fn list_tasks_sorted(&self, area: Option<CliArea>, sort: SortBy) -> Result<Vec<Task>> {
         let mut tasks = Vec::new();
-        let order = Self::sort_order_sql(sort);
 
         if let Some(area) = area {
             let area_str = Area::from(area).as_str();
             let is_completed = matches!(area, CliArea::Completed);
+            let order = Self::sort_order_sql(sort, is_completed);
             let filter = if is_completed {
                 "WHERE t.area = ?1"
             } else {
@@ -229,6 +231,7 @@ impl Database {
                 tasks.push(self.row_to_task(row)?);
             }
         } else {
+            let order = Self::sort_order_sql(sort, false);
             // Default: show Today + Running tasks
             let query = format!(
                 "{} WHERE (t.area = 'Today' OR t.status = 'Running') AND t.status != 'Done'
@@ -269,11 +272,13 @@ impl Database {
         Ok(ranked.into_iter().cloned().collect())
     }
 
-    pub fn start_timer(&self, query: &str) -> Result<()> {
+    pub fn start_timer(&self, query: &str) -> Result<(String, i64)> {
         // Pause any running task first
         self.pause_timer()?;
 
         let task = self.resolve_task(query)?;
+        let title = task.title.clone();
+        let num_id = task.num_id.unwrap_or(0);
 
         // Update task status
         self.conn.execute(
@@ -297,7 +302,7 @@ impl Database {
             ],
         )?;
 
-        Ok(())
+        Ok((title, num_id))
     }
 
     pub fn pause_timer(&self) -> Result<()> {
@@ -408,8 +413,10 @@ impl Database {
         }
     }
 
-    pub fn delete_task(&self, query: &str) -> Result<()> {
+    pub fn delete_task(&self, query: &str) -> Result<(String, i64)> {
         let task = self.resolve_task(query)?;
+        let title = task.title.clone();
+        let num_id = task.num_id.unwrap_or(0);
 
         // Delete sessions first (foreign key constraint)
         self.conn.execute(
@@ -423,7 +430,7 @@ impl Database {
             params![&task.id],
         )?;
 
-        Ok(())
+        Ok((title, num_id))
     }
 
     pub fn append_note(&self, query: &str, text: &str) -> Result<String> {
@@ -599,6 +606,93 @@ impl Database {
         } else {
             Ok(None)
         }
+    }
+
+    /// Load all tasks with elapsed seconds for TUI grouping by effective_area()
+    pub fn list_all_tasks(&self, sort: SortBy) -> Result<Vec<Task>> {
+        let mut tasks = Vec::new();
+        // Load non-done with ASC, done with DESC, combined
+        let order_nondone = Self::sort_order_sql(sort, false);
+        let order_done = Self::sort_order_sql(sort, true);
+
+        // Non-done tasks
+        let query = format!(
+            "{} WHERE t.status != 'Done' GROUP BY t.id ORDER BY {}",
+            Self::TASK_SELECT_WITH_ELAPSED, order_nondone
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            tasks.push(self.row_to_task(row)?);
+        }
+
+        // Done tasks
+        let query = format!(
+            "{} WHERE t.status = 'Done' GROUP BY t.id ORDER BY {}",
+            Self::TASK_SELECT_WITH_ELAPSED, order_done
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            tasks.push(self.row_to_task(row)?);
+        }
+
+        Ok(tasks)
+    }
+
+    pub fn list_tasks_by_project(&self, project: &str, sort: SortBy) -> Result<Vec<Task>> {
+        let mut tasks = Vec::new();
+        let order = Self::sort_order_sql(sort, false);
+        let query = format!(
+            "{} WHERE t.project = ?1 AND t.status != 'Done' GROUP BY t.id ORDER BY {}",
+            Self::TASK_SELECT_WITH_ELAPSED, order
+        );
+        let mut stmt = self.conn.prepare(&query)?;
+        let mut rows = stmt.query(params![project])?;
+        while let Some(row) = rows.next()? {
+            tasks.push(self.row_to_task(row)?);
+        }
+        Ok(tasks)
+    }
+
+    pub fn append_note_by_id(&self, task_id: &str, text: &str) -> Result<()> {
+        let timestamp = chrono::Local::now().format("[%Y-%m-%d %H:%M]");
+        let new_entry = format!("{} {}", timestamp, text);
+
+        let existing: Option<String> = self.conn.query_row(
+            "SELECT task_notes FROM tasks WHERE id = ?1",
+            params![task_id],
+            |row| row.get(0),
+        )?;
+
+        let updated = match existing {
+            Some(ref notes) if !notes.is_empty() => format!("{}\n{}", notes, new_entry),
+            _ => new_entry,
+        };
+
+        self.conn.execute(
+            "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
+            params![&updated, task_id, Utc::now().to_rfc3339()],
+        )?;
+
+        Ok(())
+    }
+
+    pub fn get_task_notes_by_id(&self, task_id: &str) -> Result<Option<String>> {
+        let notes: Option<String> = self.conn.query_row(
+            "SELECT task_notes FROM tasks WHERE id = ?1",
+            params![task_id],
+            |row| row.get(0),
+        )?;
+        Ok(notes)
+    }
+
+    pub fn update_task_scheduled(&self, task_id: &str, date: NaiveDate) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET scheduled = ?1, modified_at = ?3 WHERE id = ?2",
+            params![date.to_string(), task_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
     }
 
     pub fn find_task_by_num_id(&self, num_id: i64) -> Result<Option<Task>> {

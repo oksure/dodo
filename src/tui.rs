@@ -14,12 +14,11 @@ use ratatui::{
 };
 use std::io;
 
-use dodo::cli::{Area as CliArea, SortBy};
+use dodo::cli::SortBy;
 use dodo::db::Database;
-use dodo::task::{Task, TaskStatus};
+use dodo::task::{Area, Task, TaskStatus};
 
 const PANE_LABELS: [&str; 4] = ["LONG TERM", "THIS WEEK", "TODAY", "DONE"];
-const PANE_AREAS: [CliArea; 4] = [CliArea::LongTerm, CliArea::ThisWeek, CliArea::Today, CliArea::Completed];
 const SORT_MODES: [SortBy; 3] = [SortBy::Created, SortBy::Modified, SortBy::Title];
 
 pub fn run_tui(db: &Database) -> Result<()> {
@@ -89,12 +88,24 @@ impl PaneState {
     }
 }
 
+#[derive(PartialEq)]
+enum AppMode {
+    Normal,
+    NoteView,
+    NoteEdit,
+}
+
 struct App<'a> {
     panes: [PaneState; 4],
     active_pane: usize,
     sort_index: usize,
     running_task: Option<String>,
     db: &'a Database,
+    mode: AppMode,
+    note_task_id: Option<String>,
+    note_task_title: String,
+    note_content: String,
+    note_input: String,
 }
 
 impl<'a> App<'a> {
@@ -105,6 +116,11 @@ impl<'a> App<'a> {
             sort_index: 0,
             running_task: None,
             db,
+            mode: AppMode::Normal,
+            note_task_id: None,
+            note_task_title: String::new(),
+            note_content: String::new(),
+            note_input: String::new(),
         }
     }
 
@@ -119,8 +135,23 @@ impl<'a> App<'a> {
 
     fn refresh_all(&mut self) -> Result<()> {
         let sort = self.current_sort();
-        for (i, area) in PANE_AREAS.iter().enumerate() {
-            self.panes[i].tasks = self.db.list_tasks_sorted(Some(*area), sort)?;
+        let all_tasks = self.db.list_all_tasks(sort)?;
+
+        // Group tasks by effective area
+        let mut groups: [Vec<Task>; 4] = [vec![], vec![], vec![], vec![]];
+        for task in all_tasks {
+            let effective = task.effective_area();
+            let idx = match effective {
+                Area::LongTerm => 0,
+                Area::ThisWeek => 1,
+                Area::Today => 2,
+                Area::Completed => 3,
+            };
+            groups[idx].push(task);
+        }
+
+        for (i, group) in groups.into_iter().enumerate() {
+            self.panes[i].tasks = group;
             // Clamp selection
             let len = self.panes[i].tasks.len();
             if len == 0 {
@@ -155,20 +186,22 @@ impl<'a> App<'a> {
         }
     }
 
-    fn start_selected(&mut self) -> Result<()> {
+    fn toggle_selected(&mut self) -> Result<()> {
         if let Some(task) = self.panes[self.active_pane].selected_task() {
-            let num_id = task.num_id.map(|n| n.to_string()).unwrap_or_default();
-            if !num_id.is_empty() {
-                let _ = self.db.start_timer(&num_id);
-                self.refresh_all()?;
+            if task.status == TaskStatus::Running {
+                // Pause running task
+                self.db.pause_timer()?;
+            } else {
+                let num_id = task.num_id.map(|n| n.to_string()).unwrap_or_default();
+                if !num_id.is_empty() {
+                    // Set scheduled to today so it appears in TODAY pane
+                    let today = chrono::Local::now().date_naive();
+                    self.db.update_task_scheduled(&task.id, today)?;
+                    let _ = self.db.start_timer(&num_id);
+                }
             }
+            self.refresh_all()?;
         }
-        Ok(())
-    }
-
-    fn pause(&mut self) -> Result<()> {
-        self.db.pause_timer()?;
-        self.refresh_all()?;
         Ok(())
     }
 
@@ -177,39 +210,82 @@ impl<'a> App<'a> {
         self.refresh_all()?;
         Ok(())
     }
+
+    fn open_note_view(&mut self) {
+        if let Some(task) = self.panes[self.active_pane].selected_task() {
+            self.note_task_id = Some(task.id.clone());
+            self.note_task_title = task.title.clone();
+            self.note_content = task.notes.clone().unwrap_or_default();
+            self.note_input.clear();
+            self.mode = AppMode::NoteView;
+        }
+    }
+
+    fn enter_note_edit(&mut self) {
+        self.note_input.clear();
+        self.mode = AppMode::NoteEdit;
+    }
+
+    fn save_note(&mut self) -> Result<()> {
+        if let Some(ref task_id) = self.note_task_id {
+            if !self.note_input.is_empty() {
+                self.db.append_note_by_id(task_id, &self.note_input)?;
+                // Refresh note content
+                let notes = self.db.get_task_notes_by_id(task_id)?;
+                self.note_content = notes.unwrap_or_default();
+                self.note_input.clear();
+                self.refresh_all()?;
+            }
+        }
+        self.mode = AppMode::NoteView;
+        Ok(())
+    }
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
-    let mut last_tick = std::time::Instant::now();
-    let tick_rate = std::time::Duration::from_millis(250);
+    let mut last_data_refresh = std::time::Instant::now();
+    let poll_rate = std::time::Duration::from_millis(16); // ~60fps for responsive input
+    let data_refresh_rate = std::time::Duration::from_secs(1); // refresh data every 1s
 
     loop {
         terminal.draw(|f| draw_ui(f, app))?;
 
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| std::time::Duration::from_secs(0));
-
-        if crossterm::event::poll(timeout)? {
+        if crossterm::event::poll(poll_rate)? {
             if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('j') | KeyCode::Down => app.panes[app.active_pane].next(),
-                    KeyCode::Char('k') | KeyCode::Up => app.panes[app.active_pane].previous(),
-                    KeyCode::Char('h') | KeyCode::Left => app.move_pane_left(),
-                    KeyCode::Char('l') | KeyCode::Right => app.move_pane_right(),
-                    KeyCode::Char('s') => { let _ = app.start_selected(); }
-                    KeyCode::Char('p') => { let _ = app.pause(); }
-                    KeyCode::Char('d') => { let _ = app.done(); }
-                    KeyCode::Char('o') => app.cycle_sort(),
-                    KeyCode::Char('r') => { let _ = app.refresh_all(); }
-                    _ => {}
+                match app.mode {
+                    AppMode::Normal => match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                        KeyCode::Char('j') | KeyCode::Down => app.panes[app.active_pane].next(),
+                        KeyCode::Char('k') | KeyCode::Up => app.panes[app.active_pane].previous(),
+                        KeyCode::Char('h') | KeyCode::Left => app.move_pane_left(),
+                        KeyCode::Char('l') | KeyCode::Right => app.move_pane_right(),
+                        KeyCode::Char('s') => { let _ = app.toggle_selected(); }
+                        KeyCode::Char('d') => { let _ = app.done(); }
+                        KeyCode::Char('o') => app.cycle_sort(),
+                        KeyCode::Char('r') => { let _ = app.refresh_all(); }
+                        KeyCode::Char('n') => { app.open_note_view(); }
+                        _ => {}
+                    },
+                    AppMode::NoteView => match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => { app.mode = AppMode::Normal; }
+                        KeyCode::Char('e') => { app.enter_note_edit(); }
+                        _ => {}
+                    },
+                    AppMode::NoteEdit => match key.code {
+                        KeyCode::Esc => { app.mode = AppMode::NoteView; }
+                        KeyCode::Enter => { let _ = app.save_note(); }
+                        KeyCode::Backspace => { app.note_input.pop(); }
+                        KeyCode::Char(c) => { app.note_input.push(c); }
+                        _ => {}
+                    },
                 }
             }
         }
 
-        if last_tick.elapsed() >= tick_rate {
-            last_tick = std::time::Instant::now();
+        // Refresh data periodically (every 1s) for elapsed time updates
+        if last_data_refresh.elapsed() >= data_refresh_rate {
+            let _ = app.refresh_all();
+            last_data_refresh = std::time::Instant::now();
         }
     }
 }
@@ -241,6 +317,94 @@ fn draw_ui(f: &mut Frame, app: &App) {
         let pane_widget = build_pane(&app.panes[i], PANE_LABELS[i], is_active);
         f.render_stateful_widget(pane_widget, pane_chunks[i], &mut app.panes[i].list_state.clone());
     }
+
+    // Note modal overlay
+    if app.mode == AppMode::NoteView || app.mode == AppMode::NoteEdit {
+        draw_note_modal(f, app);
+    }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: ratatui::layout::Rect) -> ratatui::layout::Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn draw_note_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(60, 60, f.area());
+
+    // Clear the area behind the modal
+    f.render_widget(ratatui::widgets::Clear, area);
+
+    let title = format!(" Notes: {} ", app.note_task_title);
+    let help_text = if app.mode == AppMode::NoteEdit {
+        " Enter:save  Esc:cancel "
+    } else {
+        " e:edit  Esc/q:close "
+    };
+
+    let block = Block::default()
+        .title(Span::styled(title, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)))
+        .title_bottom(Span::styled(help_text, Style::default().fg(Color::DarkGray)))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.mode == AppMode::NoteEdit {
+        // Split inner area: existing notes + input line
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(3)])
+            .split(inner);
+
+        // Existing notes
+        let content = if app.note_content.is_empty() {
+            "(no notes yet)".to_string()
+        } else {
+            app.note_content.clone()
+        };
+        let notes_widget = Paragraph::new(content)
+            .style(Style::default().fg(Color::Gray))
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        f.render_widget(notes_widget, chunks[0]);
+
+        // Input line
+        let input_block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::DarkGray));
+        let input_text = format!(">{}", app.note_input);
+        let input_widget = Paragraph::new(input_text)
+            .style(Style::default().fg(Color::White))
+            .block(input_block);
+        f.render_widget(input_widget, chunks[1]);
+    } else {
+        // NoteView: just show notes
+        let content = if app.note_content.is_empty() {
+            "(no notes)".to_string()
+        } else {
+            app.note_content.clone()
+        };
+        let notes_widget = Paragraph::new(content)
+            .style(Style::default().fg(Color::Gray))
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        f.render_widget(notes_widget, inner);
+    }
 }
 
 fn build_header(app: &App<'_>) -> Paragraph<'static> {
@@ -268,7 +432,7 @@ fn build_header(app: &App<'_>) -> Paragraph<'static> {
             Style::default().fg(Color::DarkGray),
         ),
         Span::styled(
-            " h/l:pane j/k:nav s:start p:pause d:done o:sort r:refresh q:quit ",
+            " h/l:pane j/k:nav s:start/stop d:done n:note o:sort r:refresh q:quit ",
             Style::default().fg(Color::DarkGray),
         ),
     ]);
@@ -322,15 +486,14 @@ fn build_pane(pane: &PaneState, label: &str, is_active: bool) -> List<'static> {
                 ),
             ]);
 
-            // Line 2: metadata (only if any present)
-            let meta = build_compact_meta(task);
-            if meta.is_empty() {
+            // Line 2: metadata spans with date colors
+            let meta_spans = build_compact_meta(task);
+            if meta_spans.is_empty() {
                 ListItem::new(vec![line1])
             } else {
-                let line2 = Line::from(vec![
-                    Span::raw("      "),
-                    Span::styled(meta, Style::default().fg(Color::DarkGray)),
-                ]);
+                let mut line2_spans = vec![Span::raw("      ")];
+                line2_spans.extend(meta_spans);
+                let line2 = Line::from(line2_spans);
                 ListItem::new(vec![line1, line2])
             }
         })
@@ -368,41 +531,61 @@ fn task_title_style(task: &Task) -> Style {
     }
 }
 
-fn build_compact_meta(task: &Task) -> String {
-    let mut parts = vec![];
+fn build_compact_meta(task: &Task) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = vec![];
+    let gray = Style::default().fg(Color::DarkGray);
 
     if let Some(p) = task.priority {
-        parts.push("!".repeat(p.clamp(1, 4) as usize));
+        if !spans.is_empty() { spans.push(Span::styled(" ", gray)); }
+        spans.push(Span::styled("!".repeat(p.clamp(1, 4) as usize), gray));
     }
     if let Some(ref p) = task.project {
-        parts.push(format!("+{}", p));
+        if !spans.is_empty() { spans.push(Span::styled(" ", gray)); }
+        spans.push(Span::styled(format!("+{}", p), gray));
     }
     if let Some(est) = task.estimate_minutes {
-        parts.push(format!("~{}", format_est(est)));
+        if !spans.is_empty() { spans.push(Span::styled(" ", gray)); }
+        spans.push(Span::styled(format!("~{}", format_est(est)), gray));
     }
 
     let elapsed = task.elapsed_seconds.unwrap_or(0);
     if elapsed > 0 {
-        parts.push(format!("({})", format_dur(elapsed)));
+        if !spans.is_empty() { spans.push(Span::styled(" ", gray)); }
+        spans.push(Span::styled(format!("({})", format_dur(elapsed)), gray));
     }
+
+    let today = chrono::Local::now().date_naive();
+    let seven_days = today + chrono::Duration::days(7);
 
     if let Some(ref dl) = task.deadline {
-        parts.push(format!("^{}", dl.format("%b%d")));
+        if !spans.is_empty() { spans.push(Span::styled(" ", gray)); }
+        let dl_style = if *dl < today {
+            Style::default().fg(Color::Red) // overdue
+        } else if *dl <= seven_days {
+            Style::default().fg(Color::Yellow) // upcoming
+        } else {
+            gray
+        };
+        spans.push(Span::styled(format!("^{}", dl.format("%b%d")), dl_style));
     }
     if let Some(ref sc) = task.scheduled {
-        parts.push(format!("={}", sc.format("%b%d")));
+        if !spans.is_empty() { spans.push(Span::styled(" ", gray)); }
+        spans.push(Span::styled(format!("={}", sc.format("%b%d")), Style::default().fg(Color::Cyan)));
     }
 
-    parts.join(" ")
+    spans
 }
 
 fn format_dur(seconds: i64) -> String {
     let hours = seconds / 3600;
     let mins = (seconds % 3600) / 60;
+    let secs = seconds % 60;
     if hours > 0 {
-        format!("{}h{}m", hours, mins)
+        format!("{}h{}m{}s", hours, mins, secs)
+    } else if mins > 0 {
+        format!("{}m{}s", mins, secs)
     } else {
-        format!("{}m", mins)
+        format!("{}s", secs)
     }
 }
 

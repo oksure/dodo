@@ -27,13 +27,13 @@ fn main() -> Result<()> {
             } else {
                 args.context
             };
-            let estimate = parsed.estimate_minutes.or(args.estimate);
+            let estimate = parsed.estimate_minutes.or(args.estimate).or(Some(60));
             let deadline = parsed.deadline.or_else(|| {
                 args.deadline.as_ref().and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
             });
             let scheduled = parsed.scheduled.or_else(|| {
                 args.scheduled.as_ref().and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-            });
+            }).or_else(|| Some(chrono::Local::now().date_naive()));
             let tags = if !parsed.tags.is_empty() {
                 Some(parsed.tags.join(","))
             } else {
@@ -61,7 +61,11 @@ fn main() -> Result<()> {
             println!("Added: {} [#{}]", title, num_id);
         }
         Commands::List(args) => {
-            let tasks = db.list_tasks_sorted(args.area, args.sort)?;
+            let tasks = if let Some(ref project) = args.project {
+                db.list_tasks_by_project(project, args.sort)?
+            } else {
+                db.list_tasks_sorted(args.area, args.sort)?
+            };
             if tasks.is_empty() {
                 println!("No tasks found.");
             } else {
@@ -71,13 +75,15 @@ fn main() -> Result<()> {
             }
         }
         Commands::Start(args) => {
-            let query = args.task.join(" ");
-            db.start_timer(&query)?;
-            println!("Started timer for: {}", query);
-        }
-        Commands::Pause => {
-            db.pause_timer()?;
-            println!("Timer paused.");
+            if args.task.is_empty() {
+                // No args = pause running task
+                db.pause_timer()?;
+                println!("Timer paused.");
+            } else {
+                let query = args.task.join(" ");
+                let (title, num_id) = db.start_timer(&query)?;
+                println!("Started: {} [#{}]", title, num_id);
+            }
         }
         Commands::Done => {
             if let Some((task, duration)) = db.complete_task()? {
@@ -95,8 +101,8 @@ fn main() -> Result<()> {
         }
         Commands::Remove(args) => {
             let query = args.task.join(" ");
-            db.delete_task(&query)?;
-            println!("Deleted: {}", query);
+            let (title, num_id) = db.delete_task(&query)?;
+            println!("Deleted: {} [#{}]", title, num_id);
         }
         Commands::Edit(args) => {
             let raw_input = args.args.join(" ");
@@ -162,9 +168,12 @@ fn main() -> Result<()> {
 fn format_duration(seconds: i64) -> String {
     let hours = seconds / 3600;
     let mins = (seconds % 3600) / 60;
+    let secs = seconds % 60;
     if hours > 0 {
-        format!("{}h {}m", hours, mins)
+        format!("{}h {}m {}s", hours, mins, secs)
+    } else if mins > 0 {
+        format!("{}m {}s", mins, secs)
     } else {
-        format!("{}m", mins)
+        format!("{}s", secs)
     }
 }

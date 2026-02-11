@@ -97,14 +97,19 @@ fn starting_new_task_pauses_current() {
 
 #[test]
 fn gtd_four_horizons() {
-    let db = test_db();
+    use chrono::Local;
 
-    // Someday/maybe
-    db.add_task("Learn piano", Area::LongTerm, None, None, None, None, None, None, None).unwrap();
-    // Active project
-    db.add_task("Prepare talk", Area::ThisWeek, None, None, None, None, None, None, None).unwrap();
-    // Next action
-    db.add_task("Call dentist", Area::Today, None, None, None, None, None, None, None).unwrap();
+    let db = test_db();
+    let today = Local::now().date_naive();
+    let next_week = today + chrono::Duration::days(3);
+    let far_future = today + chrono::Duration::days(30);
+
+    // Someday/maybe — scheduled far out → LONG
+    db.add_task("Learn piano", Area::LongTerm, None, None, None, None, Some(far_future), None, None).unwrap();
+    // Active project — scheduled within a week → WEEK
+    db.add_task("Prepare talk", Area::ThisWeek, None, None, None, None, Some(next_week), None, None).unwrap();
+    // Next action — scheduled today → TODAY
+    db.add_task("Call dentist", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
 
     let long = db.list_tasks(Some(Area::LongTerm)).unwrap();
     assert_eq!(long.len(), 1);
@@ -116,10 +121,10 @@ fn gtd_four_horizons() {
     assert_eq!(week[0].title, "Prepare talk");
     assert_eq!(week[0].area_str(), "WEEK");
 
-    let today = db.list_tasks(Some(Area::Today)).unwrap();
-    assert_eq!(today.len(), 1);
-    assert_eq!(today[0].title, "Call dentist");
-    assert_eq!(today[0].area_str(), "TODAY");
+    let today_tasks = db.list_tasks(Some(Area::Today)).unwrap();
+    assert_eq!(today_tasks.len(), 1);
+    assert_eq!(today_tasks[0].title, "Call dentist");
+    assert_eq!(today_tasks[0].area_str(), "TODAY");
 }
 
 #[test]
