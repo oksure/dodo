@@ -54,7 +54,7 @@ pub enum Commands {
 
 #[derive(Parser)]
 pub struct AddArgs {
-    /// Task title and inline notation (+project @context #tag ~estimate $deadline ^scheduled)
+    /// Task title and inline notation (+project @context #tag ~estimate ^deadline =scheduled !)
     #[arg(trailing_var_arg = true, required = true)]
     pub title: Vec<String>,
 

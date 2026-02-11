@@ -32,16 +32,16 @@ Add metadata directly in the task text — no flags or quotes needed:
 
 ```bash
 # Project, context, estimate, and deadline in one line
-dodo a fix login bug +backend @john #urgent ~2h $friday
+dodo a fix login bug +backend @john #urgent ~2h ^friday !!!
 
 # Multiple contexts and tags
-dodo a team standup @john @sarah #meeting ~30m ^mon
+dodo a team standup @john @sarah #meeting ~30m =mon
 
 # Estimate with composite duration
-dodo a redesign homepage +frontend ~2d4h $2w
+dodo a redesign homepage +frontend ~2d4h ^2w
 
 # Deadline with specific date
-dodo a submit tax return #personal $4/15
+dodo a submit tax return #personal ^0415
 ```
 
 ### Symbol reference
@@ -52,8 +52,9 @@ dodo a submit tax return #personal $4/15
 | `@word` | Context/person | `@john`, `@phone` |
 | `#word` | Tag | `#urgent`, `#bug` |
 | `~dur` | Time estimate | `~30m`, `~1h`, `~1h30m`, `~1d` (8h), `~1w` (40h) |
-| `$date` | Deadline | `$today`, `$tmr`, `$fri`, `$3d`, `$1/15`, `$2025-06-01` |
-| `^date` | Scheduled start | `^wed`, `^2w`, `^tmr` |
+| `^date` | Deadline | `^today`, `^tmr`, `^fri`, `^3d`, `^0115`, `^2025-06-01` |
+| `=date` | Scheduled start | `=wed`, `=2w`, `=tmr` |
+| `!`–`!!!!` | Priority | `!` (low) to `!!!!` (critical) |
 
 Tokens are extracted from anywhere in the input. The remaining text becomes the title.
 
@@ -65,7 +66,7 @@ Update any task's metadata without recreating it:
 
 ```bash
 # Change estimate and deadline by numeric ID
-dodo e 1 ~3h $tmr
+dodo e 1 ~3h ^tmr
 
 # Add a project tag by fuzzy match
 dodo e fix bug +backend
@@ -206,7 +207,7 @@ The Eisenhower matrix sorts tasks by urgency and importance. Map it to dodo area
 
 ```bash
 # Urgent + Important: client deadline
-dodo a Fix production bug +acme #urgent $today
+dodo a Fix production bug +acme #urgent ^today !!!!
 
 # Important, not urgent: strategic work
 dodo a Write test suite +acme ~4h --area week
@@ -254,7 +255,7 @@ When your list is on screen, use numeric IDs instead of typing titles:
 
 ```bash
 dodo ls
-# [3] [ ] TODAY Fix production bug +acme #urgent ~2h $Feb11
+# [3] [ ] TODAY Fix production bug !!!! +acme #urgent ~2h ^Feb11
 # [2] [ ] TODAY Write copy +clientA @writing ~2h
 # [1] [ ] TODAY Design landing page +clientA @design ~4h
 
@@ -262,7 +263,7 @@ dodo ls
 dodo s 3
 
 # Fast: edit by number
-dodo e 1 ~6h $fri
+dodo e 1 ~6h ^fri
 
 # Fast: remove by number
 dodo rm 1
@@ -312,7 +313,7 @@ dodo a Write literature review draft +thesis @writing ~8h --area week
 dodo a Problem set 5 +coursework ~3h --area week
 
 # Today's actions with deadlines
-dodo a Email advisor re chapter outline +thesis @email $fri
+dodo a Email advisor re chapter outline +thesis @email ^fri
 dodo a Fix citation formatting +thesis @writing ~1h
 
 # Track deep work sessions

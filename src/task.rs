@@ -15,6 +15,7 @@ pub struct Task {
     pub estimate_minutes: Option<i64>,
     pub deadline: Option<NaiveDate>,
     pub scheduled: Option<NaiveDate>,
+    pub priority: Option<i64>,
     pub tags: Option<String>,
     pub notes: Option<String>,
     pub elapsed_seconds: Option<i64>,
@@ -51,6 +52,7 @@ impl Task {
             estimate_minutes: None,
             deadline: None,
             scheduled: None,
+            priority: None,
             tags: None,
             notes: None,
             elapsed_seconds: None,
@@ -68,6 +70,10 @@ impl Task {
 
     pub fn display_metadata(&self) -> String {
         let mut parts = vec![];
+        if let Some(p) = self.priority {
+            let bangs = "!".repeat(p.clamp(1, 4) as usize);
+            parts.push(bangs);
+        }
         if let Some(ref p) = self.project {
             parts.push(format!("+{}", p));
         }
@@ -91,10 +97,10 @@ impl Task {
             parts.push(format!("~{}", format_estimate(est)));
         }
         if let Some(ref dl) = self.deadline {
-            parts.push(format!("${}", dl.format("%b%d")));
+            parts.push(format!("^{}", dl.format("%b%d")));
         }
         if let Some(ref sc) = self.scheduled {
-            parts.push(format!("^{}", sc.format("%b%d")));
+            parts.push(format!("={}", sc.format("%b%d")));
         }
         if parts.is_empty() {
             String::new()

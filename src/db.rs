@@ -108,6 +108,11 @@ impl Database {
             self.conn.execute("ALTER TABLE tasks ADD COLUMN task_notes TEXT", [])?;
         }
 
+        // Add priority column
+        if self.conn.prepare("SELECT priority FROM tasks LIMIT 0").is_err() {
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN priority INTEGER", [])?;
+        }
+
         // Index for fast queries
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area)",
@@ -136,6 +141,7 @@ impl Database {
         deadline: Option<NaiveDate>,
         scheduled: Option<NaiveDate>,
         tags: Option<String>,
+        priority: Option<i64>,
     ) -> Result<i64> {
         let task = Task::new(title, Area::from(area), project, context);
 
@@ -146,8 +152,8 @@ impl Database {
         )?;
 
         self.conn.execute(
-            "INSERT INTO tasks (id, num_id, title, area, project, context, status, created, completed, estimate_minutes, deadline, scheduled, tags)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT INTO tasks (id, num_id, title, area, project, context, status, created, completed, estimate_minutes, deadline, scheduled, tags, priority)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 &task.id,
                 next_num_id,
@@ -162,6 +168,7 @@ impl Database {
                 deadline.map(|d| d.to_string()),
                 scheduled.map(|d| d.to_string()),
                 tags,
+                priority,
             ],
         )?;
 
@@ -170,7 +177,7 @@ impl Database {
 
     const TASK_SELECT_WITH_ELAPSED: &'static str =
         "SELECT t.id, t.num_id, t.title, t.area, t.project, t.context, t.status, t.created, t.completed,
-                t.estimate_minutes, t.deadline, t.scheduled, t.tags, t.task_notes,
+                t.estimate_minutes, t.deadline, t.scheduled, t.tags, t.task_notes, t.priority,
                 COALESCE(SUM(
                     CASE WHEN s.ended IS NOT NULL THEN s.duration
                     ELSE CAST((julianday('now') - julianday(s.started)) * 86400 AS INTEGER)
@@ -485,6 +492,13 @@ impl Database {
             )?;
         }
 
+        if let Some(p) = input.priority {
+            self.conn.execute(
+                "UPDATE tasks SET priority = ?1 WHERE id = ?2",
+                params![p, &task.id],
+            )?;
+        }
+
         if let Some(area) = area {
             self.conn.execute(
                 "UPDATE tasks SET area = ?1 WHERE id = ?2",
@@ -517,9 +531,10 @@ impl Database {
                 .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
             scheduled: row.get::<_, Option<String>>(11)?
                 .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+            priority: row.get(14)?,
             tags: row.get(12)?,
             notes: row.get(13)?,
-            elapsed_seconds: row.get(14).ok(),
+            elapsed_seconds: row.get(15).ok(),
         })
     }
 

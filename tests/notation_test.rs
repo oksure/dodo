@@ -96,17 +96,33 @@ fn date_relative_negative() {
 }
 
 #[test]
-fn date_month_day() {
+fn date_mmdd() {
     let today = Local::now().date_naive();
     let year = today.year();
     // Pick a date in the future
     let future_month = if today.month() < 12 { today.month() + 1 } else { 1 };
     let future_year = if future_month == 1 { year + 1 } else { year };
-    let input = format!("{}/15", future_month);
+    let input = format!("{:02}15", future_month);
     assert_eq!(
         parse_date(&input),
         NaiveDate::from_ymd_opt(future_year, future_month, 15)
     );
+}
+
+#[test]
+fn date_yyyymmdd() {
+    assert_eq!(
+        parse_date("20250502"),
+        Some(NaiveDate::from_ymd_opt(2025, 5, 2).unwrap())
+    );
+}
+
+#[test]
+fn date_relative_months() {
+    let today = Local::now().date_naive();
+    let result = parse_date("1m").unwrap();
+    let expected = today.checked_add_months(chrono::Months::new(1)).unwrap();
+    assert_eq!(result, expected);
 }
 
 #[test]
@@ -164,7 +180,7 @@ fn estimate_token() {
 
 #[test]
 fn deadline_token() {
-    let p = parse_notation("Submit report $tmr");
+    let p = parse_notation("Submit report ^tmr");
     assert_eq!(p.title, "Submit report");
     let tomorrow = Local::now().date_naive().succ_opt().unwrap();
     assert_eq!(p.deadline, Some(tomorrow));
@@ -172,15 +188,15 @@ fn deadline_token() {
 
 #[test]
 fn scheduled_token() {
-    let p = parse_notation("Start project ^tmr");
+    let p = parse_notation("Start project =tmr");
     assert_eq!(p.title, "Start project");
     let tomorrow = Local::now().date_naive().succ_opt().unwrap();
     assert_eq!(p.scheduled, Some(tomorrow));
 }
 
 #[test]
-fn all_six_symbols() {
-    let p = parse_notation("Fix login bug +backend @john @sarah #urgent #p1 ~2h $tmr ^tdy");
+fn all_symbols() {
+    let p = parse_notation("Fix login bug +backend @john @sarah #urgent #p1 ~2h ^tmr =tdy !!!");
     assert_eq!(p.title, "Fix login bug");
     assert_eq!(p.project, Some("backend".to_string()));
     assert_eq!(p.contexts, vec!["john", "sarah"]);
@@ -188,6 +204,7 @@ fn all_six_symbols() {
     assert_eq!(p.estimate_minutes, Some(120));
     assert!(p.deadline.is_some());
     assert!(p.scheduled.is_some());
+    assert_eq!(p.priority, Some(3));
 }
 
 #[test]
@@ -208,6 +225,7 @@ fn no_tokens() {
     assert_eq!(p.estimate_minutes, None);
     assert_eq!(p.deadline, None);
     assert_eq!(p.scheduled, None);
+    assert_eq!(p.priority, None);
 }
 
 #[test]
@@ -259,4 +277,47 @@ fn unicode_with_notation() {
 fn single_unicode_char() {
     let p = parse_notation("가");
     assert_eq!(p.title, "가");
+}
+
+// ── Priority parsing ────────────────────────────────────────────────
+
+#[test]
+fn priority_single_bang() {
+    let p = parse_notation("Low priority task !");
+    assert_eq!(p.title, "Low priority task");
+    assert_eq!(p.priority, Some(1));
+}
+
+#[test]
+fn priority_double_bang() {
+    let p = parse_notation("Medium task !!");
+    assert_eq!(p.title, "Medium task");
+    assert_eq!(p.priority, Some(2));
+}
+
+#[test]
+fn priority_triple_bang() {
+    let p = parse_notation("High priority !!!");
+    assert_eq!(p.title, "High priority");
+    assert_eq!(p.priority, Some(3));
+}
+
+#[test]
+fn priority_max_bang() {
+    let p = parse_notation("Critical !!!!");
+    assert_eq!(p.title, "Critical");
+    assert_eq!(p.priority, Some(4));
+}
+
+#[test]
+fn priority_last_wins() {
+    let p = parse_notation("Task ! !!!");
+    assert_eq!(p.priority, Some(3));
+}
+
+#[test]
+fn five_bangs_not_priority() {
+    let p = parse_notation("Task !!!!!");
+    assert_eq!(p.title, "Task !!!!!");
+    assert_eq!(p.priority, None);
 }

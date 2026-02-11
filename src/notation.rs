@@ -1,4 +1,4 @@
-use chrono::{Datelike, Local, NaiveDate, Weekday};
+use chrono::{Datelike, Local, Months, NaiveDate, Weekday};
 
 #[derive(Debug, Default, PartialEq)]
 pub struct ParsedInput {
@@ -9,6 +9,7 @@ pub struct ParsedInput {
     pub estimate_minutes: Option<i64>,
     pub deadline: Option<NaiveDate>,
     pub scheduled: Option<NaiveDate>,
+    pub priority: Option<i64>,
 }
 
 impl ParsedInput {
@@ -19,6 +20,7 @@ impl ParsedInput {
             || self.estimate_minutes.is_some()
             || self.deadline.is_some()
             || self.scheduled.is_some()
+            || self.priority.is_some()
     }
 }
 
@@ -29,10 +31,16 @@ pub fn parse_notation(input: &str) -> ParsedInput {
     for token in input.split_whitespace() {
         let first_byte = token.as_bytes()[0];
 
+        // Priority tokens: !, !!, !!!, !!!!
+        if token.len() <= 4 && token.bytes().all(|b| b == b'!') {
+            result.priority = Some(token.len() as i64);
+            continue;
+        }
+
         // All notation symbols are ASCII single-byte characters.
         // Skip tokens that don't start with a known symbol or are too short.
         if token.len() < 2
-            || !matches!(first_byte, b'+' | b'@' | b'#' | b'~' | b'$' | b'^')
+            || !matches!(first_byte, b'+' | b'@' | b'#' | b'~' | b'^' | b'=')
         {
             title_parts.push(token);
             continue;
@@ -59,14 +67,14 @@ pub fn parse_notation(input: &str) -> ParsedInput {
                     title_parts.push(token);
                 }
             }
-            b'$' => {
+            b'^' => {
                 if let Some(date) = parse_date(value) {
                     result.deadline = Some(date);
                 } else {
                     title_parts.push(token);
                 }
             }
-            b'^' => {
+            b'=' => {
                 if let Some(date) = parse_date(value) {
                     result.scheduled = Some(date);
                 } else {
@@ -149,20 +157,24 @@ pub fn parse_date(s: &str) -> Option<NaiveDate> {
         return Some(date);
     }
 
-    // M/D or MM/DD
-    if s_lower.contains('/') {
-        let parts: Vec<&str> = s_lower.split('/').collect();
-        if parts.len() == 2 {
-            if let (Ok(month), Ok(day)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>()) {
-                let year = today.year();
-                if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
-                    // Use next year if the date has passed
-                    if date < today {
-                        return NaiveDate::from_ymd_opt(year + 1, month, day);
-                    }
-                    return Some(date);
-                }
+    // YYYYMMDD (8 digits)
+    if s_lower.len() == 8 && s_lower.bytes().all(|b| b.is_ascii_digit()) {
+        let year: i32 = s_lower[0..4].parse().ok()?;
+        let month: u32 = s_lower[4..6].parse().ok()?;
+        let day: u32 = s_lower[6..8].parse().ok()?;
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+
+    // MMDD (4 digits)
+    if s_lower.len() == 4 && s_lower.bytes().all(|b| b.is_ascii_digit()) {
+        let month: u32 = s_lower[0..2].parse().ok()?;
+        let day: u32 = s_lower[2..4].parse().ok()?;
+        let year = today.year();
+        if let Some(date) = NaiveDate::from_ymd_opt(year, month, day) {
+            if date < today {
+                return NaiveDate::from_ymd_opt(year + 1, month, day);
             }
+            return Some(date);
         }
     }
 
@@ -202,12 +214,23 @@ fn parse_relative_date(s: &str, today: NaiveDate) -> Option<NaiveDate> {
     let num_str = &rest[..rest.len() - 1];
     let n: i64 = num_str.parse().ok()?;
 
-    let days = match unit {
-        b'd' => n,
-        b'w' => n * 7,
-        _ => return None,
-    };
-
-    let days = if negative { -days } else { days };
-    today.checked_add_signed(chrono::Duration::days(days))
+    match unit {
+        b'd' => {
+            let days = if negative { -n } else { n };
+            today.checked_add_signed(chrono::Duration::days(days))
+        }
+        b'w' => {
+            let days = if negative { -n * 7 } else { n * 7 };
+            today.checked_add_signed(chrono::Duration::days(days))
+        }
+        b'm' => {
+            let months = Months::new(n as u32);
+            if negative {
+                today.checked_sub_months(months)
+            } else {
+                today.checked_add_months(months)
+            }
+        }
+        _ => None,
+    }
 }

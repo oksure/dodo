@@ -39,6 +39,7 @@ fn main() -> Result<()> {
             } else {
                 args.tags
             };
+            let priority = parsed.priority;
 
             let title = if parsed.title.is_empty() {
                 raw_input.clone()
@@ -55,6 +56,7 @@ fn main() -> Result<()> {
                 deadline,
                 scheduled,
                 tags,
+                priority,
             )?;
             println!("Added: {} [#{}]", title, num_id);
         }
@@ -108,7 +110,7 @@ fn main() -> Result<()> {
             };
 
             if !parsed.has_updates() && args.area.is_none() {
-                anyhow::bail!("No changes specified. Use notation tokens (+project @context #tag ~estimate $deadline ^scheduled) or --area flag.");
+                anyhow::bail!("No changes specified. Use notation tokens (+project @context #tag ~estimate ^deadline =scheduled !) or --area flag.");
             }
 
             let title = db.update_task_fields(&task_query, &parsed, args.area)?;
