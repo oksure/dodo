@@ -8,6 +8,7 @@ mod tui;
 use dodo::cli::{Cli, Commands};
 use dodo::db::Database;
 use dodo::notation::parse_notation;
+use dodo::task::Area;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -61,16 +62,68 @@ fn main() -> Result<()> {
             println!("Added: {} [#{}]", title, num_id);
         }
         Commands::List(args) => {
-            let tasks = if let Some(ref project) = args.project {
-                db.list_tasks_by_project(project, args.sort)?
+            if let Some(ref project) = args.project {
+                let tasks = db.list_tasks_by_project(project, args.sort)?;
+                if tasks.is_empty() {
+                    println!("No tasks found.");
+                } else {
+                    for task in tasks {
+                        println!("{}", task);
+                    }
+                }
+            } else if let Some(area) = args.area {
+                let tasks = db.list_tasks_sorted(Some(area), args.sort)?;
+                if tasks.is_empty() {
+                    println!("No tasks found.");
+                } else {
+                    for task in tasks {
+                        println!("{}", task);
+                    }
+                }
             } else {
-                db.list_tasks_sorted(args.area, args.sort)?
-            };
-            if tasks.is_empty() {
-                println!("No tasks found.");
-            } else {
-                for task in tasks {
-                    println!("{}", task);
+                // No area specified: show all four groups
+                let all = db.list_all_tasks(args.sort)?;
+                if all.is_empty() {
+                    println!("No tasks found.");
+                } else {
+                    let mut today = vec![];
+                    let mut week = vec![];
+                    let mut long = vec![];
+                    let mut done = vec![];
+                    for task in &all {
+                        match task.effective_area() {
+                            Area::Today => today.push(task),
+                            Area::ThisWeek => week.push(task),
+                            Area::LongTerm => long.push(task),
+                            Area::Completed => done.push(task),
+                        }
+                    }
+
+                    let sections: Vec<(&str, Vec<&dodo::task::Task>)> = vec![
+                        ("TODAY", today),
+                        ("THIS WEEK", week),
+                        ("LONG TERM", long),
+                        ("DONE", done),
+                    ];
+
+                    let mut first = true;
+                    for (label, tasks) in &sections {
+                        if tasks.is_empty() {
+                            continue;
+                        }
+                        if !first {
+                            println!();
+                        }
+                        first = false;
+                        println!("--- {} ({}) ---", label, tasks.len());
+                        let limit = if *label == "DONE" { 5 } else { tasks.len() };
+                        for task in tasks.iter().take(limit) {
+                            println!("{}", task);
+                        }
+                        if *label == "DONE" && tasks.len() > 5 {
+                            println!("  ... and {} more", tasks.len() - 5);
+                        }
+                    }
                 }
             }
         }

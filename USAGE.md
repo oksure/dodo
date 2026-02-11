@@ -346,7 +346,7 @@ dodo ls week --sort title  # combine with area filter
 
 ## 13. TUI for Planning Sessions
 
-When you need to survey and reorganize, the TUI gives a Blitzit-style four-pane view showing all areas simultaneously:
+When you need to survey and reorganize, the TUI gives a four-pane view showing all areas simultaneously:
 
 ```bash
 dodo tui
@@ -354,16 +354,20 @@ dodo tui
 
 The four panes — LONG TERM, THIS WEEK, TODAY, DONE — are displayed side by side. The active pane is highlighted in yellow.
 
-Keys:
-- `h` / `Left` — move focus to pane on the left
-- `l` / `Right` — move focus to pane on the right
-- `j` / `k` / `Down` / `Up` — navigate tasks within current pane
-- `s` — start timer on selected task (auto-pauses any running task)
-- `p` — pause running task
+Tasks tab keys:
+- `h` / `l` — move between panes
+- `j` / `k` — navigate tasks within current pane
+- `s` — toggle start/stop on selected task
 - `d` — mark running task done
+- `n` — open note modal (view/edit notes)
 - `o` — cycle sort order (created → modified → title)
 - `r` — refresh all panes
+- `1` / `2` / `Tab` — switch between Tasks and Report tabs
 - `q` / `Esc` — quit
+
+Report tab keys:
+- `h` / `l` — change time range (Day / Week / Month / Year / All)
+- `1` / `2` / `Tab` — switch tabs
 
 Each task shows a compact two-line display:
 ```

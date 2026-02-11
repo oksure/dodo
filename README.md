@@ -1,6 +1,6 @@
 # Dodo CLI
 
-A keyboard-first, Blitzit-inspired todo + time tracker CLI written in Rust.
+A keyboard-first todo + time tracker CLI written in Rust.
 
 ## Features
 
@@ -77,9 +77,8 @@ Notation tokens are extracted and the remaining text becomes the title. Flags (`
 | Command | Short | Description |
 |---------|-------|-------------|
 | `add` | `a` | Add new task (with inline notation) |
-| `list` | `ls` | List tasks (default: today + running) |
-| `start` | `s` | Start timer on task |
-| `pause` | `p` | Pause current timer |
+| `list` | `ls` | List tasks (no area = all groups, done limited to 5) |
+| `start` | `s` | Start/stop timer (no args = pause running task) |
 | `done` | `d` | Complete running task |
 | `status` | `st` | Show running task + elapsed time |
 | `edit` | `e` | Edit task metadata via notation |
@@ -89,18 +88,28 @@ Notation tokens are extracted and the remaining text becomes the title. Flags (`
 
 ## TUI Keys
 
-The TUI shows four panes side by side: LONG TERM, THIS WEEK, TODAY, DONE.
+The TUI has two tabs: **Tasks** (four-pane layout) and **Report** (productivity stats).
+
+### Tasks Tab
 
 | Key | Action |
 |-----|--------|
-| `h`/`Left` | Move to pane on the left |
-| `l`/`Right` | Move to pane on the right |
-| `j`/`k` | Navigate up/down within pane |
-| `s` | Start timer on selected (auto-pauses running) |
-| `p` | Pause timer |
-| `d` | Mark done |
+| `h`/`l` | Move between panes |
+| `j`/`k` | Navigate tasks within pane |
+| `s` | Toggle start/stop on selected task |
+| `d` | Mark running task done |
+| `n` | Open note modal for selected task |
 | `o` | Cycle sort (created → modified → title) |
 | `r` | Refresh |
+| `1`/`2`/`Tab` | Switch tabs |
+| `q`/`Esc` | Quit |
+
+### Report Tab
+
+| Key | Action |
+|-----|--------|
+| `h`/`l` | Change time range (Day/Week/Month/Year/All) |
+| `1`/`2`/`Tab` | Switch tabs |
 | `q`/`Esc` | Quit |
 
 ## Installation

@@ -723,6 +723,99 @@ impl Database {
         }
         anyhow::bail!("No task found matching '{}'", query);
     }
+
+    /// Report: count completed tasks in date range
+    pub fn report_tasks_done(&self, from: &str, to: &str) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE status = 'Done' AND completed >= ?1 AND completed < ?2",
+            params![from, to],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
+
+    /// Report: total seconds worked in date range (from completed sessions)
+    pub fn report_total_seconds(&self, from: &str, to: &str) -> Result<i64> {
+        let total: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(duration), 0) FROM sessions WHERE started >= ?1 AND started < ?2 AND ended IS NOT NULL",
+            params![from, to],
+            |row| row.get(0),
+        )?;
+        Ok(total)
+    }
+
+    /// Report: sessions grouped by hour of day (0-23) -> total seconds per hour
+    pub fn report_by_hour(&self, from: &str, to: &str) -> Result<Vec<(i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT CAST(strftime('%H', started) AS INTEGER) as hour, COALESCE(SUM(duration), 0)
+             FROM sessions WHERE started >= ?1 AND started < ?2 AND ended IS NOT NULL
+             GROUP BY hour ORDER BY hour"
+        )?;
+        let mut rows = stmt.query(params![from, to])?;
+        let mut result = vec![];
+        while let Some(row) = rows.next()? {
+            result.push((row.get(0)?, row.get(1)?));
+        }
+        Ok(result)
+    }
+
+    /// Report: sessions grouped by day of week (0=Sun..6=Sat) -> total seconds
+    pub fn report_by_weekday(&self, from: &str, to: &str) -> Result<Vec<(i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT CAST(strftime('%w', started) AS INTEGER) as dow, COALESCE(SUM(duration), 0)
+             FROM sessions WHERE started >= ?1 AND started < ?2 AND ended IS NOT NULL
+             GROUP BY dow ORDER BY dow"
+        )?;
+        let mut rows = stmt.query(params![from, to])?;
+        let mut result = vec![];
+        while let Some(row) = rows.next()? {
+            result.push((row.get(0)?, row.get(1)?));
+        }
+        Ok(result)
+    }
+
+    /// Report: time by project in date range
+    pub fn report_by_project(&self, from: &str, to: &str) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT COALESCE(t.project, '(none)'), COALESCE(SUM(s.duration), 0)
+             FROM sessions s JOIN tasks t ON s.task_id = t.id
+             WHERE s.started >= ?1 AND s.started < ?2 AND s.ended IS NOT NULL
+             GROUP BY t.project ORDER BY SUM(s.duration) DESC"
+        )?;
+        let mut rows = stmt.query(params![from, to])?;
+        let mut result = vec![];
+        while let Some(row) = rows.next()? {
+            result.push((row.get(0)?, row.get(1)?));
+        }
+        Ok(result)
+    }
+
+    /// Report: recently completed tasks in date range
+    pub fn report_done_tasks(&self, from: &str, to: &str, limit: i64) -> Result<Vec<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT title, COALESCE(
+                (SELECT SUM(duration) FROM sessions WHERE task_id = t.id), 0
+             ) FROM tasks t
+             WHERE status = 'Done' AND completed >= ?1 AND completed < ?2
+             ORDER BY completed DESC LIMIT ?3"
+        )?;
+        let mut rows = stmt.query(params![from, to, limit])?;
+        let mut result = vec![];
+        while let Some(row) = rows.next()? {
+            result.push((row.get(0)?, row.get(1)?));
+        }
+        Ok(result)
+    }
+
+    /// Report: total number of distinct days with work sessions
+    pub fn report_active_days(&self, from: &str, to: &str) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT date(started)) FROM sessions WHERE started >= ?1 AND started < ?2 AND ended IS NOT NULL",
+            params![from, to],
+            |row| row.get(0),
+        )?;
+        Ok(count)
+    }
 }
 
 impl From<CliArea> for Area {
