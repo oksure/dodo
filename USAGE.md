@@ -330,21 +330,46 @@ dodo n 1
 
 ---
 
-## 12. TUI for Planning Sessions
+## 12. Sorting Tasks
 
-When you need to survey and reorganize, the TUI gives a Blitzit-style view:
+Control the order of `dodo ls` output with `--sort`:
+
+```bash
+dodo ls --sort created     # newest first (default)
+dodo ls --sort modified    # recently changed first
+dodo ls --sort title       # alphabetical
+dodo ls --sort area        # Long → Week → Today → Done
+dodo ls week --sort title  # combine with area filter
+```
+
+---
+
+## 13. TUI for Planning Sessions
+
+When you need to survey and reorganize, the TUI gives a Blitzit-style four-pane view showing all areas simultaneously:
 
 ```bash
 dodo tui
 ```
 
-Keys:
-- `t` / `w` / `l` / `c` — switch between Today, This Week, Long Term, Completed
-- `j` / `k` — navigate up/down
-- `s` — start timer on selected task
-- `p` — pause
-- `d` — mark done
-- `r` — refresh
-- `q` — quit
+The four panes — LONG TERM, THIS WEEK, TODAY, DONE — are displayed side by side. The active pane is highlighted in yellow.
 
-Use it for morning planning: scan Long Term, promote items to This Week, then pick today's focus. Check Completed to review what you've accomplished.
+Keys:
+- `h` / `Left` — move focus to pane on the left
+- `l` / `Right` — move focus to pane on the right
+- `j` / `k` / `Down` / `Up` — navigate tasks within current pane
+- `s` — start timer on selected task (auto-pauses any running task)
+- `p` — pause running task
+- `d` — mark running task done
+- `o` — cycle sort order (created → modified → title)
+- `r` — refresh all panes
+- `q` / `Esc` — quit
+
+Each task shows a compact two-line display:
+```
+  3 ▶ fix login bug *
+      !!! +backend ~2h (45m) ^Feb14
+```
+Line 1: numeric ID, status icon, title, `*` if notes exist. Line 2: metadata (only shown if present).
+
+Use it for morning planning: scan all four areas at once, start tasks directly, and track time without leaving the TUI.

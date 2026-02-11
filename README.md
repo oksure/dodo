@@ -13,7 +13,8 @@ A keyboard-first, Blitzit-inspired todo + time tracker CLI written in Rust.
 - **Estimates & deadlines** — `~2h` estimates, `^friday` deadlines, `=wed` scheduling
 - **Priority** — `!` to `!!!!` urgency levels (4 = most urgent)
 - **Notes** — timestamped notes on any task
-- **TUI mode** — ratatui interface with all four groups including Completed
+- **TUI mode** — ratatui four-pane layout showing all areas simultaneously
+- **Sorting** — `--sort created|modified|title|area` on list command
 - **Cloud sync** — R2/Dropbox support (optional)
 
 ## Quick Start
@@ -26,6 +27,10 @@ dodo a fix login bug +backend @john #urgent ~2h ^friday !!!
 # List today's tasks (shows elapsed time, estimates, metadata)
 dodo ls
 # => [1] [ ] TODAY fix login bug !!! +backend @john #urgent ~2h ^Feb14
+
+# Sort by title or modified date
+dodo ls --sort title
+dodo ls week --sort modified
 
 # Start timer by numeric ID or fuzzy match
 dodo s 1
@@ -84,18 +89,19 @@ Notation tokens are extracted and the remaining text becomes the title. Flags (`
 
 ## TUI Keys
 
+The TUI shows four panes side by side: LONG TERM, THIS WEEK, TODAY, DONE.
+
 | Key | Action |
 |-----|--------|
-| `t` | Today view |
-| `w` | This Week view |
-| `l` | Long Term view |
-| `c` | Completed view |
-| `j`/`k` | Navigate up/down |
-| `s` | Start timer on selected |
+| `h`/`Left` | Move to pane on the left |
+| `l`/`Right` | Move to pane on the right |
+| `j`/`k` | Navigate up/down within pane |
+| `s` | Start timer on selected (auto-pauses running) |
 | `p` | Pause timer |
 | `d` | Mark done |
+| `o` | Cycle sort (created → modified → title) |
 | `r` | Refresh |
-| `q` | Quit |
+| `q`/`Esc` | Quit |
 
 ## Installation
 

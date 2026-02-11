@@ -20,7 +20,7 @@ cargo test
 - `src/session.rs` — `Session` struct with `elapsed_seconds()`, `stop()`, `is_running()`
 - `src/fuzzy.rs` — fuzzy matching with scored ranking (`score()`, `find_best_match()`, `rank_matches()`)
 - `src/notation.rs` — inline notation parser (`parse_notation()`, `parse_duration()`, `parse_date()`)
-- `src/tui.rs` — ratatui terminal UI with Blitzit-style four-group navigation (binary-only, not in lib)
+- `src/tui.rs` — ratatui terminal UI with Blitzit-style four-pane layout (binary-only, not in lib)
 - `tests/fuzzy_test.rs` — 8 unit tests for fuzzy scoring logic
 - `tests/notation_test.rs` — 41 unit tests for notation/duration/date/priority parsing
 - `tests/workflow_test.rs` — 30 integration tests covering real-world workflows
@@ -37,8 +37,11 @@ cargo test
 - **Task resolution**: `resolve_task(query)` tries `parse::<i64>()` first for numeric ID lookup, then falls back to fuzzy-ranked search via `find_tasks()` + `find_best_match()`.
 - **Session lifecycle**: `Session` methods (`elapsed_seconds`, `stop`, `is_running`) are used by `pause_timer`, `complete_task`, and `get_running_task` in `db.rs`. Sessions are loaded from DB via `row_to_session()` / `get_active_session()`.
 - **Elapsed time**: `list_tasks()` and `find_tasks()` use a LEFT JOIN on sessions to compute total elapsed seconds per task, including live running sessions via `julianday('now')`.
-- **Blitzit four groups**: Tasks belong to an `Area` (LongTerm, ThisWeek, Today, Completed). `Task::area_str()` returns short labels (LONG, WEEK, TODAY, DONE) shown in list output and TUI sidebar.
-- **Display format**: Tasks render as `[num_id] [status_icon] AREA title !priority +project @context #tag ~estimate ^deadline =scheduled (elapsed/estimate) [running]`.
+- **Blitzit four groups**: Tasks belong to an `Area` (LongTerm, ThisWeek, Today, Completed). `Task::area_str()` returns short labels (LONG, WEEK, TODAY, DONE) shown in list output and TUI panes.
+- **Display format**: Tasks render as `[num_id] [status_icon] AREA title [*] !priority +project @context #tag ~estimate ^deadline =scheduled (elapsed/estimate) [running]`. The `*` appears after the title if the task has notes.
+- **Sorting**: `SortBy` enum in `cli.rs` (`Created`, `Modified`, `Area`, `Title`). `list_tasks_sorted()` in `db.rs` accepts sort param; `list_tasks()` defaults to `Created`. TUI cycles sort with `o` key.
+- **Modified tracking**: `modified_at` column on tasks, updated by all mutation methods (`start_timer`, `pause_timer`, `complete_task`, `update_task_fields`, `append_note`, `clear_notes`). Used for `--sort modified` ordering.
+- **TUI four-pane layout**: Four vertical panes (LONG TERM, THIS WEEK, TODAY, DONE) rendered simultaneously. Each pane has its own `ListState`. `h`/`l` navigates panes, `j`/`k` navigates tasks within a pane. Active pane highlighted in yellow. Compact two-line task rendering: line 1 = `num_id icon title [*]`, line 2 = metadata (priority, project, estimate, elapsed, deadline, scheduled).
 - **DB migrations**: Schema changes use check-then-alter pattern in `db.rs::migrate()`. New columns are added with `ALTER TABLE` guarded by a `SELECT` probe.
 - **Complete prefers running**: `complete_task()` uses `ORDER BY` to prefer Running tasks over Paused ones when multiple are active.
 - **Quote-free input**: Add, Start, Remove, Edit, Note commands use `Vec<String>` with `trailing_var_arg` so users can type `dodo a fix login bug +backend ~2h !!!` without quotes.
@@ -48,7 +51,7 @@ cargo test
 
 - SQLite stored at `~/.local/share/dodo/dodo.db`
 - `Database::in_memory()` available for tests
-- Tables: `tasks` (with `num_id INTEGER UNIQUE`, `estimate_minutes`, `deadline`, `scheduled`, `tags`, `task_notes`, `priority`), `sessions`
+- Tables: `tasks` (with `num_id INTEGER UNIQUE`, `estimate_minutes`, `deadline`, `scheduled`, `tags`, `task_notes`, `priority`, `modified_at`), `sessions`
 
 ## Testing
 
