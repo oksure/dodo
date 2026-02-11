@@ -85,9 +85,9 @@ pub struct AddArgs {
 
 #[derive(Parser)]
 pub struct ListArgs {
-    /// Filter by area
-    #[arg(value_enum)]
-    pub area: Option<Area>,
+    /// Filters: area (today/week/long/done), +project, @context, #tag
+    #[arg(trailing_var_arg = true)]
+    pub args: Vec<String>,
 
     /// Sort order
     #[arg(long, value_enum, default_value = "created")]

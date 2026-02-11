@@ -709,6 +709,121 @@ impl Database {
         }
     }
 
+    pub fn delete_task_by_id(&self, task_id: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM sessions WHERE task_id = ?1",
+            params![task_id],
+        )?;
+        self.conn.execute(
+            "DELETE FROM tasks WHERE id = ?1",
+            params![task_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_task_fields_by_id(&self, task_id: &str, input: &ParsedInput, area: Option<CliArea>) -> Result<()> {
+        if let Some(ref project) = input.project {
+            self.conn.execute(
+                "UPDATE tasks SET project = ?1 WHERE id = ?2",
+                params![project, task_id],
+            )?;
+        }
+        if !input.contexts.is_empty() {
+            let ctx = input.contexts.join(",");
+            self.conn.execute(
+                "UPDATE tasks SET context = ?1 WHERE id = ?2",
+                params![ctx, task_id],
+            )?;
+        }
+        if !input.tags.is_empty() {
+            let tags = input.tags.join(",");
+            self.conn.execute(
+                "UPDATE tasks SET tags = ?1 WHERE id = ?2",
+                params![tags, task_id],
+            )?;
+        }
+        if let Some(est) = input.estimate_minutes {
+            self.conn.execute(
+                "UPDATE tasks SET estimate_minutes = ?1 WHERE id = ?2",
+                params![est, task_id],
+            )?;
+        }
+        if let Some(ref dl) = input.deadline {
+            self.conn.execute(
+                "UPDATE tasks SET deadline = ?1 WHERE id = ?2",
+                params![dl.to_string(), task_id],
+            )?;
+        }
+        if let Some(ref sc) = input.scheduled {
+            self.conn.execute(
+                "UPDATE tasks SET scheduled = ?1 WHERE id = ?2",
+                params![sc.to_string(), task_id],
+            )?;
+        }
+        if let Some(p) = input.priority {
+            self.conn.execute(
+                "UPDATE tasks SET priority = ?1 WHERE id = ?2",
+                params![p, task_id],
+            )?;
+        }
+        if let Some(area) = area {
+            self.conn.execute(
+                "UPDATE tasks SET area = ?1 WHERE id = ?2",
+                params![Area::from(area).as_str(), task_id],
+            )?;
+        }
+        self.conn.execute(
+            "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), task_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn uncomplete_task_by_id(&self, task_id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn.execute(
+            "UPDATE tasks SET status = 'Pending', area = 'Today', completed = NULL, modified_at = ?1 WHERE id = ?2",
+            params![&now, task_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_task_title_by_id(&self, task_id: &str, title: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tasks SET title = ?1, modified_at = ?3 WHERE id = ?2",
+            params![title, task_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn complete_task_by_id(&self, task_id: &str) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        // Close active session if running
+        if let Some(mut session) = Self::get_active_session(&tx, task_id)? {
+            if session.is_running() {
+                session.stop();
+                tx.execute(
+                    "UPDATE sessions SET ended = ?1, duration = ?2 WHERE id = ?3",
+                    params![
+                        session.ended.unwrap().to_rfc3339(),
+                        session.duration,
+                        &session.id,
+                    ],
+                )?;
+            }
+        }
+
+        let now = Utc::now().to_rfc3339();
+        tx.execute(
+            "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1 WHERE id = ?2",
+            params![&now, task_id],
+        )?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn resolve_task(&self, query: &str) -> Result<Task> {
         // Try numeric ID first
         if let Ok(num_id) = query.parse::<i64>() {

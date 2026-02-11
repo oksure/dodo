@@ -43,6 +43,9 @@ serde = { version = "1.0", features = ["derive"] }
 toml = "1.0"
 dirs = "6.0"
 
+# CLI colors
+colored = "3"
+
 # HTTP (for sync/MCP)
 reqwest = { version = "0.12", features = ["json"], optional = true }
 tokio = { version = "1.40", features = ["full"], optional = true }
