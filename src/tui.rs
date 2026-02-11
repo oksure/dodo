@@ -10,8 +10,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Tabs,
-        Wrap,
+        Block, BorderType, Borders, Clear, Gauge, LineGauge, List, ListItem, ListState, Padding,
+        Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Tabs, Wrap,
     },
     Frame, Terminal,
 };
@@ -36,7 +36,6 @@ const ACCENT_MAUVE: Color = Color::Rgb(203, 166, 247);
 const ACCENT_TEAL: Color = Color::Rgb(148, 226, 213);
 const ACCENT_PEACH: Color = Color::Rgb(250, 179, 135);
 
-const PANE_LABELS: [&str; 4] = ["LONG TERM", "THIS WEEK", "TODAY", "DONE"];
 const SORT_MODES: [SortBy; 3] = [SortBy::Created, SortBy::Modified, SortBy::Title];
 const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -81,27 +80,40 @@ impl PaneState {
         }
     }
 
-    fn next(&mut self) {
+    fn jump(&mut self, n: usize) {
         if self.tasks.is_empty() {
             return;
         }
+        let len = self.tasks.len();
         let i = match self.list_state.selected() {
-            Some(i) if i >= self.tasks.len().saturating_sub(1) => 0,
-            Some(i) => i + 1,
+            Some(i) => (i + n) % len,
             None => 0,
         };
         self.list_state.select(Some(i));
     }
 
-    fn previous(&mut self) {
+    fn jump_back(&mut self, n: usize) {
         if self.tasks.is_empty() {
             return;
         }
+        let len = self.tasks.len();
         let i = match self.list_state.selected() {
-            Some(0) | None => self.tasks.len().saturating_sub(1),
-            Some(i) => i - 1,
+            Some(i) => (i + len - (n % len)) % len,
+            None => 0,
         };
         self.list_state.select(Some(i));
+    }
+
+    fn jump_to_first(&mut self) {
+        if !self.tasks.is_empty() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    fn jump_to_last(&mut self) {
+        if !self.tasks.is_empty() {
+            self.list_state.select(Some(self.tasks.len() - 1));
+        }
     }
 
     fn selected_task(&self) -> Option<&Task> {
@@ -252,6 +264,9 @@ struct App<'a> {
     edit_field_index: usize,
     edit_field_values: [String; 8],
     edit_field_input: String,
+    // Vim count prefix & g key
+    count_prefix: Option<usize>,
+    pending_g: bool,
 }
 
 impl<'a> App<'a> {
@@ -286,6 +301,8 @@ impl<'a> App<'a> {
             edit_field_index: 0,
             edit_field_values: Default::default(),
             edit_field_input: String::new(),
+            count_prefix: None,
+            pending_g: false,
         }
     }
 
@@ -673,12 +690,16 @@ where
                 match app.mode {
                     AppMode::Normal => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Char('1') => {
+                        KeyCode::Char('t') => {
                             app.tab = TuiTab::Tasks;
+                            app.count_prefix = None;
+                            app.pending_g = false;
                         }
-                        KeyCode::Char('2') => {
+                        KeyCode::Char('r') => {
                             app.tab = TuiTab::Report;
                             let _ = app.refresh_report();
+                            app.count_prefix = None;
+                            app.pending_g = false;
                         }
                         KeyCode::Tab => {
                             if app.tab == TuiTab::Tasks {
@@ -687,44 +708,44 @@ where
                             } else {
                                 app.tab = TuiTab::Tasks;
                             }
+                            app.count_prefix = None;
+                            app.pending_g = false;
                         }
                         _ => {
                             if app.tab == TuiTab::Tasks {
-                                match key.code {
-                                    KeyCode::Char('j') | KeyCode::Down => {
-                                        app.panes[app.active_pane].next()
+                                // Handle pending 'g' for gg (jump to first)
+                                if app.pending_g {
+                                    app.pending_g = false;
+                                    if key.code == KeyCode::Char('g') {
+                                        app.panes[app.active_pane].jump_to_first();
+                                        app.count_prefix = None;
+                                        // Skip further processing
+                                    } else {
+                                        // g followed by non-g, ignore the g
+                                        // and fall through to handle this key normally
+                                        handle_tasks_key(app, key.code);
                                     }
-                                    KeyCode::Char('k') | KeyCode::Up => {
-                                        app.panes[app.active_pane].previous()
+                                } else {
+                                    // Accumulate digit count prefix
+                                    match key.code {
+                                        KeyCode::Char(c @ '1'..='9')
+                                            if app.count_prefix.is_none() =>
+                                        {
+                                            app.count_prefix =
+                                                Some(c.to_digit(10).unwrap() as usize);
+                                        }
+                                        KeyCode::Char(c @ '0'..='9')
+                                            if app.count_prefix.is_some() =>
+                                        {
+                                            let current = app.count_prefix.unwrap_or(0);
+                                            app.count_prefix = Some(
+                                                current * 10 + c.to_digit(10).unwrap() as usize,
+                                            );
+                                        }
+                                        _ => {
+                                            handle_tasks_key(app, key.code);
+                                        }
                                     }
-                                    KeyCode::Char('h') | KeyCode::Left => app.move_pane_left(),
-                                    KeyCode::Char('l') | KeyCode::Right => app.move_pane_right(),
-                                    KeyCode::Char('s') => {
-                                        let _ = app.toggle_selected();
-                                    }
-                                    KeyCode::Char('d') => {
-                                        let _ = app.done();
-                                    }
-                                    KeyCode::Char('o') => app.cycle_sort(),
-                                    KeyCode::Char('r') => {
-                                        let _ = app.refresh_all();
-                                    }
-                                    KeyCode::Char('n') => {
-                                        app.open_note_view();
-                                    }
-                                    KeyCode::Char('a') => {
-                                        app.start_add_task();
-                                    }
-                                    KeyCode::Char('m') => {
-                                        app.start_move_task();
-                                    }
-                                    KeyCode::Enter => {
-                                        app.start_edit_task();
-                                    }
-                                    KeyCode::Backspace | KeyCode::Delete => {
-                                        app.start_delete();
-                                    }
-                                    _ => {}
                                 }
                             } else {
                                 match key.code {
@@ -734,9 +755,6 @@ where
                                     }
                                     KeyCode::Char('h') | KeyCode::Left => {
                                         app.report_range = app.report_range.prev();
-                                        let _ = app.refresh_report();
-                                    }
-                                    KeyCode::Char('r') => {
                                         let _ = app.refresh_report();
                                     }
                                     _ => {}
@@ -854,6 +872,55 @@ where
             }
             last_data_refresh = std::time::Instant::now();
         }
+    }
+}
+
+fn handle_tasks_key(app: &mut App, code: KeyCode) {
+    let count = app.count_prefix.take().unwrap_or(1);
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.panes[app.active_pane].jump(count);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.panes[app.active_pane].jump_back(count);
+        }
+        KeyCode::Char('h') | KeyCode::Left => app.move_pane_left(),
+        KeyCode::Char('l') | KeyCode::Right => app.move_pane_right(),
+        KeyCode::PageDown => {
+            app.panes[app.active_pane].jump(10);
+        }
+        KeyCode::PageUp => {
+            app.panes[app.active_pane].jump_back(10);
+        }
+        KeyCode::Char('G') => {
+            app.panes[app.active_pane].jump_to_last();
+        }
+        KeyCode::Char('g') => {
+            app.pending_g = true;
+        }
+        KeyCode::Char('s') => {
+            let _ = app.toggle_selected();
+        }
+        KeyCode::Char('d') => {
+            let _ = app.done();
+        }
+        KeyCode::Char('o') => app.cycle_sort(),
+        KeyCode::Char('n') => {
+            app.open_note_view();
+        }
+        KeyCode::Char('a') => {
+            app.start_add_task();
+        }
+        KeyCode::Char('m') => {
+            app.start_move_task();
+        }
+        KeyCode::Enter => {
+            app.start_edit_task();
+        }
+        KeyCode::Backspace | KeyCode::Delete => {
+            app.start_delete();
+        }
+        _ => {}
     }
 }
 
@@ -982,13 +1049,14 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("d", "done"),
                 ("n", "note"),
                 ("o", "sort"),
+                ("r", "report"),
                 ("q", "quit"),
             ],
         }
     } else {
         vec![
             ("h/l", "range"),
-            ("r", "refresh"),
+            ("t", "tasks"),
             ("q", "quit"),
         ]
     };
@@ -1012,6 +1080,18 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
+    let now = chrono::Local::now();
+    let today = now.date_naive();
+    let tomorrow = today + chrono::Duration::days(1);
+    let week_end = today + chrono::Duration::days(7);
+
+    let headers = [
+        "LONG TERM".to_string(),
+        format!("THIS WEEK \u{2014} {}\u{2013}{}", tomorrow.format("%b%d"), week_end.format("%b%d")),
+        format!("TODAY \u{2014} {}", today.format("%b%d")),
+        "DONE".to_string(),
+    ];
+
     let pane_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -1024,12 +1104,7 @@ fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
 
     for i in 0..4 {
         let is_active = i == app.active_pane;
-        let pane_widget = build_pane(&app.panes[i], PANE_LABELS[i], is_active, app.tick_count);
-        f.render_stateful_widget(
-            pane_widget,
-            pane_chunks[i],
-            &mut app.panes[i].list_state.clone(),
-        );
+        draw_pane(f, &app.panes[i], &headers[i], is_active, app.tick_count, pane_chunks[i]);
     }
 }
 
@@ -1093,10 +1168,10 @@ fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
 
     let left_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Min(0)])
+        .constraints([Constraint::Length(12), Constraint::Min(0)])
         .split(cols[0]);
 
-    // Summary stats
+    // Summary stats with Gauge
     let avg_per_task = if report.tasks_done > 0 {
         report.total_seconds / report.tasks_done
     } else {
@@ -1107,6 +1182,25 @@ fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     } else {
         0
     };
+
+    let summary_block = Block::bordered()
+        .title(Span::styled(
+            " Summary ",
+            Style::default()
+                .fg(ACCENT_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(FG_OVERLAY))
+        .padding(Padding::horizontal(1));
+
+    let summary_inner = summary_block.inner(left_layout[0]);
+    f.render_widget(summary_block, left_layout[0]);
+
+    let summary_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .split(summary_inner);
 
     let summary_lines = vec![
         Line::from(vec![
@@ -1143,22 +1237,32 @@ fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(format_dur(avg_per_day), Style::default().fg(FG_TEXT)),
         ]),
     ];
+    f.render_widget(Paragraph::new(summary_lines), summary_chunks[0]);
 
-    let summary = Paragraph::new(summary_lines).block(
-        Block::bordered()
-            .title(Span::styled(
-                " Summary ",
-                Style::default()
-                    .fg(ACCENT_BLUE)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(FG_OVERLAY))
-            .padding(Padding::horizontal(1)),
-    );
-    f.render_widget(summary, left_layout[0]);
+    // Productivity Gauge: tasks done ratio (capped at 100%)
+    let done_ratio = if report.tasks_done > 0 { 1.0_f64.min(report.tasks_done as f64 / (report.tasks_done as f64 + 1.0)) } else { 0.0 };
+    let done_gauge = Gauge::default()
+        .gauge_style(Style::default().fg(ACCENT_GREEN).bg(Color::Rgb(40, 42, 54)))
+        .ratio(done_ratio)
+        .label(format!("{} done", report.tasks_done))
+        .use_unicode(true);
+    f.render_widget(done_gauge, summary_chunks[1]);
 
-    // Productivity
+    // Productivity section with Sparkline
+    let prod_block = Block::bordered()
+        .title(Span::styled(
+            " Productivity ",
+            Style::default()
+                .fg(ACCENT_YELLOW)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(FG_OVERLAY))
+        .padding(Padding::horizontal(1));
+
+    let prod_inner = prod_block.inner(left_layout[1]);
+    f.render_widget(prod_block, left_layout[1]);
+
     let mut prod_lines: Vec<Line> = vec![];
 
     if let Some((hour, secs)) = report.by_hour.iter().max_by_key(|(_h, s)| *s) {
@@ -1194,46 +1298,54 @@ fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
         ]));
     }
 
+    // Sparkline for hours worked distribution
     if !report.by_hour.is_empty() {
         prod_lines.push(Line::from(""));
         prod_lines.push(Line::from(Span::styled(
             "  Hours worked:",
             Style::default().fg(FG_SUBTEXT),
         )));
-        let max_secs = report
-            .by_hour
-            .iter()
-            .map(|(_, s)| *s)
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        for (hour, secs) in &report.by_hour {
-            let bar_width = (*secs as f64 / max_secs as f64 * 20.0) as usize;
-            let bar: String = "\u{2588}".repeat(bar_width);
-            prod_lines.push(Line::from(vec![
-                Span::styled(format!("  {:02}:00 ", hour), Style::default().fg(FG_OVERLAY)),
-                Span::styled(bar, Style::default().fg(ACCENT_TEAL)),
-                Span::styled(
-                    format!(" {}", format_dur(*secs)),
-                    Style::default().fg(FG_OVERLAY),
-                ),
-            ]));
-        }
-    }
 
-    let prod = Paragraph::new(prod_lines).block(
-        Block::bordered()
-            .title(Span::styled(
-                " Productivity ",
-                Style::default()
-                    .fg(ACCENT_YELLOW)
-                    .add_modifier(Modifier::BOLD),
-            ))
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(FG_OVERLAY))
-            .padding(Padding::horizontal(1)),
-    );
-    f.render_widget(prod, left_layout[1]);
+        // Build 24-hour sparkline data
+        let mut hour_data = vec![0u64; 24];
+        for (hour, secs) in &report.by_hour {
+            if (*hour as usize) < 24 {
+                hour_data[*hour as usize] = *secs as u64;
+            }
+        }
+
+        // Render text stats first, then sparkline
+        let prod_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(prod_lines.len() as u16),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(prod_inner);
+
+        f.render_widget(Paragraph::new(prod_lines), prod_chunks[0]);
+
+        let sparkline = Sparkline::default()
+            .data(&hour_data)
+            .style(Style::default().fg(ACCENT_TEAL));
+        f.render_widget(sparkline, prod_chunks[1]);
+
+        // Hour labels below sparkline
+        let hour_labels = Line::from(vec![
+            Span::styled("  0", Style::default().fg(FG_OVERLAY)),
+            Span::styled("     6", Style::default().fg(FG_OVERLAY)),
+            Span::styled("      12", Style::default().fg(FG_OVERLAY)),
+            Span::styled("     18", Style::default().fg(FG_OVERLAY)),
+            Span::styled("    23", Style::default().fg(FG_OVERLAY)),
+        ]);
+        if prod_chunks[2].height > 0 {
+            let label_area = Rect::new(prod_chunks[2].x, prod_chunks[2].y, prod_chunks[2].width, 1);
+            f.render_widget(Paragraph::new(hour_labels), label_area);
+        }
+    } else {
+        f.render_widget(Paragraph::new(prod_lines), prod_inner);
+    }
 
     // Right column
     let right_layout = Layout::default()
@@ -1316,9 +1428,27 @@ fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(done, right_layout[1]);
 }
 
-// ── Pane Building ────────────────────────────────────────────────────
+// ── Pane Drawing ─────────────────────────────────────────────────────
 
-fn build_pane(pane: &PaneState, label: &str, is_active: bool, tick_count: u64) -> List<'static> {
+const RUNNING_BG_PHASES: [Color; 6] = [
+    Color::Rgb(30, 50, 30),
+    Color::Rgb(35, 60, 35),
+    Color::Rgb(30, 55, 40),
+    Color::Rgb(25, 50, 45),
+    Color::Rgb(30, 55, 40),
+    Color::Rgb(35, 60, 35),
+];
+
+const HIGHLIGHT_BG: Color = Color::Rgb(59, 66, 97);
+
+fn draw_pane(
+    f: &mut Frame,
+    pane: &PaneState,
+    label: &str,
+    is_active: bool,
+    tick_count: u64,
+    area: Rect,
+) {
     let border_color = if is_active { ACCENT_BLUE } else { FG_OVERLAY };
     let border_style = Style::default().fg(border_color);
 
@@ -1330,16 +1460,68 @@ fn build_pane(pane: &PaneState, label: &str, is_active: bool, tick_count: u64) -
         Style::default().fg(FG_SUBTEXT)
     };
 
+    let block = Block::bordered()
+        .title(Span::styled(format!(" {} ", label), title_style))
+        .border_type(BorderType::Rounded)
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if inner.height < 3 {
+        return;
+    }
+
+    // Split inner into stats sub-header (2 lines) and task list
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(inner);
+
+    // Stats sub-header
+    let (elapsed, estimate, done, total) = pane.stats();
+    let stats_text = build_pane_stats(elapsed, estimate, done, total);
+    let stats_line = Line::from(vec![
+        Span::styled(format!(" {}", stats_text), Style::default().fg(FG_SUBTEXT)),
+    ]);
+    let stats_area = Rect::new(chunks[0].x, chunks[0].y, chunks[0].width, 1);
+    f.render_widget(Paragraph::new(stats_line), stats_area);
+
+    // LineGauge progress bar
+    let ratio = if estimate > 0 {
+        (elapsed as f64 / estimate as f64).min(1.0)
+    } else {
+        0.0
+    };
+    let gauge_color = if ratio >= 1.0 {
+        ACCENT_RED
+    } else if ratio >= 0.75 {
+        ACCENT_YELLOW
+    } else {
+        ACCENT_GREEN
+    };
+    let gauge = LineGauge::default()
+        .filled_style(Style::default().fg(gauge_color))
+        .unfilled_style(Style::default().fg(Color::Rgb(40, 42, 54)))
+        .ratio(ratio);
+    let gauge_area = Rect::new(chunks[0].x, chunks[0].y + 1, chunks[0].width, 1);
+    f.render_widget(gauge, gauge_area);
+
+    // Task list area
+    let list_area = chunks[1];
     let today = chrono::Local::now().date_naive();
+    let selected_idx = pane.list_state.selected();
 
     let items: Vec<ListItem> = pane
         .tasks
         .iter()
-        .map(|task| {
+        .enumerate()
+        .map(|(idx, task)| {
             let is_running = task.status == TaskStatus::Running;
             let is_overdue = !is_running
                 && task.status != TaskStatus::Done
                 && is_task_overdue(task, today);
+            let is_selected = selected_idx == Some(idx);
 
             let status_icon = match task.status {
                 TaskStatus::Pending => "\u{25CB}", // ○
@@ -1358,15 +1540,13 @@ fn build_pane(pane: &PaneState, label: &str, is_active: bool, tick_count: u64) -
             };
 
             let (num_style, title_style) = if is_running {
-                let phase = tick_count % 3;
-                let color = match phase {
-                    0 => ACCENT_GREEN,
-                    1 => Color::Rgb(180, 240, 180),
-                    _ => ACCENT_TEAL,
-                };
                 (
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(ACCENT_GREEN)
+                        .add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(ACCENT_GREEN)
+                        .add_modifier(Modifier::BOLD),
                 )
             } else if is_overdue {
                 (
@@ -1401,37 +1581,56 @@ fn build_pane(pane: &PaneState, label: &str, is_active: bool, tick_count: u64) -
             ]);
 
             let meta_spans = build_compact_meta(task, today);
-            if meta_spans.is_empty() {
+            let item = if meta_spans.is_empty() {
                 ListItem::new(vec![line1])
             } else {
                 let mut line2_spans = vec![Span::raw("       ")];
                 line2_spans.extend(meta_spans);
                 let line2 = Line::from(line2_spans);
                 ListItem::new(vec![line1, line2])
+            };
+
+            // Running task: animated gradient background
+            if is_running {
+                let phase = (tick_count % 6) as usize;
+                let bg = RUNNING_BG_PHASES[phase];
+                if is_active && is_selected {
+                    // Running + focused: animated bg with underline
+                    item.style(Style::default().bg(bg).add_modifier(Modifier::UNDERLINED))
+                } else {
+                    item.style(Style::default().bg(bg))
+                }
+            } else {
+                item
             }
         })
         .collect();
 
-    // Pane title with stats
-    let (elapsed, estimate, done, total) = pane.stats();
-    let stats = build_pane_stats(elapsed, estimate, done, total);
-    let stats_span = Span::styled(format!(" {} ", stats), Style::default().fg(FG_OVERLAY));
-
-    List::new(items)
-        .block(
-            Block::bordered()
-                .title(Span::styled(format!(" {} ", label), title_style))
-                .title_bottom(stats_span)
-                .border_type(BorderType::Rounded)
-                .border_style(border_style)
-                .padding(Padding::horizontal(0)),
-        )
-        .highlight_style(
+    let list = List::new(items);
+    let list = if is_active {
+        list.highlight_style(
             Style::default()
-                .bg(BG_SURFACE)
+                .bg(HIGHLIGHT_BG)
                 .fg(FG_TEXT)
                 .add_modifier(Modifier::BOLD),
         )
+        .highlight_symbol("\u{258E} ")
+    } else {
+        list
+    };
+
+    f.render_stateful_widget(list, list_area, &mut pane.list_state.clone());
+
+    // Scrollbar (only when tasks exceed visible area)
+    // Each task item is ~2 lines, so approximate visible count
+    let visible_approx = list_area.height as usize / 2;
+    if pane.tasks.len() > visible_approx && list_area.height > 0 {
+        let mut scrollbar_state = ScrollbarState::new(pane.tasks.len())
+            .position(pane.list_state.selected().unwrap_or(0));
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(FG_OVERLAY));
+        f.render_stateful_widget(scrollbar, list_area, &mut scrollbar_state);
+    }
 }
 
 fn is_task_overdue(task: &Task, today: chrono::NaiveDate) -> bool {
@@ -1495,6 +1694,7 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
     let muted = Style::default().fg(FG_OVERLAY);
     let seven_days = today + chrono::Duration::days(7);
 
+    // Priority
     if let Some(p) = task.priority {
         if p > 0 {
             if !spans.is_empty() {
@@ -1517,6 +1717,8 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
             spans.push(Span::styled(indicator, pri_style));
         }
     }
+
+    // Project
     if let Some(ref p) = task.project {
         if !spans.is_empty() {
             spans.push(Span::styled(" ", muted));
@@ -1526,6 +1728,8 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
             Style::default().fg(ACCENT_MAUVE),
         ));
     }
+
+    // Contexts
     if let Some(ref c) = task.context {
         for ctx in c.split(',') {
             let ctx = ctx.trim();
@@ -1540,13 +1744,8 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
             }
         }
     }
-    if let Some(est) = task.estimate_minutes {
-        if !spans.is_empty() {
-            spans.push(Span::styled(" ", muted));
-        }
-        spans.push(Span::styled(format!("~{}", format_est(est)), muted));
-    }
 
+    // Elapsed (before estimate)
     let elapsed = task.elapsed_seconds.unwrap_or(0);
     if elapsed > 0 {
         if !spans.is_empty() {
@@ -1563,6 +1762,28 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
         ));
     }
 
+    // Estimate (after elapsed)
+    if let Some(est) = task.estimate_minutes {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" ", muted));
+        }
+        spans.push(Span::styled(format!("~{}", format_est(est)), muted));
+    }
+
+    // Scheduled (before deadline)
+    if let Some(ref sc) = task.scheduled {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" ", muted));
+        }
+        let sc_style = if task.status != TaskStatus::Done && *sc < today {
+            Style::default().fg(ACCENT_RED)
+        } else {
+            Style::default().fg(ACCENT_TEAL)
+        };
+        spans.push(Span::styled(format!("={}", sc.format("%b%d")), sc_style));
+    }
+
+    // Deadline (after scheduled)
     if let Some(ref dl) = task.deadline {
         if !spans.is_empty() {
             spans.push(Span::styled(" ", muted));
@@ -1577,17 +1798,6 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
             muted
         };
         spans.push(Span::styled(format!("^{}", dl.format("%b%d")), dl_style));
-    }
-    if let Some(ref sc) = task.scheduled {
-        if !spans.is_empty() {
-            spans.push(Span::styled(" ", muted));
-        }
-        let sc_style = if task.status != TaskStatus::Done && *sc < today {
-            Style::default().fg(ACCENT_RED)
-        } else {
-            Style::default().fg(ACCENT_TEAL)
-        };
-        spans.push(Span::styled(format!("={}", sc.format("%b%d")), sc_style));
     }
 
     spans
@@ -1738,6 +1948,17 @@ fn draw_delete_modal(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(text), inner);
 }
 
+const EDIT_FIELD_HINTS: [&str; 8] = [
+    "Task name (plain text)",
+    "Project name (no + prefix needed)",
+    "Comma-separated, e.g.: work, laptop",
+    "Comma-separated, e.g.: urgent, frontend",
+    "Duration, e.g.: 30m, 1h, 2h30m, 1d",
+    "Date, e.g.: today, tmr, fri, 0215, 2025-05-02",
+    "Date, e.g.: today, tmr, 3d, mon",
+    "! to !!!! (1-4 levels)",
+];
+
 fn draw_edit_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(50, 70, f.area());
     draw_shadow(f, area);
@@ -1771,10 +1992,10 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
     f.render_widget(block, area);
 
     if app.mode == AppMode::EditTaskField {
-        // Show the field being edited with input
+        // Show the field being edited with input + hint
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(3)])
+            .constraints([Constraint::Min(1), Constraint::Length(4)])
             .split(inner);
 
         // Show all fields above for context (dimmed)
@@ -1791,27 +2012,33 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
                 Span::styled(format!("  {:<12}", label), style),
                 Span::styled(
                     app.edit_field_values[i].clone(),
-                    if i == app.edit_field_index {
-                        Style::default().fg(FG_OVERLAY)
-                    } else {
-                        Style::default().fg(FG_OVERLAY)
-                    },
+                    Style::default().fg(FG_OVERLAY),
                 ),
             ]));
         }
         f.render_widget(Paragraph::new(lines), chunks[0]);
 
+        // Input area with hint
         let input_block = Block::default()
             .borders(Borders::TOP)
             .border_style(Style::default().fg(ACCENT_BLUE))
             .border_type(BorderType::Rounded);
-        let input_text = format!("\u{276F} {}\u{2588}", app.edit_field_input);
-        let input_widget = Paragraph::new(input_text)
-            .style(Style::default().fg(FG_TEXT))
-            .block(input_block);
+        let hint = EDIT_FIELD_HINTS[app.edit_field_index];
+        let input_lines = vec![
+            Line::from(Span::styled(
+                format!("  {}", hint),
+                Style::default().fg(FG_OVERLAY),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("\u{276F} {}\u{2588}", app.edit_field_input),
+                Style::default().fg(FG_TEXT),
+            )),
+        ];
+        let input_widget = Paragraph::new(input_lines).block(input_block);
         f.render_widget(input_widget, chunks[1]);
     } else {
-        // Show field list with selection highlight
+        // Show field list with selection highlight and hints
         let mut lines: Vec<Line> = vec![];
         for (i, label) in EDIT_FIELD_LABELS.iter().enumerate() {
             let is_selected = i == app.edit_field_index;
@@ -1840,7 +2067,14 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
                 Span::styled(format!("{:<12}", label), label_style),
                 Span::styled(display_value, value_style),
             ]));
-            lines.push(Line::from(""));
+            if is_selected {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", EDIT_FIELD_HINTS[i]),
+                    Style::default().fg(FG_OVERLAY),
+                )));
+            } else {
+                lines.push(Line::from(""));
+            }
         }
         f.render_widget(Paragraph::new(lines), inner);
     }
@@ -1863,7 +2097,7 @@ fn draw_add_bar(f: &mut Frame, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Span::styled(
-            " +project @context #tag ~estimate ^deadline =scheduled !priority ",
+            " e.g.: fix login +backend @laptop ~2h ^fri !!! ",
             Style::default().fg(FG_OVERLAY),
         ))
         .border_type(BorderType::Rounded)
