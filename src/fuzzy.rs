@@ -4,7 +4,7 @@
 use crate::task::Task;
 
 /// Find best matching task using simple substring matching
-pub fn find_best_match(tasks: &[Task], query: &str) -> Option<&Task> {
+pub fn find_best_match<'a>(tasks: &'a [Task], query: &str) -> Option<&'a Task> {
     if tasks.is_empty() {
         return None;
     }
@@ -27,7 +27,8 @@ pub fn find_best_match(tasks: &[Task], query: &str) -> Option<&Task> {
     
     // Word-by-word matching
     for task in tasks {
-        let words: Vec<&str> = task.title.to_lowercase().split_whitespace().collect();
+        let lower_title = task.title.to_lowercase();
+        let words: Vec<&str> = lower_title.split_whitespace().collect();
         for word in words {
             if word.contains(&query_lower) {
                 return Some(task);
@@ -39,6 +40,6 @@ pub fn find_best_match(tasks: &[Task], query: &str) -> Option<&Task> {
 }
 
 /// Score all tasks and return sorted by relevance
-pub fn rank_matches(tasks: &[Task], _query: &str) -> Vec<&Task> {
+pub fn rank_matches<'a>(tasks: &'a [Task], _query: &str) -> Vec<&'a Task> {
     tasks.iter().collect()
 }

@@ -106,34 +106,37 @@ impl Database {
     }
 
     pub fn list_tasks(&self, area: Option<CliArea>) -> Result<Vec<Task>> {
-        let mut stmt = if let Some(area) = area {
+        let mut tasks = Vec::new();
+
+        if let Some(area) = area {
             let area_str = Area::from(area).as_str();
-            self.conn.prepare(
+            let mut stmt = self.conn.prepare(
                 "SELECT id, title, area, project, context, status, created, completed
                  FROM tasks WHERE area = ?1 AND status != 'Done'
                  ORDER BY created DESC"
-            )?
-            .query(params![area_str])?
+            )?;
+            let mut rows = stmt.query(params![area_str])?;
+            while let Some(row) = rows.next()? {
+                tasks.push(self.row_to_task(row)?);
+            }
         } else {
             // Default: show Today + Running tasks
-            self.conn.prepare(
+            let mut stmt = self.conn.prepare(
                 "SELECT id, title, area, project, context, status, created, completed
                  FROM tasks WHERE (area = 'Today' OR status = 'Running') AND status != 'Done'
-                 ORDER BY 
-                    CASE status 
-                        WHEN 'Running' THEN 0 
-                        ELSE 1 
+                 ORDER BY
+                    CASE status
+                        WHEN 'Running' THEN 0
+                        ELSE 1
                     END,
                     created DESC"
-            )?
-            .query([])?
-        };
-
-        let mut tasks = Vec::new();
-        while let Some(row) = stmt.next()? {
-            tasks.push(self.row_to_task(&row)?);
+            )?;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                tasks.push(self.row_to_task(row)?);
+            }
         }
-        
+
         Ok(tasks)
     }
 

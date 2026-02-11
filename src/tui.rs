@@ -6,16 +6,16 @@ use crossterm::{
 };
 use ratatui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame, Terminal,
 };
 use std::io;
 
 use crate::db::Database;
-use crate::task::{Area, Task};
+use crate::task::Task;
 
 pub enum FocusArea {
     LongTerm,
@@ -212,7 +212,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     f.render_stateful_widget(task_list, main_chunks[1], &mut app.list_state.clone());
 }
 
-fn build_header(app: &App) -> Paragraph {
+fn build_header(app: &App<'_>) -> Paragraph<'static> {
     let focus_name = match app.focus {
         FocusArea::LongTerm => "LONG TERM",
         FocusArea::ThisWeek => "THIS WEEK",
@@ -240,7 +240,7 @@ fn build_header(app: &App) -> Paragraph {
     )
 }
 
-fn build_sidebar(app: &App) -> Paragraph {
+fn build_sidebar(app: &App<'_>) -> Paragraph<'static> {
     let long_active = matches!(app.focus, FocusArea::LongTerm);
     let week_active = matches!(app.focus, FocusArea::ThisWeek);
     let today_active = matches!(app.focus, FocusArea::Today);
@@ -280,7 +280,7 @@ fn build_sidebar(app: &App) -> Paragraph {
     )
 }
 
-fn build_task_list(app: &App) -> List {
+fn build_task_list(app: &App<'_>) -> List<'static> {
     let items: Vec<ListItem> = app
         .tasks
         .iter()
