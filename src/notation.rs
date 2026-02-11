@@ -27,12 +27,19 @@ pub fn parse_notation(input: &str) -> ParsedInput {
     let mut title_parts: Vec<&str> = Vec::new();
 
     for token in input.split_whitespace() {
-        if token.len() < 2 {
+        let first_byte = token.as_bytes()[0];
+
+        // All notation symbols are ASCII single-byte characters.
+        // Skip tokens that don't start with a known symbol or are too short.
+        if token.len() < 2
+            || !matches!(first_byte, b'+' | b'@' | b'#' | b'~' | b'$' | b'^')
+        {
             title_parts.push(token);
             continue;
         }
 
-        let prefix = token.as_bytes()[0];
+        // Safe to slice at byte 1 since the prefix is ASCII
+        let prefix = first_byte;
         let value = &token[1..];
 
         match prefix {

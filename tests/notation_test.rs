@@ -238,3 +238,25 @@ fn estimate_last_wins() {
     let p = parse_notation("Task ~30m ~1h");
     assert_eq!(p.estimate_minutes, Some(60));
 }
+
+#[test]
+fn unicode_title_no_panic() {
+    let p = parse_notation("강의자료 도서관 요청");
+    assert_eq!(p.title, "강의자료 도서관 요청");
+    assert!(p.project.is_none());
+    assert!(p.contexts.is_empty());
+}
+
+#[test]
+fn unicode_with_notation() {
+    let p = parse_notation("강의자료 준비 +학교 ~2h");
+    assert_eq!(p.title, "강의자료 준비");
+    assert_eq!(p.project, Some("학교".to_string()));
+    assert_eq!(p.estimate_minutes, Some(120));
+}
+
+#[test]
+fn single_unicode_char() {
+    let p = parse_notation("가");
+    assert_eq!(p.title, "가");
+}
