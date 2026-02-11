@@ -39,6 +39,14 @@ pub enum Commands {
     #[command(alias = "rm")]
     Remove(RemoveArgs),
 
+    /// Edit a task's metadata
+    #[command(alias = "e")]
+    Edit(EditArgs),
+
+    /// Add or view notes on a task
+    #[command(alias = "n")]
+    Note(NoteArgs),
+
     /// Open TUI
     #[command(alias = "t")]
     Tui,
@@ -46,8 +54,9 @@ pub enum Commands {
 
 #[derive(Parser)]
 pub struct AddArgs {
-    /// Task title
-    pub title: String,
+    /// Task title and inline notation (+project @context #tag ~estimate $deadline ^scheduled)
+    #[arg(trailing_var_arg = true, required = true)]
+    pub title: Vec<String>,
 
     /// Focus area
     #[arg(long, value_enum, default_value = "today")]
@@ -60,6 +69,22 @@ pub struct AddArgs {
     /// Context tag (@context)
     #[arg(long)]
     pub context: Option<String>,
+
+    /// Time estimate in minutes
+    #[arg(long)]
+    pub estimate: Option<i64>,
+
+    /// Deadline date (YYYY-MM-DD)
+    #[arg(long)]
+    pub deadline: Option<String>,
+
+    /// Scheduled date (YYYY-MM-DD)
+    #[arg(long)]
+    pub scheduled: Option<String>,
+
+    /// Tags (comma-separated)
+    #[arg(long)]
+    pub tags: Option<String>,
 }
 
 #[derive(Parser)]
@@ -71,14 +96,42 @@ pub struct ListArgs {
 
 #[derive(Parser)]
 pub struct StartArgs {
-    /// Task to start (fuzzy matched)
-    pub task: String,
+    /// Task to start (numeric ID or fuzzy text)
+    #[arg(trailing_var_arg = true, required = true)]
+    pub task: Vec<String>,
 }
 
 #[derive(Parser)]
 pub struct RemoveArgs {
-    /// Task to delete (fuzzy matched)
-    pub task: String,
+    /// Task to delete (numeric ID or fuzzy text)
+    #[arg(trailing_var_arg = true, required = true)]
+    pub task: Vec<String>,
+}
+
+#[derive(Parser)]
+pub struct EditArgs {
+    /// Task identifier and notation tokens to update
+    #[arg(trailing_var_arg = true, required = true)]
+    pub args: Vec<String>,
+
+    /// Change focus area
+    #[arg(long, value_enum)]
+    pub area: Option<Area>,
+}
+
+#[derive(Parser)]
+pub struct NoteArgs {
+    /// Task to add note to (numeric ID or fuzzy text)
+    #[arg(trailing_var_arg = true, required = true)]
+    pub task: Vec<String>,
+
+    /// Clear all notes
+    #[arg(long)]
+    pub clear: bool,
+
+    /// Show notes without prompting for new input
+    #[arg(long)]
+    pub show: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]

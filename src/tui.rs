@@ -21,6 +21,7 @@ pub enum FocusArea {
     LongTerm,
     ThisWeek,
     Today,
+    Completed,
 }
 
 pub fn run_tui(db: &Database) -> Result<()> {
@@ -63,7 +64,7 @@ impl<'a> App<'a> {
     fn new(db: &'a Database) -> Self {
         let mut list_state = ratatui::widgets::ListState::default();
         list_state.select(Some(0));
-        
+
         Self {
             focus: FocusArea::Today,
             tasks: Vec::new(),
@@ -78,15 +79,16 @@ impl<'a> App<'a> {
             FocusArea::Today => self.db.list_tasks(Some(dodo::cli::Area::Today))?,
             FocusArea::ThisWeek => self.db.list_tasks(Some(dodo::cli::Area::ThisWeek))?,
             FocusArea::LongTerm => self.db.list_tasks(Some(dodo::cli::Area::LongTerm))?,
+            FocusArea::Completed => self.db.list_tasks(Some(dodo::cli::Area::Completed))?,
         };
-        
+
         // Update running task
         if let Ok(Some((title, _))) = self.db.get_running_task() {
             self.running_task = Some(title);
         } else {
             self.running_task = None;
         }
-        
+
         Ok(())
     }
 
@@ -173,6 +175,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, _db: &Database
                     KeyCode::Char('l') => app.switch_focus(FocusArea::LongTerm),
                     KeyCode::Char('w') => app.switch_focus(FocusArea::ThisWeek),
                     KeyCode::Char('t') => app.switch_focus(FocusArea::Today),
+                    KeyCode::Char('c') => app.switch_focus(FocusArea::Completed),
                     KeyCode::Char('r') => { let _ = app.refresh_tasks(); }
                     _ => {}
                 }
@@ -200,7 +203,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     // Main area split
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(12), Constraint::Min(20)])
+        .constraints([Constraint::Length(14), Constraint::Min(20)])
         .split(chunks[1]);
 
     // Sidebar
@@ -217,6 +220,7 @@ fn build_header(app: &App<'_>) -> Paragraph<'static> {
         FocusArea::LongTerm => "LONG TERM",
         FocusArea::ThisWeek => "THIS WEEK",
         FocusArea::Today => "TODAY",
+        FocusArea::Completed => "COMPLETED",
     };
 
     let running_info = if let Some(ref task) = app.running_task {
@@ -244,27 +248,21 @@ fn build_sidebar(app: &App<'_>) -> Paragraph<'static> {
     let long_active = matches!(app.focus, FocusArea::LongTerm);
     let week_active = matches!(app.focus, FocusArea::ThisWeek);
     let today_active = matches!(app.focus, FocusArea::Today);
+    let done_active = matches!(app.focus, FocusArea::Completed);
 
-    let long_style = if long_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-    let week_style = if week_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-    let today_style = if today_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Gray)
+    let make_style = |active: bool| {
+        if active {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        }
     };
 
     let text = vec![
-        Line::from(vec![Span::styled("  LONG  ", long_style)]),
-        Line::from(vec![Span::styled("  WEEK  ", week_style)]),
-        Line::from(vec![Span::styled("> TODAY <", today_style),]),
+        Line::from(vec![Span::styled("[l] Long    ", make_style(long_active))]),
+        Line::from(vec![Span::styled("[w] Week    ", make_style(week_active))]),
+        Line::from(vec![Span::styled("[t] Today   ", make_style(today_active))]),
+        Line::from(vec![Span::styled("[c] Complete", make_style(done_active))]),
         Line::from(""),
         Line::from(vec![Span::styled("j/k: nav", Style::default().fg(Color::DarkGray))]),
         Line::from(vec![Span::styled("s: start", Style::default().fg(Color::DarkGray))]),
@@ -288,16 +286,18 @@ fn build_task_list(app: &App<'_>) -> List<'static> {
         .map(|(i, task)| {
             let style = if task.status == dodo::task::TaskStatus::Running {
                 Style::default().fg(Color::Green)
+            } else if task.status == dodo::task::TaskStatus::Done {
+                Style::default().fg(Color::DarkGray)
             } else {
                 Style::default()
             };
-            
+
             let prefix = if Some(i) == app.list_state.selected() {
                 "> "
             } else {
                 "  "
             };
-            
+
             ListItem::new(format!("{}{}", prefix, task)).style(style)
         })
         .collect();

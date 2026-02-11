@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 
 use crate::cli::Area as CliArea;
 use crate::fuzzy::{find_best_match, rank_matches};
+use crate::notation::ParsedInput;
 use crate::session::Session;
 use crate::task::{Area, Task, TaskStatus};
 
@@ -82,6 +83,31 @@ impl Database {
             )?;
         }
 
+        // Add estimate_minutes column
+        if self.conn.prepare("SELECT estimate_minutes FROM tasks LIMIT 0").is_err() {
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER", [])?;
+        }
+
+        // Add deadline column
+        if self.conn.prepare("SELECT deadline FROM tasks LIMIT 0").is_err() {
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN deadline TEXT", [])?;
+        }
+
+        // Add scheduled column
+        if self.conn.prepare("SELECT scheduled FROM tasks LIMIT 0").is_err() {
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN scheduled TEXT", [])?;
+        }
+
+        // Add tags column
+        if self.conn.prepare("SELECT tags FROM tasks LIMIT 0").is_err() {
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN tags TEXT", [])?;
+        }
+
+        // Add task_notes column (named to avoid conflict with sessions.notes)
+        if self.conn.prepare("SELECT task_notes FROM tasks LIMIT 0").is_err() {
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN task_notes TEXT", [])?;
+        }
+
         // Index for fast queries
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area)",
@@ -99,12 +125,17 @@ impl Database {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_task(
         &self,
         title: &str,
         area: CliArea,
         project: Option<String>,
         context: Option<String>,
+        estimate_minutes: Option<i64>,
+        deadline: Option<NaiveDate>,
+        scheduled: Option<NaiveDate>,
+        tags: Option<String>,
     ) -> Result<i64> {
         let task = Task::new(title, Area::from(area), project, context);
 
@@ -115,8 +146,8 @@ impl Database {
         )?;
 
         self.conn.execute(
-            "INSERT INTO tasks (id, num_id, title, area, project, context, status, created, completed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO tasks (id, num_id, title, area, project, context, status, created, completed, estimate_minutes, deadline, scheduled, tags)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 &task.id,
                 next_num_id,
@@ -127,38 +158,60 @@ impl Database {
                 task.status.as_str(),
                 task.created.to_rfc3339(),
                 task.completed.map(|d| d.to_rfc3339()),
+                estimate_minutes,
+                deadline.map(|d| d.to_string()),
+                scheduled.map(|d| d.to_string()),
+                tags,
             ],
         )?;
 
         Ok(next_num_id)
     }
 
+    const TASK_SELECT_WITH_ELAPSED: &'static str =
+        "SELECT t.id, t.num_id, t.title, t.area, t.project, t.context, t.status, t.created, t.completed,
+                t.estimate_minutes, t.deadline, t.scheduled, t.tags, t.task_notes,
+                COALESCE(SUM(
+                    CASE WHEN s.ended IS NOT NULL THEN s.duration
+                    ELSE CAST((julianday('now') - julianday(s.started)) * 86400 AS INTEGER)
+                    END
+                ), 0) as elapsed_seconds
+         FROM tasks t LEFT JOIN sessions s ON s.task_id = t.id";
+
     pub fn list_tasks(&self, area: Option<CliArea>) -> Result<Vec<Task>> {
         let mut tasks = Vec::new();
 
         if let Some(area) = area {
             let area_str = Area::from(area).as_str();
-            let mut stmt = self.conn.prepare(
-                "SELECT id, num_id, title, area, project, context, status, created, completed
-                 FROM tasks WHERE area = ?1 AND status != 'Done'
-                 ORDER BY created DESC"
-            )?;
+            let is_completed = matches!(area, CliArea::Completed);
+            let filter = if is_completed {
+                "WHERE t.area = ?1"
+            } else {
+                "WHERE t.area = ?1 AND t.status != 'Done'"
+            };
+            let query = format!(
+                "{} {} GROUP BY t.id ORDER BY t.created DESC",
+                Self::TASK_SELECT_WITH_ELAPSED, filter
+            );
+            let mut stmt = self.conn.prepare(&query)?;
             let mut rows = stmt.query(params![area_str])?;
             while let Some(row) = rows.next()? {
                 tasks.push(self.row_to_task(row)?);
             }
         } else {
             // Default: show Today + Running tasks
-            let mut stmt = self.conn.prepare(
-                "SELECT id, num_id, title, area, project, context, status, created, completed
-                 FROM tasks WHERE (area = 'Today' OR status = 'Running') AND status != 'Done'
+            let query = format!(
+                "{} WHERE (t.area = 'Today' OR t.status = 'Running') AND t.status != 'Done'
+                 GROUP BY t.id
                  ORDER BY
-                    CASE status
+                    CASE t.status
                         WHEN 'Running' THEN 0
                         ELSE 1
                     END,
-                    created DESC"
-            )?;
+                    t.created DESC",
+                Self::TASK_SELECT_WITH_ELAPSED
+            );
+            let mut stmt = self.conn.prepare(&query)?;
             let mut rows = stmt.query([])?;
             while let Some(row) = rows.next()? {
                 tasks.push(self.row_to_task(row)?);
@@ -169,15 +222,16 @@ impl Database {
     }
 
     pub fn find_tasks(&self, query: &str) -> Result<Vec<Task>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, num_id, title, area, project, context, status, created, completed
-             FROM tasks WHERE status != 'Done'"
-        )?;
+        let sql = format!(
+            "{} WHERE t.status != 'Done' GROUP BY t.id",
+            Self::TASK_SELECT_WITH_ELAPSED
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
 
         let mut tasks = Vec::new();
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
-            tasks.push(self.row_to_task(&row)?);
+            tasks.push(self.row_to_task(row)?);
         }
 
         // Rank by fuzzy relevance
@@ -190,13 +244,13 @@ impl Database {
         self.pause_timer()?;
 
         let task = self.resolve_task(query)?;
-        
+
         // Update task status
         self.conn.execute(
             "UPDATE tasks SET status = 'Running' WHERE id = ?1",
             params![&task.id],
         )?;
-        
+
         // Create session
         let session = Session::new(&task.id);
         self.conn.execute(
@@ -212,7 +266,7 @@ impl Database {
                 session.notes,
             ],
         )?;
-        
+
         Ok(())
     }
 
@@ -325,20 +379,120 @@ impl Database {
 
     pub fn delete_task(&self, query: &str) -> Result<()> {
         let task = self.resolve_task(query)?;
-        
+
         // Delete sessions first (foreign key constraint)
         self.conn.execute(
             "DELETE FROM sessions WHERE task_id = ?1",
             params![&task.id],
         )?;
-        
+
         // Delete task
         self.conn.execute(
             "DELETE FROM tasks WHERE id = ?1",
             params![&task.id],
         )?;
-        
+
         Ok(())
+    }
+
+    pub fn append_note(&self, query: &str, text: &str) -> Result<String> {
+        let task = self.resolve_task(query)?;
+        let timestamp = chrono::Local::now().format("[%Y-%m-%d %H:%M]");
+        let new_entry = format!("{} {}", timestamp, text);
+
+        let existing: Option<String> = self.conn.query_row(
+            "SELECT task_notes FROM tasks WHERE id = ?1",
+            params![&task.id],
+            |row| row.get(0),
+        )?;
+
+        let updated = match existing {
+            Some(ref notes) if !notes.is_empty() => format!("{}\n{}", notes, new_entry),
+            _ => new_entry,
+        };
+
+        self.conn.execute(
+            "UPDATE tasks SET task_notes = ?1 WHERE id = ?2",
+            params![&updated, &task.id],
+        )?;
+
+        Ok(task.title)
+    }
+
+    pub fn clear_notes(&self, query: &str) -> Result<String> {
+        let task = self.resolve_task(query)?;
+        self.conn.execute(
+            "UPDATE tasks SET task_notes = NULL WHERE id = ?1",
+            params![&task.id],
+        )?;
+        Ok(task.title)
+    }
+
+    pub fn get_task_notes(&self, query: &str) -> Result<(String, Option<String>)> {
+        let task = self.resolve_task(query)?;
+        let notes: Option<String> = self.conn.query_row(
+            "SELECT task_notes FROM tasks WHERE id = ?1",
+            params![&task.id],
+            |row| row.get(0),
+        )?;
+        Ok((task.title, notes))
+    }
+
+    pub fn update_task_fields(&self, query: &str, input: &ParsedInput, area: Option<CliArea>) -> Result<String> {
+        let task = self.resolve_task(query)?;
+
+        if let Some(ref project) = input.project {
+            self.conn.execute(
+                "UPDATE tasks SET project = ?1 WHERE id = ?2",
+                params![project, &task.id],
+            )?;
+        }
+
+        if !input.contexts.is_empty() {
+            let ctx = input.contexts.join(",");
+            self.conn.execute(
+                "UPDATE tasks SET context = ?1 WHERE id = ?2",
+                params![ctx, &task.id],
+            )?;
+        }
+
+        if !input.tags.is_empty() {
+            let tags = input.tags.join(",");
+            self.conn.execute(
+                "UPDATE tasks SET tags = ?1 WHERE id = ?2",
+                params![tags, &task.id],
+            )?;
+        }
+
+        if let Some(est) = input.estimate_minutes {
+            self.conn.execute(
+                "UPDATE tasks SET estimate_minutes = ?1 WHERE id = ?2",
+                params![est, &task.id],
+            )?;
+        }
+
+        if let Some(ref dl) = input.deadline {
+            self.conn.execute(
+                "UPDATE tasks SET deadline = ?1 WHERE id = ?2",
+                params![dl.to_string(), &task.id],
+            )?;
+        }
+
+        if let Some(ref sc) = input.scheduled {
+            self.conn.execute(
+                "UPDATE tasks SET scheduled = ?1 WHERE id = ?2",
+                params![sc.to_string(), &task.id],
+            )?;
+        }
+
+        if let Some(area) = area {
+            self.conn.execute(
+                "UPDATE tasks SET area = ?1 WHERE id = ?2",
+                params![Area::from(area).as_str(), &task.id],
+            )?;
+        }
+
+        Ok(task.title)
     }
 
     fn row_to_task(&self, row: &rusqlite::Row) -> Result<Task> {
@@ -358,6 +512,14 @@ impl Database {
             completed: row.get::<_, Option<String>>(8)?
                 .and_then(|d| DateTime::parse_from_rfc3339(&d).ok())
                 .map(|d| d.into()),
+            estimate_minutes: row.get(9)?,
+            deadline: row.get::<_, Option<String>>(10)?
+                .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+            scheduled: row.get::<_, Option<String>>(11)?
+                .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
+            tags: row.get(12)?,
+            notes: row.get(13)?,
+            elapsed_seconds: row.get(14).ok(),
         })
     }
 
@@ -392,10 +554,11 @@ impl Database {
     }
 
     pub fn find_task_by_num_id(&self, num_id: i64) -> Result<Option<Task>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, num_id, title, area, project, context, status, created, completed
-             FROM tasks WHERE num_id = ?1"
-        )?;
+        let query = format!(
+            "{} WHERE t.num_id = ?1 GROUP BY t.id",
+            Self::TASK_SELECT_WITH_ELAPSED
+        );
+        let mut stmt = self.conn.prepare(&query)?;
         let mut rows = stmt.query(params![num_id])?;
         if let Some(row) = rows.next()? {
             Ok(Some(self.row_to_task(row)?))
@@ -404,7 +567,7 @@ impl Database {
         }
     }
 
-    fn resolve_task(&self, query: &str) -> Result<Task> {
+    pub fn resolve_task(&self, query: &str) -> Result<Task> {
         // Try numeric ID first
         if let Ok(num_id) = query.parse::<i64>() {
             if let Some(task) = self.find_task_by_num_id(num_id)? {
