@@ -3,7 +3,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::PathBuf;
 
-use crate::cli::Area as CliArea;
+use crate::cli::{Area as CliArea, SortBy};
 use crate::fuzzy::{find_best_match, rank_matches};
 use crate::notation::ParsedInput;
 use crate::session::Session;
@@ -113,6 +113,12 @@ impl Database {
             self.conn.execute("ALTER TABLE tasks ADD COLUMN priority INTEGER", [])?;
         }
 
+        // Add modified_at column
+        if self.conn.prepare("SELECT modified_at FROM tasks LIMIT 0").is_err() {
+            self.conn.execute("ALTER TABLE tasks ADD COLUMN modified_at TEXT", [])?;
+            self.conn.execute("UPDATE tasks SET modified_at = created WHERE modified_at IS NULL", [])?;
+        }
+
         // Index for fast queries
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area)",
@@ -151,9 +157,10 @@ impl Database {
             |row| row.get(0),
         )?;
 
+        let now = Utc::now().to_rfc3339();
         self.conn.execute(
-            "INSERT INTO tasks (id, num_id, title, area, project, context, status, created, completed, estimate_minutes, deadline, scheduled, tags, priority)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT INTO tasks (id, num_id, title, area, project, context, status, created, completed, estimate_minutes, deadline, scheduled, tags, priority, modified_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 &task.id,
                 next_num_id,
@@ -169,6 +176,7 @@ impl Database {
                 scheduled.map(|d| d.to_string()),
                 tags,
                 priority,
+                &now,
             ],
         )?;
 
@@ -178,6 +186,7 @@ impl Database {
     const TASK_SELECT_WITH_ELAPSED: &'static str =
         "SELECT t.id, t.num_id, t.title, t.area, t.project, t.context, t.status, t.created, t.completed,
                 t.estimate_minutes, t.deadline, t.scheduled, t.tags, t.task_notes, t.priority,
+                t.modified_at,
                 COALESCE(SUM(
                     CASE WHEN s.ended IS NOT NULL THEN s.duration
                     ELSE CAST((julianday('now') - julianday(s.started)) * 86400 AS INTEGER)
@@ -185,8 +194,22 @@ impl Database {
                 ), 0) as elapsed_seconds
          FROM tasks t LEFT JOIN sessions s ON s.task_id = t.id";
 
+    fn sort_order_sql(sort: SortBy) -> &'static str {
+        match sort {
+            SortBy::Created => "t.created DESC",
+            SortBy::Modified => "COALESCE(t.modified_at, t.created) DESC",
+            SortBy::Area => "CASE t.area WHEN 'LongTerm' THEN 0 WHEN 'ThisWeek' THEN 1 WHEN 'Today' THEN 2 WHEN 'Completed' THEN 3 END, t.created DESC",
+            SortBy::Title => "t.title ASC",
+        }
+    }
+
     pub fn list_tasks(&self, area: Option<CliArea>) -> Result<Vec<Task>> {
+        self.list_tasks_sorted(area, SortBy::Created)
+    }
+
+    pub fn list_tasks_sorted(&self, area: Option<CliArea>, sort: SortBy) -> Result<Vec<Task>> {
         let mut tasks = Vec::new();
+        let order = Self::sort_order_sql(sort);
 
         if let Some(area) = area {
             let area_str = Area::from(area).as_str();
@@ -197,8 +220,8 @@ impl Database {
                 "WHERE t.area = ?1 AND t.status != 'Done'"
             };
             let query = format!(
-                "{} {} GROUP BY t.id ORDER BY t.created DESC",
-                Self::TASK_SELECT_WITH_ELAPSED, filter
+                "{} {} GROUP BY t.id ORDER BY {}",
+                Self::TASK_SELECT_WITH_ELAPSED, filter, order
             );
             let mut stmt = self.conn.prepare(&query)?;
             let mut rows = stmt.query(params![area_str])?;
@@ -215,8 +238,8 @@ impl Database {
                         WHEN 'Running' THEN 0
                         ELSE 1
                     END,
-                    t.created DESC",
-                Self::TASK_SELECT_WITH_ELAPSED
+                    {}",
+                Self::TASK_SELECT_WITH_ELAPSED, order
             );
             let mut stmt = self.conn.prepare(&query)?;
             let mut rows = stmt.query([])?;
@@ -254,8 +277,8 @@ impl Database {
 
         // Update task status
         self.conn.execute(
-            "UPDATE tasks SET status = 'Running' WHERE id = ?1",
-            params![&task.id],
+            "UPDATE tasks SET status = 'Running', modified_at = ?2 WHERE id = ?1",
+            params![&task.id, Utc::now().to_rfc3339()],
         )?;
 
         // Create session
@@ -304,8 +327,8 @@ impl Database {
 
             // Update task status
             tx.execute(
-                "UPDATE tasks SET status = 'Paused' WHERE id = ?1",
-                params![&task_id],
+                "UPDATE tasks SET status = 'Paused', modified_at = ?2 WHERE id = ?1",
+                params![&task_id, Utc::now().to_rfc3339()],
             )?;
         }
 
@@ -351,10 +374,11 @@ impl Database {
             )?;
 
             // Mark as done
+            let now = Utc::now().to_rfc3339();
             tx.execute(
-                "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1
+                "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1
                  WHERE id = ?2",
-                params![Utc::now().to_rfc3339(), &task_id],
+                params![&now, &task_id],
             )?;
 
             tx.commit()?;
@@ -419,8 +443,8 @@ impl Database {
         };
 
         self.conn.execute(
-            "UPDATE tasks SET task_notes = ?1 WHERE id = ?2",
-            params![&updated, &task.id],
+            "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
+            params![&updated, &task.id, Utc::now().to_rfc3339()],
         )?;
 
         Ok(task.title)
@@ -429,8 +453,8 @@ impl Database {
     pub fn clear_notes(&self, query: &str) -> Result<String> {
         let task = self.resolve_task(query)?;
         self.conn.execute(
-            "UPDATE tasks SET task_notes = NULL WHERE id = ?1",
-            params![&task.id],
+            "UPDATE tasks SET task_notes = NULL, modified_at = ?2 WHERE id = ?1",
+            params![&task.id, Utc::now().to_rfc3339()],
         )?;
         Ok(task.title)
     }
@@ -506,6 +530,12 @@ impl Database {
             )?;
         }
 
+        // Always update modified_at when any field changes
+        self.conn.execute(
+            "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
+            params![Utc::now().to_rfc3339(), &task.id],
+        )?;
+
         Ok(task.title)
     }
 
@@ -526,6 +556,9 @@ impl Database {
             completed: row.get::<_, Option<String>>(8)?
                 .and_then(|d| DateTime::parse_from_rfc3339(&d).ok())
                 .map(|d| d.into()),
+            modified_at: row.get::<_, Option<String>>(15)?
+                .and_then(|d| DateTime::parse_from_rfc3339(&d).ok())
+                .map(|d| d.into()),
             estimate_minutes: row.get(9)?,
             deadline: row.get::<_, Option<String>>(10)?
                 .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok()),
@@ -534,7 +567,7 @@ impl Database {
             priority: row.get(14)?,
             tags: row.get(12)?,
             notes: row.get(13)?,
-            elapsed_seconds: row.get(15).ok(),
+            elapsed_seconds: row.get(16).ok(),
         })
     }
 

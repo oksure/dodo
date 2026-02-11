@@ -12,6 +12,7 @@ pub struct Task {
     pub status: TaskStatus,
     pub created: DateTime<Utc>,
     pub completed: Option<DateTime<Utc>>,
+    pub modified_at: Option<DateTime<Utc>>,
     pub estimate_minutes: Option<i64>,
     pub deadline: Option<NaiveDate>,
     pub scheduled: Option<NaiveDate>,
@@ -49,6 +50,7 @@ impl Task {
             status: TaskStatus::Pending,
             created: Utc::now(),
             completed: None,
+            modified_at: None,
             estimate_minutes: None,
             deadline: None,
             scheduled: None,
@@ -173,13 +175,18 @@ impl fmt::Display for Task {
             Some(n) => format!("{}", n),
             None => "?".to_string(),
         };
+        let notes_indicator = match &self.notes {
+            Some(n) if !n.is_empty() => " *",
+            _ => "",
+        };
         write!(
             f,
-            "[{}] [{}] {} {}{}{}{}",
+            "[{}] [{}] {} {}{}{}{}{}",
             num_prefix,
             status_icon,
             self.area_str(),
             self.title,
+            notes_indicator,
             self.display_metadata(),
             self.display_time(),
             if self.status == TaskStatus::Running {

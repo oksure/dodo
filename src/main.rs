@@ -61,7 +61,7 @@ fn main() -> Result<()> {
             println!("Added: {} [#{}]", title, num_id);
         }
         Commands::List(args) => {
-            let tasks = db.list_tasks(args.area)?;
+            let tasks = db.list_tasks_sorted(args.area, args.sort)?;
             if tasks.is_empty() {
                 println!("No tasks found.");
             } else {

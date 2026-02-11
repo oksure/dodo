@@ -92,6 +92,22 @@ pub struct ListArgs {
     /// Filter by area
     #[arg(value_enum)]
     pub area: Option<Area>,
+
+    /// Sort order
+    #[arg(long, value_enum, default_value = "created")]
+    pub sort: SortBy,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum, PartialEq)]
+pub enum SortBy {
+    /// Sort by creation date (newest first)
+    Created,
+    /// Sort by last modified date (newest first)
+    Modified,
+    /// Sort by area (Long → Week → Today → Done)
+    Area,
+    /// Sort alphabetically by title
+    Title,
 }
 
 #[derive(Parser)]

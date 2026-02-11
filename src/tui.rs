@@ -9,23 +9,20 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
 use std::io;
 
+use dodo::cli::{Area as CliArea, SortBy};
 use dodo::db::Database;
-use dodo::task::Task;
+use dodo::task::{Task, TaskStatus};
 
-pub enum FocusArea {
-    LongTerm,
-    ThisWeek,
-    Today,
-    Completed,
-}
+const PANE_LABELS: [&str; 4] = ["LONG TERM", "THIS WEEK", "TODAY", "DONE"];
+const PANE_AREAS: [CliArea; 4] = [CliArea::LongTerm, CliArea::ThisWeek, CliArea::Today, CliArea::Completed];
+const SORT_MODES: [SortBy; 3] = [SortBy::Created, SortBy::Modified, SortBy::Title];
 
 pub fn run_tui(db: &Database) -> Result<()> {
-    // Setup terminal
     enable_raw_mode()?;
     let mut stderr = io::stderr();
     execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
@@ -33,14 +30,11 @@ pub fn run_tui(db: &Database) -> Result<()> {
     let backend = CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app state
     let mut app = App::new(db);
-    app.refresh_tasks()?;
+    app.refresh_all()?;
 
-    // Run the loop
-    let res = run_app(&mut terminal, &mut app, db);
+    let res = run_app(&mut terminal, &mut app);
 
-    // Restore terminal
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -52,88 +46,121 @@ pub fn run_tui(db: &Database) -> Result<()> {
     res
 }
 
-struct App<'a> {
-    focus: FocusArea,
+struct PaneState {
     tasks: Vec<Task>,
-    list_state: ratatui::widgets::ListState,
+    list_state: ListState,
+}
+
+impl PaneState {
+    fn new() -> Self {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        Self {
+            tasks: Vec::new(),
+            list_state,
+        }
+    }
+
+    fn next(&mut self) {
+        if self.tasks.is_empty() {
+            return;
+        }
+        let i = match self.list_state.selected() {
+            Some(i) if i >= self.tasks.len().saturating_sub(1) => 0,
+            Some(i) => i + 1,
+            None => 0,
+        };
+        self.list_state.select(Some(i));
+    }
+
+    fn previous(&mut self) {
+        if self.tasks.is_empty() {
+            return;
+        }
+        let i = match self.list_state.selected() {
+            Some(0) | None => self.tasks.len().saturating_sub(1),
+            Some(i) => i - 1,
+        };
+        self.list_state.select(Some(i));
+    }
+
+    fn selected_task(&self) -> Option<&Task> {
+        self.list_state.selected().and_then(|i| self.tasks.get(i))
+    }
+}
+
+struct App<'a> {
+    panes: [PaneState; 4],
+    active_pane: usize,
+    sort_index: usize,
     running_task: Option<String>,
     db: &'a Database,
 }
 
 impl<'a> App<'a> {
     fn new(db: &'a Database) -> Self {
-        let mut list_state = ratatui::widgets::ListState::default();
-        list_state.select(Some(0));
-
         Self {
-            focus: FocusArea::Today,
-            tasks: Vec::new(),
-            list_state,
+            panes: [PaneState::new(), PaneState::new(), PaneState::new(), PaneState::new()],
+            active_pane: 2, // Start on TODAY
+            sort_index: 0,
             running_task: None,
             db,
         }
     }
 
-    fn refresh_tasks(&mut self) -> Result<()> {
-        self.tasks = match self.focus {
-            FocusArea::Today => self.db.list_tasks(Some(dodo::cli::Area::Today))?,
-            FocusArea::ThisWeek => self.db.list_tasks(Some(dodo::cli::Area::ThisWeek))?,
-            FocusArea::LongTerm => self.db.list_tasks(Some(dodo::cli::Area::LongTerm))?,
-            FocusArea::Completed => self.db.list_tasks(Some(dodo::cli::Area::Completed))?,
-        };
+    fn current_sort(&self) -> SortBy {
+        SORT_MODES[self.sort_index]
+    }
 
-        // Update running task
-        if let Ok(Some((title, _))) = self.db.get_running_task() {
-            self.running_task = Some(title);
-        } else {
-            self.running_task = None;
+    fn cycle_sort(&mut self) {
+        self.sort_index = (self.sort_index + 1) % SORT_MODES.len();
+        let _ = self.refresh_all();
+    }
+
+    fn refresh_all(&mut self) -> Result<()> {
+        let sort = self.current_sort();
+        for (i, area) in PANE_AREAS.iter().enumerate() {
+            self.panes[i].tasks = self.db.list_tasks_sorted(Some(*area), sort)?;
+            // Clamp selection
+            let len = self.panes[i].tasks.len();
+            if len == 0 {
+                self.panes[i].list_state.select(None);
+            } else if let Some(sel) = self.panes[i].list_state.selected() {
+                if sel >= len {
+                    self.panes[i].list_state.select(Some(len - 1));
+                }
+            } else {
+                self.panes[i].list_state.select(Some(0));
+            }
         }
+
+        self.running_task = if let Ok(Some((title, _))) = self.db.get_running_task() {
+            Some(title)
+        } else {
+            None
+        };
 
         Ok(())
     }
 
-    fn next_task(&mut self) {
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i >= self.tasks.len().saturating_sub(1) {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 0,
-        };
-        self.list_state.select(Some(i));
+    fn move_pane_left(&mut self) {
+        if self.active_pane > 0 {
+            self.active_pane -= 1;
+        }
     }
 
-    fn previous_task(&mut self) {
-        let i = match self.list_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.tasks.len().saturating_sub(1)
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        self.list_state.select(Some(i));
-    }
-
-    fn switch_focus(&mut self, focus: FocusArea) {
-        self.focus = focus;
-        self.list_state.select(Some(0));
-        let _ = self.refresh_tasks();
+    fn move_pane_right(&mut self) {
+        if self.active_pane < 3 {
+            self.active_pane += 1;
+        }
     }
 
     fn start_selected(&mut self) -> Result<()> {
-        if let Some(i) = self.list_state.selected() {
-            if let Some(task) = self.tasks.get(i) {
-                // Stop any running task first
-                let _ = self.db.pause_timer();
-                // Start this one
-                let _ = self.db.start_timer(&task.title);
-                self.refresh_tasks()?;
+        if let Some(task) = self.panes[self.active_pane].selected_task() {
+            let num_id = task.num_id.map(|n| n.to_string()).unwrap_or_default();
+            if !num_id.is_empty() {
+                let _ = self.db.start_timer(&num_id);
+                self.refresh_all()?;
             }
         }
         Ok(())
@@ -141,18 +168,18 @@ impl<'a> App<'a> {
 
     fn pause(&mut self) -> Result<()> {
         self.db.pause_timer()?;
-        self.refresh_tasks()?;
+        self.refresh_all()?;
         Ok(())
     }
 
     fn done(&mut self) -> Result<()> {
         self.db.complete_task()?;
-        self.refresh_tasks()?;
+        self.refresh_all()?;
         Ok(())
     }
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, _db: &Database) -> Result<()> {
+fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     let mut last_tick = std::time::Instant::now();
     let tick_rate = std::time::Duration::from_millis(250);
 
@@ -167,30 +194,28 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App, _db: &Database
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                    KeyCode::Char('j') | KeyCode::Down => app.next_task(),
-                    KeyCode::Char('k') | KeyCode::Up => app.previous_task(),
+                    KeyCode::Char('j') | KeyCode::Down => app.panes[app.active_pane].next(),
+                    KeyCode::Char('k') | KeyCode::Up => app.panes[app.active_pane].previous(),
+                    KeyCode::Char('h') | KeyCode::Left => app.move_pane_left(),
+                    KeyCode::Char('l') | KeyCode::Right => app.move_pane_right(),
                     KeyCode::Char('s') => { let _ = app.start_selected(); }
                     KeyCode::Char('p') => { let _ = app.pause(); }
                     KeyCode::Char('d') => { let _ = app.done(); }
-                    KeyCode::Char('l') => app.switch_focus(FocusArea::LongTerm),
-                    KeyCode::Char('w') => app.switch_focus(FocusArea::ThisWeek),
-                    KeyCode::Char('t') => app.switch_focus(FocusArea::Today),
-                    KeyCode::Char('c') => app.switch_focus(FocusArea::Completed),
-                    KeyCode::Char('r') => { let _ = app.refresh_tasks(); }
+                    KeyCode::Char('o') => app.cycle_sort(),
+                    KeyCode::Char('r') => { let _ = app.refresh_all(); }
                     _ => {}
                 }
             }
         }
 
         if last_tick.elapsed() >= tick_rate {
-            // Periodic refresh (for timer updates)
             last_tick = std::time::Instant::now();
         }
     }
 }
 
 fn draw_ui(f: &mut Frame, app: &App) {
-    let chunks = Layout::default()
+    let outer = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([Constraint::Length(3), Constraint::Min(0)])
@@ -198,29 +223,32 @@ fn draw_ui(f: &mut Frame, app: &App) {
 
     // Header
     let header = build_header(app);
-    f.render_widget(header, chunks[0]);
+    f.render_widget(header, outer[0]);
 
-    // Main area split
-    let main_chunks = Layout::default()
+    // Four panes
+    let pane_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(14), Constraint::Min(20)])
-        .split(chunks[1]);
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+            Constraint::Percentage(25),
+        ])
+        .split(outer[1]);
 
-    // Sidebar
-    let sidebar = build_sidebar(app);
-    f.render_widget(sidebar, main_chunks[0]);
-
-    // Task list
-    let task_list = build_task_list(app);
-    f.render_stateful_widget(task_list, main_chunks[1], &mut app.list_state.clone());
+    for i in 0..4 {
+        let is_active = i == app.active_pane;
+        let pane_widget = build_pane(&app.panes[i], PANE_LABELS[i], is_active);
+        f.render_stateful_widget(pane_widget, pane_chunks[i], &mut app.panes[i].list_state.clone());
+    }
 }
 
 fn build_header(app: &App<'_>) -> Paragraph<'static> {
-    let focus_name = match app.focus {
-        FocusArea::LongTerm => "LONG TERM",
-        FocusArea::ThisWeek => "THIS WEEK",
-        FocusArea::Today => "TODAY",
-        FocusArea::Completed => "COMPLETED",
+    let sort_label = match app.current_sort() {
+        SortBy::Created => "created",
+        SortBy::Modified => "modified",
+        SortBy::Title => "title",
+        SortBy::Area => "area",
     };
 
     let running_info = if let Some(ref task) = app.running_task {
@@ -231,10 +259,18 @@ fn build_header(app: &App<'_>) -> Paragraph<'static> {
 
     let text = Line::from(vec![
         Span::styled(
-            format!(" DODO | {} ", focus_name),
+            " DODO ",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         ),
         Span::styled(running_info, Style::default().fg(Color::Green)),
+        Span::styled(
+            format!("  sort:{} ", sort_label),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(
+            " h/l:pane j/k:nav s:start p:pause d:done o:sort r:refresh q:quit ",
+            Style::default().fg(Color::DarkGray),
+        ),
     ]);
 
     Paragraph::new(text).block(
@@ -244,68 +280,140 @@ fn build_header(app: &App<'_>) -> Paragraph<'static> {
     )
 }
 
-fn build_sidebar(app: &App<'_>) -> Paragraph<'static> {
-    let long_active = matches!(app.focus, FocusArea::LongTerm);
-    let week_active = matches!(app.focus, FocusArea::ThisWeek);
-    let today_active = matches!(app.focus, FocusArea::Today);
-    let done_active = matches!(app.focus, FocusArea::Completed);
-
-    let make_style = |active: bool| {
-        if active {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(Color::Gray)
-        }
+fn build_pane(pane: &PaneState, label: &str, is_active: bool) -> List<'static> {
+    let border_style = if is_active {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
     };
 
-    let text = vec![
-        Line::from(vec![Span::styled("[l] Long    ", make_style(long_active))]),
-        Line::from(vec![Span::styled("[w] Week    ", make_style(week_active))]),
-        Line::from(vec![Span::styled("[t] Today   ", make_style(today_active))]),
-        Line::from(vec![Span::styled("[c] Complete", make_style(done_active))]),
-        Line::from(""),
-        Line::from(vec![Span::styled("j/k: nav", Style::default().fg(Color::DarkGray))]),
-        Line::from(vec![Span::styled("s: start", Style::default().fg(Color::DarkGray))]),
-        Line::from(vec![Span::styled("p: pause", Style::default().fg(Color::DarkGray))]),
-        Line::from(vec![Span::styled("d: done", Style::default().fg(Color::DarkGray))]),
-        Line::from(vec![Span::styled("q: quit", Style::default().fg(Color::DarkGray))]),
-    ];
+    let title_style = if is_active {
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
 
-    Paragraph::new(text).block(
-        Block::default()
-            .borders(Borders::RIGHT)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    )
-}
-
-fn build_task_list(app: &App<'_>) -> List<'static> {
-    let items: Vec<ListItem> = app
+    let items: Vec<ListItem> = pane
         .tasks
         .iter()
-        .enumerate()
-        .map(|(i, task)| {
-            let style = if task.status == dodo::task::TaskStatus::Running {
-                Style::default().fg(Color::Green)
-            } else if task.status == dodo::task::TaskStatus::Done {
-                Style::default().fg(Color::DarkGray)
-            } else {
-                Style::default()
+        .map(|task| {
+            let status_icon = match task.status {
+                TaskStatus::Pending => " ",
+                TaskStatus::Running => "▶",
+                TaskStatus::Paused => "⏸",
+                TaskStatus::Done => "✓",
             };
 
-            let prefix = if Some(i) == app.list_state.selected() {
-                "> "
-            } else {
-                "  "
+            let num = task.num_id.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
+            let notes_mark = match &task.notes {
+                Some(n) if !n.is_empty() => " *",
+                _ => "",
             };
 
-            ListItem::new(format!("{}{}", prefix, task)).style(style)
+            // Line 1: num_id status_icon title [notes_mark]
+            let line1 = Line::from(vec![
+                Span::styled(
+                    format!("{:>3} {} ", num, status_icon),
+                    task_num_style(task),
+                ),
+                Span::styled(
+                    format!("{}{}", task.title, notes_mark),
+                    task_title_style(task),
+                ),
+            ]);
+
+            // Line 2: metadata (only if any present)
+            let meta = build_compact_meta(task);
+            if meta.is_empty() {
+                ListItem::new(vec![line1])
+            } else {
+                let line2 = Line::from(vec![
+                    Span::raw("      "),
+                    Span::styled(meta, Style::default().fg(Color::DarkGray)),
+                ]);
+                ListItem::new(vec![line1, line2])
+            }
         })
         .collect();
 
-    List::new(items).block(
-        Block::default()
-            .title(format!(" Tasks ({}) ", app.tasks.len()))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    )
+    let block_title = format!(" {} ({}) ", label, pane.tasks.len());
+
+    List::new(items)
+        .block(
+            Block::default()
+                .title(Span::styled(block_title, title_style))
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+}
+
+fn task_num_style(task: &Task) -> Style {
+    match task.status {
+        TaskStatus::Running => Style::default().fg(Color::Green),
+        TaskStatus::Done => Style::default().fg(Color::DarkGray),
+        _ => Style::default().fg(Color::Gray),
+    }
+}
+
+fn task_title_style(task: &Task) -> Style {
+    match task.status {
+        TaskStatus::Running => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        TaskStatus::Done => Style::default().fg(Color::DarkGray),
+        _ => Style::default(),
+    }
+}
+
+fn build_compact_meta(task: &Task) -> String {
+    let mut parts = vec![];
+
+    if let Some(p) = task.priority {
+        parts.push("!".repeat(p.clamp(1, 4) as usize));
+    }
+    if let Some(ref p) = task.project {
+        parts.push(format!("+{}", p));
+    }
+    if let Some(est) = task.estimate_minutes {
+        parts.push(format!("~{}", format_est(est)));
+    }
+
+    let elapsed = task.elapsed_seconds.unwrap_or(0);
+    if elapsed > 0 {
+        parts.push(format!("({})", format_dur(elapsed)));
+    }
+
+    if let Some(ref dl) = task.deadline {
+        parts.push(format!("^{}", dl.format("%b%d")));
+    }
+    if let Some(ref sc) = task.scheduled {
+        parts.push(format!("={}", sc.format("%b%d")));
+    }
+
+    parts.join(" ")
+}
+
+fn format_dur(seconds: i64) -> String {
+    let hours = seconds / 3600;
+    let mins = (seconds % 3600) / 60;
+    if hours > 0 {
+        format!("{}h{}m", hours, mins)
+    } else {
+        format!("{}m", mins)
+    }
+}
+
+fn format_est(minutes: i64) -> String {
+    let hours = minutes / 60;
+    let mins = minutes % 60;
+    if hours > 0 && mins > 0 {
+        format!("{}h{}m", hours, mins)
+    } else if hours > 0 {
+        format!("{}h", hours)
+    } else {
+        format!("{}m", mins)
+    }
 }
