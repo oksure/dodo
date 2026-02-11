@@ -19,7 +19,7 @@ dodo ls
 
 dodo s 1
 dodo d
-# Completed: Buy groceries (0m)
+# Completed: Buy groceries (0s)
 ```
 
 No system. No framework. Just a list and a timer.
@@ -118,15 +118,15 @@ dodo a Update dependencies ~1h
 dodo s blog
 # ... work for 25 minutes ...
 dodo st
-# Running: Draft blog post (25m)
-dodo p
+# Running: Draft blog post (25m 0s)
+dodo s
 # Take a 5-minute break
 
 # Pomodoro 2: continue or switch
 dodo s blog
 # ... another 25 minutes ...
 dodo d
-# Completed: Draft blog post (50m)
+# Completed: Draft blog post (50m 0s)
 
 # Pomodoro 3: next task
 dodo s 2
@@ -172,7 +172,10 @@ dodo e macros --area week
 ### Review by area
 
 ```bash
-# Weekly review: check all horizons
+# Weekly review: see everything at once
+dodo ls
+
+# Or check individual horizons
 dodo ls long    # Someday/maybe — anything to promote?
 dodo ls week    # This week — on track?
 dodo ls today   # Next actions — what's left?
@@ -236,13 +239,13 @@ dodo a Write copy for homepage +clientA @writing ~2h
 # Work and track
 dodo s landing
 # ... work ...
-dodo p
+dodo s
 # Timer paused.
 
 dodo s API
 # ... work ...
 dodo d
-# Completed: API integration (2h 15m)
+# Completed: API integration (2h 15m 0s)
 ```
 
 The elapsed times reported by `done` and `status` give you per-task time data. Estimates help you plan: `(45m/4h)` shows progress at a glance.
@@ -320,7 +323,7 @@ dodo a Fix citation formatting +thesis @writing ~1h
 dodo s literature
 # ... 2 hours of focused writing ...
 dodo d
-# Completed: Write literature review draft (2h 3m)
+# Completed: Write literature review draft (2h 3m 0s)
 
 # Add research notes
 dodo n 1
@@ -335,11 +338,12 @@ dodo n 1
 Control the order of `dodo ls` output with `--sort`:
 
 ```bash
-dodo ls --sort created     # newest first (default)
+dodo ls --sort created     # oldest first for active, newest first for done
 dodo ls --sort modified    # recently changed first
 dodo ls --sort title       # alphabetical
 dodo ls --sort area        # Long → Week → Today → Done
 dodo ls week --sort title  # combine with area filter
+dodo ls --project backend  # filter by project
 ```
 
 ---
@@ -377,3 +381,61 @@ Each task shows a compact two-line display:
 Line 1: numeric ID, status icon, title, `*` if notes exist. Line 2: metadata (only shown if present).
 
 Use it for morning planning: scan all four areas at once, start tasks directly, and track time without leaving the TUI.
+
+The Report tab shows productivity stats for a time range (Day, Week, Month, Year, All):
+- Tasks completed, total time tracked, average time per task
+- Most productive hour and day of the week
+- Time breakdown by project
+- Recently completed tasks
+
+---
+
+## 14. Date-Based Area Grouping
+
+Tasks are automatically placed into areas based on their scheduled and deadline dates — no manual `--area` needed:
+
+| Earliest date | Area |
+|---|---|
+| Today or earlier | TODAY |
+| Within 7 days | THIS WEEK |
+| More than 7 days | LONG TERM |
+| No dates | TODAY (default) |
+
+```bash
+# Goes to TODAY (deadline is today)
+dodo a fix bug ^today
+
+# Goes to THIS WEEK (scheduled 3 days from now)
+dodo a review PR =3d
+
+# Goes to LONG TERM (deadline 3 weeks out)
+dodo a plan redesign ^3w
+
+# Goes to TODAY (no dates = default)
+dodo a quick task
+```
+
+The `--area` flag still works for overriding, and `dodo e` can adjust dates to move tasks between areas.
+
+---
+
+## 15. Grouped List Output
+
+Running `dodo ls` with no area shows all groups at once:
+
+```bash
+dodo ls
+# --- TODAY (3) ---
+# [3] [ ] TODAY fix bug ~1h ^Feb12
+# [2] [ ] TODAY quick task ~1h
+# [1] [ ] TODAY review code ~1h
+#
+# --- THIS WEEK (1) ---
+# [4] [ ] WEEK review PR ~1h =Feb15
+#
+# --- DONE (2) ---
+# [6] [x] DONE deploy v2 (1h 30m 0s)
+# [5] [x] DONE write tests (45m 0s)
+```
+
+DONE is limited to 5 tasks. Use `dodo ls done` to see all completed tasks.

@@ -8,12 +8,13 @@ A keyboard-first todo + time tracker CLI written in Rust.
 - **Numeric task IDs** — short IDs (1, 2, 3) for quick selection
 - **Fuzzy matching** — ranked search (exact > prefix > word > substring)
 - **Keyboard-first** — tmux-style single-letter commands, quote-free input
-- **Focus areas** — LongTerm, ThisWeek, Today, Completed
-- **Time tracking** — start, pause, complete with elapsed/estimate display
+- **Date-based areas** — scheduled/deadline dates drive grouping into Today, ThisWeek, LongTerm
+- **Time tracking** — start/stop toggle, elapsed/estimate display with seconds
 - **Estimates & deadlines** — `~2h` estimates, `^friday` deadlines, `=wed` scheduling
 - **Priority** — `!` to `!!!!` urgency levels (4 = most urgent)
 - **Notes** — timestamped notes on any task
-- **TUI mode** — ratatui four-pane layout showing all areas simultaneously
+- **TUI mode** — four-pane task layout + report tab with productivity stats
+- **TUI colors** — animated running tasks, color-coded priority/deadlines/progress
 - **Sorting** — `--sort created|modified|title|area` on list command
 - **Cloud sync** — R2/Dropbox support (optional)
 
@@ -24,22 +25,25 @@ A keyboard-first todo + time tracker CLI written in Rust.
 dodo a fix login bug +backend @john #urgent ~2h ^friday !!!
 # => Added: fix login bug [#1]
 
-# List today's tasks (shows elapsed time, estimates, metadata)
+# List all groups (TODAY, THIS WEEK, LONG TERM, DONE)
 dodo ls
-# => [1] [ ] TODAY fix login bug !!! +backend @john #urgent ~2h ^Feb14
+# --- TODAY (1) ---
+# [1] [ ] TODAY fix login bug !!! +backend @john #urgent ~2h ^Feb14
 
-# Sort by title or modified date
-dodo ls --sort title
-dodo ls week --sort modified
+# Filter by area or project
+dodo ls week
+dodo ls --project backend
 
 # Start timer by numeric ID or fuzzy match
 dodo s 1
 dodo s login
+# => Started: fix login bug [#1]
 
-# Check status
+# Pause running task (no args = pause)
+dodo s
+
+# Check status / complete task
 dodo st
-
-# Complete task
 dodo d
 
 # Edit task metadata
@@ -52,7 +56,7 @@ dodo n 1              # interactive: type note, Ctrl+D to finish
 # Remove by numeric ID or fuzzy match
 dodo rm 1
 
-# Open TUI
+# Open TUI (four-pane tasks + report tab)
 dodo tui
 ```
 
