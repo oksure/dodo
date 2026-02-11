@@ -367,7 +367,10 @@ impl<'a> App<'a> {
     }
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
+fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
+where
+    B::Error: Send + Sync + 'static,
+{
     let mut last_data_refresh = std::time::Instant::now();
     let poll_rate = std::time::Duration::from_millis(16);
     let data_refresh_rate = std::time::Duration::from_secs(1);
