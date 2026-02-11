@@ -14,8 +14,8 @@ use ratatui::{
 };
 use std::io;
 
-use crate::db::Database;
-use crate::task::Task;
+use dodo::db::Database;
+use dodo::task::Task;
 
 pub enum FocusArea {
     LongTerm,
@@ -75,9 +75,9 @@ impl<'a> App<'a> {
 
     fn refresh_tasks(&mut self) -> Result<()> {
         self.tasks = match self.focus {
-            FocusArea::Today => self.db.list_tasks(Some(crate::cli::Area::Today))?,
-            FocusArea::ThisWeek => self.db.list_tasks(Some(crate::cli::Area::ThisWeek))?,
-            FocusArea::LongTerm => self.db.list_tasks(Some(crate::cli::Area::LongTerm))?,
+            FocusArea::Today => self.db.list_tasks(Some(dodo::cli::Area::Today))?,
+            FocusArea::ThisWeek => self.db.list_tasks(Some(dodo::cli::Area::ThisWeek))?,
+            FocusArea::LongTerm => self.db.list_tasks(Some(dodo::cli::Area::LongTerm))?,
         };
         
         // Update running task
@@ -286,7 +286,7 @@ fn build_task_list(app: &App<'_>) -> List<'static> {
         .iter()
         .enumerate()
         .map(|(i, task)| {
-            let style = if task.status == crate::task::TaskStatus::Running {
+            let style = if task.status == dodo::task::TaskStatus::Running {
                 Style::default().fg(Color::Green)
             } else {
                 Style::default()

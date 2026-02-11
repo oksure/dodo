@@ -1,15 +1,10 @@
 use anyhow::Result;
 use clap::Parser;
 
-mod cli;
-mod db;
-mod fuzzy;
-mod session;
-mod task;
 mod tui;
 
-use cli::{Cli, Commands};
-use db::Database;
+use dodo::cli::{Cli, Commands};
+use dodo::db::Database;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -19,11 +14,8 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Add(args) => {
-            let id = db.add_task(&args.title, args.area, args.project, args.context)?;
-            println!("Added: {}", args.title);
-            if let Some(id) = id {
-                println!("  ID: {}", id);
-            }
+            let num_id = db.add_task(&args.title, args.area, args.project, args.context)?;
+            println!("Added: {} [#{}]", args.title, num_id);
         }
         Commands::List(args) => {
             let tasks = db.list_tasks(args.area)?;

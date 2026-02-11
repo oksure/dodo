@@ -4,6 +4,7 @@ use std::fmt;
 #[derive(Clone, Debug)]
 pub struct Task {
     pub id: String,
+    pub num_id: Option<i64>,
     pub title: String,
     pub area: Area,
     pub project: Option<String>,
@@ -33,6 +34,7 @@ impl Task {
     pub fn new(title: &str, area: Area, project: Option<String>, context: Option<String>) -> Self {
         Self {
             id: ulid::Ulid::new().to_string(),
+            num_id: None,
             title: title.to_string(),
             area,
             project,
@@ -40,6 +42,15 @@ impl Task {
             status: TaskStatus::Pending,
             created: Utc::now(),
             completed: None,
+        }
+    }
+
+    pub fn area_str(&self) -> &'static str {
+        match self.area {
+            Area::LongTerm => "LONG",
+            Area::ThisWeek => "WEEK",
+            Area::Today => "TODAY",
+            Area::Completed => "DONE",
         }
     }
 
@@ -58,14 +69,6 @@ impl Task {
         }
     }
 
-    pub fn area_str(&self) -> &'static str {
-        match self.area {
-            Area::LongTerm => "LONG",
-            Area::ThisWeek => "WEEK",
-            Area::Today => "TODAY",
-            Area::Completed => "DONE",
-        }
-    }
 }
 
 impl fmt::Display for Task {
@@ -76,10 +79,16 @@ impl fmt::Display for Task {
             TaskStatus::Paused => "⏸",
             TaskStatus::Done => "✓",
         };
+        let num_prefix = match self.num_id {
+            Some(n) => format!("{}", n),
+            None => "?".to_string(),
+        };
         write!(
             f,
-            "[{}] {}{}{}",
+            "[{}] [{}] {} {}{}{}",
+            num_prefix,
             status_icon,
+            self.area_str(),
             self.title,
             self.display_tags(),
             if self.status == TaskStatus::Running {

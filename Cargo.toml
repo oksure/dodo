@@ -7,6 +7,10 @@ description = "Keyboard-first todo + time tracker CLI"
 license = "MIT"
 repository = "https://github.com/oksure/dodo"
 
+[lib]
+name = "dodo"
+path = "src/lib.rs"
+
 [[bin]]
 name = "dodo"
 path = "src/main.rs"
