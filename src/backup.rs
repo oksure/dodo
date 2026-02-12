@@ -9,6 +9,13 @@ use std::path::PathBuf;
 use crate::config::BackupConfig;
 use crate::db::Database;
 
+fn new_runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Failed to create tokio runtime")
+}
+
 #[derive(Debug, Clone)]
 pub struct BackupEntry {
     pub key: String,
@@ -37,9 +44,7 @@ pub fn create_backup(config: &BackupConfig) -> Result<String> {
     let key = format!("{}dodo-{}.db.gz", config.prefix, timestamp);
 
     // Upload
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let rt = new_runtime()?;
 
     rt.block_on(async {
         let s3_client = build_s3_client(config).await?;
@@ -67,9 +72,7 @@ pub fn create_backup(config: &BackupConfig) -> Result<String> {
 
 /// List backups from S3
 pub fn list_backups(config: &BackupConfig) -> Result<Vec<BackupEntry>> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let rt = new_runtime()?;
 
     rt.block_on(async {
         let s3_client = build_s3_client(config).await?;
@@ -120,9 +123,7 @@ pub fn restore_backup(config: &BackupConfig, key: &str) -> Result<()> {
     let db_path = Database::db_path()?;
 
     // Download from S3
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let rt = new_runtime()?;
 
     let compressed = rt.block_on(async {
         let s3_client = build_s3_client(config).await?;
@@ -163,9 +164,7 @@ pub fn restore_backup(config: &BackupConfig, key: &str) -> Result<()> {
 
 /// Delete a specific backup from S3
 pub fn delete_backup(config: &BackupConfig, key: &str) -> Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()?;
+    let rt = new_runtime()?;
 
     rt.block_on(async {
         let s3_client = build_s3_client(config).await?;
