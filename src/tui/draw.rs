@@ -1,11 +1,4 @@
-use anyhow::Result;
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -13,1677 +6,16 @@ use ratatui::{
         Block, BorderType, Borders, Clear, Gauge, LineGauge, List, ListItem, ListState, Padding,
         Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Tabs, Wrap,
     },
-    Frame, Terminal,
+    Frame,
 };
-use std::io;
 
-use dodo::cli::SortBy;
-use dodo::db::Database;
-use dodo::notation::{parse_date, parse_duration, parse_notation};
-use dodo::task::{Area, Task, TaskStatus};
+use dodo::task::{Task, TaskStatus};
 
-// ── Color Palette (Catppuccin Mocha-inspired) ────────────────────────
+use super::constants::*;
+use super::format::*;
+use super::state::*;
 
-const BG_SURFACE: Color = Color::Rgb(49, 50, 68);
-const FG_TEXT: Color = Color::Rgb(205, 214, 244);
-const FG_SUBTEXT: Color = Color::Rgb(166, 173, 200);
-const FG_OVERLAY: Color = Color::Rgb(108, 112, 134);
-const ACCENT_BLUE: Color = Color::Rgb(137, 180, 250);
-const ACCENT_GREEN: Color = Color::Rgb(166, 227, 161);
-const ACCENT_YELLOW: Color = Color::Rgb(249, 226, 175);
-const ACCENT_RED: Color = Color::Rgb(243, 139, 168);
-const ACCENT_MAUVE: Color = Color::Rgb(203, 166, 247);
-const ACCENT_TEAL: Color = Color::Rgb(148, 226, 213);
-const ACCENT_PEACH: Color = Color::Rgb(250, 179, 135);
-
-const SORT_MODES: [SortBy; 3] = [SortBy::Created, SortBy::Modified, SortBy::Title];
-const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-pub fn run_tui(db: &Database) -> Result<()> {
-    enable_raw_mode()?;
-    let mut stderr = io::stderr();
-    execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
-
-    let backend = CrosstermBackend::new(stderr);
-    let mut terminal = Terminal::new(backend)?;
-
-    let mut app = App::new(db);
-    app.refresh_all()?;
-
-    let res = run_app(&mut terminal, &mut app);
-
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    res
-}
-
-// ── State ────────────────────────────────────────────────────────────
-
-struct PaneState {
-    tasks: Vec<Task>,
-    list_state: ListState,
-    sort_index: usize,
-    sort_ascending: bool,
-}
-
-impl PaneState {
-    fn new() -> Self {
-        let mut list_state = ListState::default();
-        list_state.select(Some(0));
-        Self {
-            tasks: Vec::new(),
-            list_state,
-            sort_index: 0,
-            sort_ascending: true,
-        }
-    }
-
-    fn jump(&mut self, n: usize) {
-        if self.tasks.is_empty() {
-            return;
-        }
-        let len = self.tasks.len();
-        let i = match self.list_state.selected() {
-            Some(i) => (i + n) % len,
-            None => 0,
-        };
-        self.list_state.select(Some(i));
-    }
-
-    fn jump_back(&mut self, n: usize) {
-        if self.tasks.is_empty() {
-            return;
-        }
-        let len = self.tasks.len();
-        let i = match self.list_state.selected() {
-            Some(i) => (i + len - (n % len)) % len,
-            None => 0,
-        };
-        self.list_state.select(Some(i));
-    }
-
-    fn jump_to_first(&mut self) {
-        if !self.tasks.is_empty() {
-            self.list_state.select(Some(0));
-        }
-    }
-
-    fn jump_to_last(&mut self) {
-        if !self.tasks.is_empty() {
-            self.list_state.select(Some(self.tasks.len() - 1));
-        }
-    }
-
-    fn selected_task(&self) -> Option<&Task> {
-        self.list_state.selected().and_then(|i| self.tasks.get(i))
-    }
-
-    fn stats(&self) -> (i64, i64, usize, usize) {
-        let mut elapsed = 0i64;
-        let mut estimate = 0i64;
-        let mut done = 0usize;
-        for task in &self.tasks {
-            elapsed += task.elapsed_seconds.unwrap_or(0);
-            estimate += task.estimate_minutes.unwrap_or(0) * 60;
-            if task.status == TaskStatus::Done {
-                done += 1;
-            }
-        }
-        (elapsed, estimate, done, self.tasks.len())
-    }
-}
-
-#[derive(PartialEq)]
-enum AppMode {
-    Normal,
-    AddTask,
-    MoveTask,
-    ConfirmDelete,
-    EditTask,
-    EditTaskField,
-    NoteView,
-    Search,
-    RecAddTemplate,
-    RecConfirmDelete,
-    EditConfig,
-    EditConfigField,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum TuiTab {
-    Tasks,
-    Recurring,
-    Report,
-    Backup,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum ReportRange {
-    Day,
-    Week,
-    Month,
-    Year,
-    All,
-}
-
-impl ReportRange {
-    fn label(self) -> &'static str {
-        match self {
-            ReportRange::Day => "DAY",
-            ReportRange::Week => "WEEK",
-            ReportRange::Month => "MONTH",
-            ReportRange::Year => "YEAR",
-            ReportRange::All => "ALL",
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            ReportRange::Day => ReportRange::Week,
-            ReportRange::Week => ReportRange::Month,
-            ReportRange::Month => ReportRange::Year,
-            ReportRange::Year => ReportRange::All,
-            ReportRange::All => ReportRange::Day,
-        }
-    }
-
-    fn prev(self) -> Self {
-        match self {
-            ReportRange::Day => ReportRange::All,
-            ReportRange::Week => ReportRange::Day,
-            ReportRange::Month => ReportRange::Week,
-            ReportRange::Year => ReportRange::Month,
-            ReportRange::All => ReportRange::Year,
-        }
-    }
-
-    fn date_range(self) -> (String, String) {
-        let now = chrono::Local::now();
-        let today = now.date_naive();
-        let to = (today + chrono::Duration::days(1))
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_local_timezone(chrono::Utc)
-            .unwrap()
-            .to_rfc3339();
-        let from_date = match self {
-            ReportRange::Day => today,
-            ReportRange::Week => today - chrono::Duration::days(7),
-            ReportRange::Month => today - chrono::Duration::days(30),
-            ReportRange::Year => today - chrono::Duration::days(365),
-            ReportRange::All => chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
-        };
-        let from = from_date
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_local_timezone(chrono::Utc)
-            .unwrap()
-            .to_rfc3339();
-        (from, to)
-    }
-}
-
-struct ReportData {
-    tasks_done: i64,
-    total_seconds: i64,
-    active_days: i64,
-    by_hour: Vec<(i64, i64)>,
-    by_weekday: Vec<(i64, i64)>,
-    by_project: Vec<(String, i64)>,
-    done_tasks: Vec<(String, i64)>,
-}
-
-const EDIT_FIELD_LABELS: [&str; 9] = [
-    "Title", "Project", "Context", "Tags", "Estimate", "Deadline", "Scheduled", "Priority", "Notes",
-];
-
-#[derive(Clone, Copy, PartialEq)]
-enum ConfigFieldType {
-    Boolean,
-    String,
-    Sensitive,
-    Number,
-}
-
-const CONFIG_FIELD_COUNT: usize = 12;
-
-const CONFIG_FIELD_LABELS: [&str; CONFIG_FIELD_COUNT] = [
-    "Sync Enabled", "Turso URL", "Turso Token",
-    "Backup Enabled", "Endpoint", "Bucket", "Prefix",
-    "Access Key", "Secret Key", "Region", "Schedule Days", "Max Backups",
-];
-
-const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
-    "Toggle sync on/off",
-    "libsql://mydb.turso.io",
-    "Your Turso auth token",
-    "Toggle backup on/off",
-    "https://s3.example.com",
-    "my-bucket",
-    "dodo/",
-    "S3 access key",
-    "S3 secret key",
-    "us-east-1",
-    "Days between backups (default: 7)",
-    "Max backups to keep (default: 10)",
-];
-
-const CONFIG_FIELD_TYPES: [ConfigFieldType; CONFIG_FIELD_COUNT] = [
-    ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::Sensitive,
-    ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::String, ConfigFieldType::String,
-    ConfigFieldType::Sensitive, ConfigFieldType::Sensitive, ConfigFieldType::String,
-    ConfigFieldType::Number, ConfigFieldType::Number,
-];
-
-struct App<'a> {
-    panes: [PaneState; 4],
-    active_pane: usize,
-    running_task: Option<String>,
-    db: &'a Database,
-    mode: AppMode,
-    // Tabs & report
-    tab: TuiTab,
-    report_range: ReportRange,
-    report: Option<ReportData>,
-    tick_count: u64,
-    frame_count: u64,
-    // Add task
-    add_input: String,
-    // Move task
-    move_task_id: Option<String>,
-    move_source: usize,
-    move_target: usize,
-    // Delete task
-    delete_task_id: Option<String>,
-    delete_task_title: String,
-    // Edit task
-    edit_task_id: Option<String>,
-    edit_field_index: usize,
-    edit_field_values: [String; 9],
-    edit_field_input: String,
-    // Note view
-    note_lines: Vec<String>,
-    note_selected: usize,
-    note_editing: bool,
-    // Search
-    search_input: String,
-    // Vim count prefix & g key
-    count_prefix: Option<usize>,
-    pending_g: bool,
-    // Recurring tab
-    templates: Vec<Task>,
-    template_selected: usize,
-    rec_add_input: String,
-    // Backup tab
-    backup_entries: Vec<dodo::backup::BackupEntry>,
-    backup_selected: usize,
-    backup_config: dodo::config::BackupConfig,
-    sync_config: dodo::config::SyncConfig,
-    backup_status_msg: Option<String>,
-    // Config editor
-    config_field_index: usize,
-    config_field_values: [String; CONFIG_FIELD_COUNT],
-    config_field_input: String,
-}
-
-impl<'a> App<'a> {
-    fn new(db: &'a Database) -> Self {
-        let mut panes = [
-            PaneState::new(),
-            PaneState::new(),
-            PaneState::new(),
-            PaneState::new(),
-        ];
-        panes[3].sort_index = 1; // DONE pane defaults to modified
-        panes[3].sort_ascending = false; // descending (newest done first)
-        let config = dodo::config::Config::load().unwrap_or_default();
-        Self {
-            panes,
-            active_pane: 2,
-            running_task: None,
-            db,
-            mode: AppMode::Normal,
-            tab: TuiTab::Tasks,
-            report_range: ReportRange::Day,
-            report: None,
-            tick_count: 0,
-            frame_count: 0,
-            add_input: String::new(),
-            move_task_id: None,
-            move_source: 0,
-            move_target: 0,
-            delete_task_id: None,
-            delete_task_title: String::new(),
-            edit_task_id: None,
-            edit_field_index: 0,
-            edit_field_values: Default::default(),
-            edit_field_input: String::new(),
-            note_lines: Vec::new(),
-            note_selected: 0,
-            note_editing: false,
-            search_input: String::new(),
-            count_prefix: None,
-            pending_g: false,
-            templates: Vec::new(),
-            template_selected: 0,
-            rec_add_input: String::new(),
-            backup_entries: Vec::new(),
-            backup_selected: 0,
-            backup_config: config.backup,
-            sync_config: config.sync,
-            backup_status_msg: None,
-            config_field_index: 0,
-            config_field_values: Default::default(),
-            config_field_input: String::new(),
-        }
-    }
-
-    fn cycle_sort(&mut self) {
-        let pane = &mut self.panes[self.active_pane];
-        if pane.sort_ascending {
-            pane.sort_ascending = false;
-        } else {
-            pane.sort_index = (pane.sort_index + 1) % SORT_MODES.len();
-            pane.sort_ascending = true;
-        }
-        let sort = SORT_MODES[pane.sort_index];
-        let ascending = pane.sort_ascending;
-        pane.tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
-    }
-
-    fn matches_search(&self, task: &Task) -> bool {
-        if self.search_input.is_empty() {
-            return true;
-        }
-        let query = self.search_input.to_lowercase();
-        let today = chrono::Local::now().date_naive();
-        for token in query.split_whitespace() {
-            if let Some(proj) = token.strip_prefix('+') {
-                let task_proj = task.project.as_deref().unwrap_or("").to_lowercase();
-                if !task_proj.contains(proj) {
-                    return false;
-                }
-            } else if let Some(ctx) = token.strip_prefix('@') {
-                let task_ctx = task.context.as_deref().unwrap_or("").to_lowercase();
-                if !task_ctx.contains(ctx) {
-                    return false;
-                }
-            } else if token.chars().all(|c| c == '!') && !token.is_empty() {
-                // Priority: !! means priority >= 2
-                let min_pri = token.len() as i64;
-                if task.priority.unwrap_or(0) < min_pri {
-                    return false;
-                }
-            } else if let Some(rest) = token.strip_prefix("=<") {
-                // Scheduled within N days: =<10d
-                if let Some(days) = parse_filter_days(rest) {
-                    let cutoff = today + chrono::Duration::days(days);
-                    match task.scheduled {
-                        Some(sc) if sc <= cutoff => {}
-                        _ => return false,
-                    }
-                }
-            } else if let Some(rest) = token.strip_prefix("=>") {
-                // Scheduled beyond N days: =>3d
-                if let Some(days) = parse_filter_days(rest) {
-                    let cutoff = today + chrono::Duration::days(days);
-                    match task.scheduled {
-                        Some(sc) if sc >= cutoff => {}
-                        _ => return false,
-                    }
-                }
-            } else if let Some(rest) = token.strip_prefix("^<") {
-                // Deadline within N days: ^<3d
-                if let Some(days) = parse_filter_days(rest) {
-                    let cutoff = today + chrono::Duration::days(days);
-                    match task.deadline {
-                        Some(dl) if dl <= cutoff => {}
-                        _ => return false,
-                    }
-                }
-            } else if let Some(rest) = token.strip_prefix("^>") {
-                // Deadline beyond N days: ^>5d
-                if let Some(days) = parse_filter_days(rest) {
-                    let cutoff = today + chrono::Duration::days(days);
-                    match task.deadline {
-                        Some(dl) if dl >= cutoff => {}
-                        _ => return false,
-                    }
-                }
-            } else if let Some(rest) = token.strip_prefix('^') {
-                // ^3d is shorthand for ^<3d
-                if let Some(days) = parse_filter_days(rest) {
-                    let cutoff = today + chrono::Duration::days(days);
-                    match task.deadline {
-                        Some(dl) if dl <= cutoff => {}
-                        _ => return false,
-                    }
-                }
-            } else if let Some(rest) = token.strip_prefix('=') {
-                // =1w is shorthand for =<1w
-                if let Some(days) = parse_filter_days(rest) {
-                    let cutoff = today + chrono::Duration::days(days);
-                    match task.scheduled {
-                        Some(sc) if sc <= cutoff => {}
-                        _ => return false,
-                    }
-                }
-            } else {
-                let title = task.title.to_lowercase();
-                if !title.contains(token) {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    fn refresh_all(&mut self) -> Result<()> {
-        let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
-
-        let mut groups: [Vec<Task>; 4] = [vec![], vec![], vec![], vec![]];
-        for task in all_tasks {
-            if !self.matches_search(&task) {
-                continue;
-            }
-            let effective = task.effective_area();
-            let idx = match effective {
-                Area::LongTerm => 0,
-                Area::ThisWeek => 1,
-                Area::Today => 2,
-                Area::Completed => 3,
-            };
-            groups[idx].push(task);
-        }
-
-        for (i, group) in groups.into_iter().enumerate() {
-            self.panes[i].tasks = group;
-            let sort = SORT_MODES[self.panes[i].sort_index];
-            let ascending = self.panes[i].sort_ascending;
-            self.panes[i].tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
-            let len = self.panes[i].tasks.len();
-            if len == 0 {
-                self.panes[i].list_state.select(None);
-            } else if let Some(sel) = self.panes[i].list_state.selected() {
-                if sel >= len {
-                    self.panes[i].list_state.select(Some(len - 1));
-                }
-            } else {
-                self.panes[i].list_state.select(Some(0));
-            }
-        }
-
-        self.running_task = if let Ok(Some((title, _))) = self.db.get_running_task() {
-            Some(title)
-        } else {
-            None
-        };
-
-        Ok(())
-    }
-
-    fn refresh_report(&mut self) -> Result<()> {
-        let (from, to) = self.report_range.date_range();
-        self.report = Some(ReportData {
-            tasks_done: self.db.report_tasks_done(&from, &to)?,
-            total_seconds: self.db.report_total_seconds(&from, &to)?,
-            active_days: self.db.report_active_days(&from, &to)?,
-            by_hour: self.db.report_by_hour(&from, &to)?,
-            by_weekday: self.db.report_by_weekday(&from, &to)?,
-            by_project: self.db.report_by_project(&from, &to)?,
-            done_tasks: self.db.report_done_tasks(&from, &to, 20)?,
-        });
-        Ok(())
-    }
-
-    fn refresh_templates(&mut self) -> Result<()> {
-        self.templates = self.db.list_templates()?;
-        if self.templates.is_empty() {
-            self.template_selected = 0;
-        } else if self.template_selected >= self.templates.len() {
-            self.template_selected = self.templates.len() - 1;
-        }
-        Ok(())
-    }
-
-    fn refresh_backups(&mut self) {
-        if self.backup_config.is_ready() {
-            match dodo::backup::list_backups(&self.backup_config) {
-                Ok(entries) => {
-                    self.backup_entries = entries;
-                    if self.backup_entries.is_empty() {
-                        self.backup_selected = 0;
-                    } else if self.backup_selected >= self.backup_entries.len() {
-                        self.backup_selected = self.backup_entries.len() - 1;
-                    }
-                }
-                Err(e) => {
-                    self.backup_status_msg = Some(format!("Error: {}", e));
-                }
-            }
-        }
-    }
-
-    fn move_pane_left(&mut self) {
-        if self.active_pane > 0 {
-            self.active_pane -= 1;
-        }
-    }
-
-    fn move_pane_right(&mut self) {
-        if self.active_pane < 3 {
-            self.active_pane += 1;
-        }
-    }
-
-    fn toggle_selected(&mut self) -> Result<()> {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            if task.status == TaskStatus::Running {
-                self.db.pause_timer()?;
-            } else {
-                let num_id = task.num_id.map(|n| n.to_string()).unwrap_or_default();
-                if !num_id.is_empty() {
-                    let today = chrono::Local::now().date_naive();
-                    self.db.update_task_scheduled(&task.id, today)?;
-                    let _ = self.db.start_timer(&num_id);
-                }
-            }
-            self.refresh_all()?;
-        }
-        Ok(())
-    }
-
-    fn done(&mut self) -> Result<()> {
-        let task_id = self.panes[self.active_pane]
-            .selected_task()
-            .map(|t| t.id.clone());
-        if let Some(ref id) = task_id {
-            let was_done = self.panes[self.active_pane]
-                .selected_task()
-                .map(|t| t.status == TaskStatus::Done)
-                .unwrap_or(false);
-            if was_done {
-                self.db.uncomplete_task_by_id(id)?;
-            } else {
-                self.db.complete_task_by_id(id)?;
-            }
-        }
-        self.refresh_all()?;
-        // Follow the task to its new pane
-        if let Some(ref id) = task_id {
-            for pane_idx in 0..4 {
-                if let Some(pos) = self.panes[pane_idx].tasks.iter().position(|t| t.id == *id) {
-                    self.active_pane = pane_idx;
-                    self.panes[pane_idx].list_state.select(Some(pos));
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn open_note_quick(&mut self) {
-        self.start_edit_task();
-        if self.mode == AppMode::EditTask {
-            self.edit_field_index = 8;
-            self.edit_field_input.clear();
-            let notes = &self.edit_field_values[8];
-            if notes.is_empty() {
-                // No notes — go straight to append input
-                self.mode = AppMode::EditTaskField;
-            } else {
-                // Has notes — enter NoteView for browsing/editing
-                self.note_lines = notes.lines().map(|l| l.to_string()).collect();
-                self.note_selected = 0;
-                self.note_editing = false;
-                self.mode = AppMode::NoteView;
-            }
-        }
-    }
-
-    fn start_add_task(&mut self) {
-        self.add_input.clear();
-        self.mode = AppMode::AddTask;
-    }
-
-    fn confirm_add_task(&mut self) -> Result<()> {
-        if !self.add_input.is_empty() {
-            let parsed = parse_notation(&self.add_input);
-            let title = if parsed.title.is_empty() {
-                self.add_input.clone()
-            } else {
-                parsed.title
-            };
-            let context = if !parsed.contexts.is_empty() {
-                Some(parsed.contexts.join(","))
-            } else {
-                None
-            };
-            let tags = if !parsed.tags.is_empty() {
-                Some(parsed.tags.join(","))
-            } else {
-                None
-            };
-            let estimate = parsed.estimate_minutes.or(Some(60));
-            let scheduled = parsed
-                .scheduled
-                .or_else(|| Some(chrono::Local::now().date_naive()));
-
-            self.db.add_task(
-                &title,
-                Area::Today,
-                parsed.project,
-                context,
-                estimate,
-                parsed.deadline,
-                scheduled,
-                tags,
-                parsed.priority,
-            )?;
-            self.refresh_all()?;
-        }
-        self.mode = AppMode::Normal;
-        Ok(())
-    }
-
-    fn start_move_task(&mut self) {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            if task.status == TaskStatus::Done {
-                return; // Can't move done tasks
-            }
-            self.move_task_id = Some(task.id.clone());
-            self.move_source = self.active_pane;
-            // Pick first valid target (skip current pane and DONE)
-            self.move_target = self.next_move_target(self.active_pane);
-            self.mode = AppMode::MoveTask;
-        }
-    }
-
-    fn next_move_target(&self, current: usize) -> usize {
-        let mut t = (current + 1) % 3; // 0,1,2 only (skip DONE=3)
-        if t == self.move_source {
-            t = (t + 1) % 3;
-        }
-        t
-    }
-
-    fn prev_move_target(&self, current: usize) -> usize {
-        let mut t = if current == 0 { 2 } else { current - 1 };
-        if t == self.move_source {
-            t = if t == 0 { 2 } else { t - 1 };
-        }
-        t
-    }
-
-    fn confirm_move_task(&mut self) -> Result<()> {
-        if let Some(ref task_id) = self.move_task_id {
-            let today = chrono::Local::now().date_naive();
-            let date = match self.move_target {
-                0 => today + chrono::Duration::days(8), // LONG TERM
-                1 => today + chrono::Duration::days(1), // THIS WEEK (tomorrow)
-                _ => today,                             // TODAY
-            };
-            self.db.update_task_scheduled(task_id, date)?;
-            self.refresh_all()?;
-        }
-        self.mode = AppMode::Normal;
-        Ok(())
-    }
-
-    fn move_task_quick(&mut self, direction: i32) -> Result<()> {
-        if self.active_pane == 3 {
-            return Ok(());
-        }
-        let target = (self.active_pane as i32 + direction).clamp(0, 2) as usize;
-        if target == self.active_pane {
-            return Ok(());
-        }
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            if task.status == TaskStatus::Done {
-                return Ok(());
-            }
-            let task_id = task.id.clone();
-            let today = chrono::Local::now().date_naive();
-            let date = match target {
-                0 => today + chrono::Duration::days(8),
-                1 => today + chrono::Duration::days(1),
-                _ => today,
-            };
-            self.db.update_task_scheduled(&task_id, date)?;
-            self.refresh_all()?;
-            self.active_pane = target;
-            if let Some(pos) = self.panes[target].tasks.iter().position(|t| t.id == task_id) {
-                self.panes[target].list_state.select(Some(pos));
-            }
-        }
-        Ok(())
-    }
-
-    fn start_delete(&mut self) {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            self.delete_task_id = Some(task.id.clone());
-            self.delete_task_title = task.title.clone();
-            self.mode = AppMode::ConfirmDelete;
-        }
-    }
-
-    fn confirm_delete(&mut self) -> Result<()> {
-        if let Some(ref task_id) = self.delete_task_id {
-            self.db.delete_task_by_id(task_id)?;
-            self.refresh_all()?;
-        }
-        self.mode = AppMode::Normal;
-        Ok(())
-    }
-
-    fn start_edit_task(&mut self) {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            self.edit_task_id = Some(task.id.clone());
-            self.edit_field_index = 0;
-            self.edit_field_values = [
-                task.title.clone(),
-                task.project.clone().unwrap_or_default(),
-                task.context.clone().unwrap_or_default(),
-                task.tags.clone().unwrap_or_default(),
-                task.estimate_minutes
-                    .map(|m| format_est(m))
-                    .unwrap_or_default(),
-                task.deadline
-                    .map(|d| d.format("%Y-%m-%d").to_string())
-                    .unwrap_or_default(),
-                task.scheduled
-                    .map(|d| d.format("%Y-%m-%d").to_string())
-                    .unwrap_or_default(),
-                task.priority
-                    .map(|p| "!".repeat(p.clamp(1, 4) as usize))
-                    .unwrap_or_default(),
-                task.notes.clone().unwrap_or_default(),
-            ];
-            self.edit_field_input.clear();
-            self.mode = AppMode::EditTask;
-        }
-    }
-
-    fn enter_edit_field(&mut self) {
-        if self.edit_field_index == 8 {
-            let notes = &self.edit_field_values[8];
-            if notes.is_empty() {
-                // No notes — go straight to append input
-                self.edit_field_input.clear();
-                self.mode = AppMode::EditTaskField;
-            } else {
-                // Has notes — enter NoteView
-                self.note_lines = notes.lines().map(|l| l.to_string()).collect();
-                self.note_selected = 0;
-                self.note_editing = false;
-                self.mode = AppMode::NoteView;
-            }
-        } else {
-            self.edit_field_input = self.edit_field_values[self.edit_field_index].clone();
-            self.mode = AppMode::EditTaskField;
-        }
-    }
-
-    fn save_notes(&mut self) -> Result<()> {
-        if let Some(ref task_id) = self.edit_task_id {
-            let full = self.note_lines.join("\n");
-            self.db.update_notes_by_id(task_id, &full)?;
-            self.edit_field_values[8] = full;
-            self.refresh_all()?;
-        }
-        Ok(())
-    }
-
-    fn save_edit_field(&mut self) -> Result<()> {
-        let idx = self.edit_field_index;
-        self.edit_field_values[idx] = self.edit_field_input.clone();
-
-        if let Some(ref task_id) = self.edit_task_id {
-            let val = &self.edit_field_values[idx];
-            match idx {
-                0 => {
-                    // Title
-                    if !val.is_empty() {
-                        self.db.update_task_title_by_id(task_id, val)?;
-                    }
-                }
-                1 => {
-                    // Project
-                    let mut parsed = dodo::notation::ParsedInput::default();
-                    if !val.is_empty() {
-                        parsed.project = Some(val.clone());
-                    } else {
-                        parsed.project = Some(String::new());
-                    }
-                    self.db
-                        .update_task_fields_by_id(task_id, &parsed, None)?;
-                }
-                2 => {
-                    // Context
-                    let mut parsed = dodo::notation::ParsedInput::default();
-                    if !val.is_empty() {
-                        parsed.contexts = val.split(',').map(|s| s.trim().to_string()).collect();
-                    } else {
-                        parsed.contexts = vec![String::new()];
-                    }
-                    self.db
-                        .update_task_fields_by_id(task_id, &parsed, None)?;
-                }
-                3 => {
-                    // Tags
-                    let mut parsed = dodo::notation::ParsedInput::default();
-                    if !val.is_empty() {
-                        parsed.tags = val.split(',').map(|s| s.trim().to_string()).collect();
-                    } else {
-                        parsed.tags = vec![String::new()];
-                    }
-                    self.db
-                        .update_task_fields_by_id(task_id, &parsed, None)?;
-                }
-                4 => {
-                    // Estimate
-                    let mut parsed = dodo::notation::ParsedInput::default();
-                    if let Some(mins) = parse_duration(val) {
-                        parsed.estimate_minutes = Some(mins);
-                        self.db
-                            .update_task_fields_by_id(task_id, &parsed, None)?;
-                    }
-                }
-                5 => {
-                    // Deadline
-                    let mut parsed = dodo::notation::ParsedInput::default();
-                    if let Some(date) = parse_date(val) {
-                        parsed.deadline = Some(date);
-                        self.db
-                            .update_task_fields_by_id(task_id, &parsed, None)?;
-                    }
-                }
-                6 => {
-                    // Scheduled
-                    let mut parsed = dodo::notation::ParsedInput::default();
-                    if let Some(date) = parse_date(val) {
-                        parsed.scheduled = Some(date);
-                        self.db
-                            .update_task_fields_by_id(task_id, &parsed, None)?;
-                    }
-                }
-                7 => {
-                    // Priority
-                    let mut parsed = dodo::notation::ParsedInput::default();
-                    let p = val.len() as i64;
-                    if p > 0 && val.chars().all(|c| c == '!') {
-                        parsed.priority = Some(p.clamp(1, 4));
-                    } else if val.is_empty() {
-                        parsed.priority = Some(0);
-                    }
-                    if parsed.priority.is_some() {
-                        self.db
-                            .update_task_fields_by_id(task_id, &parsed, None)?;
-                    }
-                }
-                8 => {
-                    // Notes (append)
-                    if !self.edit_field_input.is_empty() {
-                        self.db
-                            .append_note_by_id(task_id, &self.edit_field_input)?;
-                        let notes = self.db.get_task_notes_by_id(task_id)?;
-                        self.edit_field_values[8] = notes.unwrap_or_default();
-                    }
-                }
-                _ => {}
-            }
-            self.refresh_all()?;
-        }
-        // After appending a note, return to NoteView so the user sees the updated list
-        if idx == 8 && !self.edit_field_values[8].is_empty() {
-            self.note_lines = self.edit_field_values[8]
-                .lines()
-                .map(|l| l.to_string())
-                .collect();
-            self.note_selected = self.note_lines.len().saturating_sub(1);
-            self.note_editing = false;
-            self.mode = AppMode::NoteView;
-        } else {
-            self.mode = AppMode::EditTask;
-        }
-        Ok(())
-    }
-
-    fn start_edit_config(&mut self) {
-        self.config_field_index = 0;
-        self.config_field_values = [
-            // Sync fields (0-2)
-            if self.sync_config.enabled { "true".to_string() } else { "false".to_string() },
-            self.sync_config.turso_url.clone().unwrap_or_default(),
-            self.sync_config.turso_token.clone().unwrap_or_default(),
-            // Backup fields (3-11)
-            if self.backup_config.enabled { "true".to_string() } else { "false".to_string() },
-            self.backup_config.endpoint.clone().unwrap_or_default(),
-            self.backup_config.bucket.clone().unwrap_or_default(),
-            self.backup_config.prefix.clone(),
-            self.backup_config.access_key.clone().unwrap_or_default(),
-            self.backup_config.secret_key.clone().unwrap_or_default(),
-            self.backup_config.region.clone().unwrap_or_default(),
-            self.backup_config.schedule_days.to_string(),
-            self.backup_config.max_backups.to_string(),
-        ];
-        self.mode = AppMode::EditConfig;
-    }
-
-    fn enter_config_field(&mut self) {
-        if CONFIG_FIELD_TYPES[self.config_field_index] == ConfigFieldType::Boolean {
-            // Toggle boolean immediately
-            let new_val = self.config_field_values[self.config_field_index] != "true";
-            self.config_field_values[self.config_field_index] =
-                if new_val { "true".to_string() } else { "false".to_string() };
-            self.apply_config_field(self.config_field_index);
-            let _ = self.save_config();
-        } else {
-            self.config_field_input = self.config_field_values[self.config_field_index].clone();
-            self.mode = AppMode::EditConfigField;
-        }
-    }
-
-    fn save_config_field(&mut self) {
-        let idx = self.config_field_index;
-        self.config_field_values[idx] = self.config_field_input.clone();
-        self.apply_config_field(idx);
-        let _ = self.save_config();
-        self.mode = AppMode::EditConfig;
-    }
-
-    fn apply_config_field(&mut self, idx: usize) {
-        let val = &self.config_field_values[idx];
-        let opt = if val.is_empty() { None } else { Some(val.clone()) };
-        match idx {
-            0 => self.sync_config.enabled = val == "true",
-            1 => self.sync_config.turso_url = opt,
-            2 => self.sync_config.turso_token = opt,
-            3 => self.backup_config.enabled = val == "true",
-            4 => self.backup_config.endpoint = opt,
-            5 => self.backup_config.bucket = opt,
-            6 => self.backup_config.prefix = if val.is_empty() { "dodo/".to_string() } else { val.clone() },
-            7 => self.backup_config.access_key = opt,
-            8 => self.backup_config.secret_key = opt,
-            9 => self.backup_config.region = opt,
-            10 => self.backup_config.schedule_days = val.parse().unwrap_or(7),
-            11 => self.backup_config.max_backups = val.parse().unwrap_or(10),
-            _ => {}
-        }
-    }
-
-    fn save_config(&mut self) -> Result<()> {
-        let config = dodo::config::Config {
-            sync: self.sync_config.clone(),
-            backup: self.backup_config.clone(),
-        };
-        config.save()?;
-        if self.backup_config.is_ready() {
-            self.refresh_backups();
-        }
-        Ok(())
-    }
-}
-
-// ── Search helpers ───────────────────────────────────────────────────
-
-fn format_estimate_tui(minutes: i64) -> String {
-    let hours = minutes / 60;
-    let mins = minutes % 60;
-    if hours > 0 && mins > 0 {
-        format!("{}h{}m", hours, mins)
-    } else if hours > 0 {
-        format!("{}h", hours)
-    } else {
-        format!("{}m", mins)
-    }
-}
-
-fn parse_filter_days(s: &str) -> Option<i64> {
-    if let Some(num) = s.strip_suffix('d') {
-        num.parse::<i64>().ok()
-    } else if let Some(num) = s.strip_suffix('w') {
-        num.parse::<i64>().ok().map(|n| n * 7)
-    } else {
-        s.parse::<i64>().ok()
-    }
-}
-
-// ── Sorting ──────────────────────────────────────────────────────────
-
-fn sort_tasks(a: &Task, b: &Task, sort: SortBy, ascending: bool) -> std::cmp::Ordering {
-    let ord = match sort {
-        SortBy::Created | SortBy::Area => a.created.cmp(&b.created),
-        SortBy::Modified => {
-            let a_mod = a.modified_at.unwrap_or(a.created);
-            let b_mod = b.modified_at.unwrap_or(b.created);
-            a_mod.cmp(&b_mod)
-        }
-        SortBy::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
-    };
-    if ascending { ord } else { ord.reverse() }
-}
-
-fn sort_label(sort: SortBy) -> &'static str {
-    match sort {
-        SortBy::Created => "created",
-        SortBy::Modified => "modified",
-        SortBy::Title => "title",
-        SortBy::Area => "area",
-    }
-}
-
-// ── Event Loop ───────────────────────────────────────────────────────
-
-// Note: `let _ =` is used intentionally throughout the TUI event handlers for
-// fire-and-forget DB operations. There is no user-visible error display mechanism
-// in the TUI event loop, and these operations are best-effort (e.g., refreshing
-// data, toggling timers). Failures are non-fatal and the TUI continues operating.
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
-where
-    B::Error: Send + Sync + 'static,
-{
-    let mut last_data_refresh = std::time::Instant::now();
-    let poll_rate = std::time::Duration::from_millis(16);
-    let data_refresh_rate = std::time::Duration::from_secs(1);
-
-    loop {
-        app.frame_count = app.frame_count.wrapping_add(1);
-        terminal.draw(|f| draw_ui(f, app))?;
-
-        if crossterm::event::poll(poll_rate)? {
-            if let Event::Key(key) = event::read()? {
-                match app.mode {
-                    AppMode::Normal => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-                        KeyCode::Char('t') => {
-                            app.tab = TuiTab::Tasks;
-                            app.count_prefix = None;
-                            app.pending_g = false;
-                        }
-                        KeyCode::Char('c') => {
-                            app.tab = TuiTab::Recurring;
-                            let _ = app.refresh_templates();
-                            app.count_prefix = None;
-                            app.pending_g = false;
-                        }
-                        KeyCode::Char('r') => {
-                            app.tab = TuiTab::Report;
-                            let _ = app.refresh_report();
-                            app.count_prefix = None;
-                            app.pending_g = false;
-                        }
-                        KeyCode::Char('b') if app.tab != TuiTab::Tasks => {
-                            app.tab = TuiTab::Backup;
-                            app.refresh_backups();
-                            app.count_prefix = None;
-                            app.pending_g = false;
-                        }
-                        KeyCode::Tab => {
-                            match app.tab {
-                                TuiTab::Tasks => {
-                                    app.tab = TuiTab::Recurring;
-                                    let _ = app.refresh_templates();
-                                }
-                                TuiTab::Recurring => {
-                                    app.tab = TuiTab::Report;
-                                    let _ = app.refresh_report();
-                                }
-                                TuiTab::Report => {
-                                    app.tab = TuiTab::Backup;
-                                    app.refresh_backups();
-                                }
-                                TuiTab::Backup => {
-                                    app.tab = TuiTab::Tasks;
-                                }
-                            }
-                            app.count_prefix = None;
-                            app.pending_g = false;
-                        }
-                        _ => {
-                            if app.tab == TuiTab::Tasks {
-                                // Handle pending 'g' for gg (jump to first)
-                                if app.pending_g {
-                                    app.pending_g = false;
-                                    if key.code == KeyCode::Char('g') {
-                                        app.panes[app.active_pane].jump_to_first();
-                                        app.count_prefix = None;
-                                        // Skip further processing
-                                    } else {
-                                        // g followed by non-g, ignore the g
-                                        // and fall through to handle this key normally
-                                        handle_tasks_key(app, key.code);
-                                    }
-                                } else {
-                                    // Accumulate digit count prefix
-                                    match key.code {
-                                        KeyCode::Char(c @ '1'..='9')
-                                            if app.count_prefix.is_none() =>
-                                        {
-                                            app.count_prefix =
-                                                Some(c.to_digit(10).unwrap() as usize);
-                                        }
-                                        KeyCode::Char(c @ '0'..='9')
-                                            if app.count_prefix.is_some() =>
-                                        {
-                                            let current = app.count_prefix.unwrap_or(0);
-                                            app.count_prefix = Some(
-                                                current * 10 + c.to_digit(10).unwrap() as usize,
-                                            );
-                                        }
-                                        _ => {
-                                            handle_tasks_key(app, key.code);
-                                        }
-                                    }
-                                }
-                            } else if app.tab == TuiTab::Recurring {
-                                handle_recurring_key(app, key.code);
-                            } else if app.tab == TuiTab::Backup {
-                                handle_backup_key(app, key.code);
-                            } else {
-                                match key.code {
-                                    KeyCode::Char('l') | KeyCode::Right => {
-                                        app.report_range = app.report_range.next();
-                                        let _ = app.refresh_report();
-                                    }
-                                    KeyCode::Char('h') | KeyCode::Left => {
-                                        app.report_range = app.report_range.prev();
-                                        let _ = app.refresh_report();
-                                    }
-                                    _ => {}
-                                }
-                            }
-                        }
-                    },
-                    AppMode::AddTask => match key.code {
-                        KeyCode::Esc => {
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Enter => {
-                            let _ = app.confirm_add_task();
-                        }
-                        KeyCode::Backspace => {
-                            app.add_input.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            app.add_input.push(c);
-                        }
-                        _ => {}
-                    },
-                    AppMode::MoveTask => match key.code {
-                        KeyCode::Esc => {
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Enter => {
-                            let _ = app.confirm_move_task();
-                        }
-                        KeyCode::Char('l') | KeyCode::Right => {
-                            app.move_target = app.next_move_target(app.move_target);
-                        }
-                        KeyCode::Char('h') | KeyCode::Left => {
-                            app.move_target = app.prev_move_target(app.move_target);
-                        }
-                        _ => {}
-                    },
-                    AppMode::ConfirmDelete => match key.code {
-                        KeyCode::Char('y') | KeyCode::Enter => {
-                            let _ = app.confirm_delete();
-                        }
-                        KeyCode::Char('n') | KeyCode::Esc => {
-                            app.mode = AppMode::Normal;
-                        }
-                        _ => {}
-                    },
-                    AppMode::EditTask => match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            if app.edit_field_index < 8 {
-                                app.edit_field_index += 1;
-                            }
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            if app.edit_field_index > 0 {
-                                app.edit_field_index -= 1;
-                            }
-                        }
-                        KeyCode::Enter => {
-                            app.enter_edit_field();
-                        }
-                        _ => {}
-                    },
-                    AppMode::EditTaskField => match key.code {
-                        KeyCode::Esc => {
-                            app.mode = AppMode::EditTask;
-                        }
-                        KeyCode::Enter => {
-                            if app.edit_field_index == 8
-                                && key.modifiers.contains(event::KeyModifiers::ALT)
-                            {
-                                app.edit_field_input.push('\n');
-                            } else {
-                                let _ = app.save_edit_field();
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            app.edit_field_input.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            app.edit_field_input.push(c);
-                        }
-                        _ => {}
-                    },
-                    AppMode::Search => match key.code {
-                        KeyCode::Esc | KeyCode::Enter => {
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Down => {
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Backspace => {
-                            app.search_input.pop();
-                            let _ = app.refresh_all();
-                        }
-                        KeyCode::Char(c) => {
-                            app.search_input.push(c);
-                            let _ = app.refresh_all();
-                        }
-                        _ => {}
-                    },
-                    AppMode::RecAddTemplate => match key.code {
-                        KeyCode::Esc => {
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Enter => {
-                            if !app.rec_add_input.is_empty() {
-                                let parsed = parse_notation(&app.rec_add_input);
-                                if let Some(ref recurrence) = parsed.recurrence {
-                                    let title = if parsed.title.is_empty() {
-                                        app.rec_add_input.clone()
-                                    } else {
-                                        parsed.title.clone()
-                                    };
-                                    let context = if !parsed.contexts.is_empty() {
-                                        Some(parsed.contexts.join(","))
-                                    } else {
-                                        None
-                                    };
-                                    let tags = if !parsed.tags.is_empty() {
-                                        Some(parsed.tags.join(","))
-                                    } else {
-                                        None
-                                    };
-                                    let estimate = parsed.estimate_minutes.or(Some(60));
-                                    let scheduled = parsed
-                                        .scheduled
-                                        .or_else(|| Some(chrono::Local::now().date_naive()));
-
-                                    let _ = app.db.add_template(
-                                        &title,
-                                        recurrence,
-                                        parsed.project,
-                                        context,
-                                        estimate,
-                                        parsed.deadline,
-                                        scheduled,
-                                        tags,
-                                        parsed.priority,
-                                    );
-                                    let _ = app.refresh_templates();
-                                    let _ = app.refresh_all();
-                                }
-                            }
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Backspace => {
-                            app.rec_add_input.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            app.rec_add_input.push(c);
-                        }
-                        _ => {}
-                    },
-                    AppMode::RecConfirmDelete => match key.code {
-                        KeyCode::Char('y') | KeyCode::Enter => {
-                            if let Some(template) = app.templates.get(app.template_selected) {
-                                let _ = app.db.delete_template(&template.id);
-                                let _ = app.refresh_templates();
-                                let _ = app.refresh_all();
-                            }
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Char('n') | KeyCode::Esc => {
-                            app.mode = AppMode::Normal;
-                        }
-                        _ => {}
-                    },
-                    AppMode::NoteView => {
-                        if app.note_editing {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    app.note_editing = false;
-                                }
-                                KeyCode::Enter => {
-                                    if key.modifiers.contains(event::KeyModifiers::ALT) {
-                                        app.edit_field_input.push('\n');
-                                    } else {
-                                        // Save edited line back
-                                        if app.note_selected < app.note_lines.len() {
-                                            app.note_lines[app.note_selected] =
-                                                app.edit_field_input.clone();
-                                            let _ = app.save_notes();
-                                        }
-                                        app.note_editing = false;
-                                    }
-                                }
-                                KeyCode::Backspace => {
-                                    app.edit_field_input.pop();
-                                }
-                                KeyCode::Char(c) => {
-                                    app.edit_field_input.push(c);
-                                }
-                                _ => {}
-                            }
-                        } else {
-                            match key.code {
-                                KeyCode::Esc => {
-                                    app.mode = AppMode::EditTask;
-                                }
-                                KeyCode::Char('j') | KeyCode::Down => {
-                                    if !app.note_lines.is_empty()
-                                        && app.note_selected < app.note_lines.len() - 1
-                                    {
-                                        app.note_selected += 1;
-                                    }
-                                }
-                                KeyCode::Char('k') | KeyCode::Up => {
-                                    if app.note_selected > 0 {
-                                        app.note_selected -= 1;
-                                    }
-                                }
-                                KeyCode::Enter | KeyCode::Char('e') => {
-                                    if app.note_selected < app.note_lines.len() {
-                                        app.edit_field_input =
-                                            app.note_lines[app.note_selected].clone();
-                                        app.note_editing = true;
-                                    }
-                                }
-                                KeyCode::Char('a') => {
-                                    // Append new note — switch to EditTaskField for notes
-                                    app.edit_field_index = 8;
-                                    app.edit_field_input.clear();
-                                    app.mode = AppMode::EditTaskField;
-                                }
-                                KeyCode::Char('d') | KeyCode::Delete => {
-                                    if app.note_selected < app.note_lines.len() {
-                                        app.note_lines.remove(app.note_selected);
-                                        if app.note_selected >= app.note_lines.len()
-                                            && app.note_selected > 0
-                                        {
-                                            app.note_selected -= 1;
-                                        }
-                                        let _ = app.save_notes();
-                                        if app.note_lines.is_empty() {
-                                            app.mode = AppMode::EditTask;
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    AppMode::EditConfig => match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Char('j') | KeyCode::Down => {
-                            app.config_field_index = (app.config_field_index + 1) % CONFIG_FIELD_COUNT;
-                        }
-                        KeyCode::Char('k') | KeyCode::Up => {
-                            app.config_field_index = if app.config_field_index == 0 {
-                                CONFIG_FIELD_COUNT - 1
-                            } else {
-                                app.config_field_index - 1
-                            };
-                        }
-                        KeyCode::Enter => {
-                            app.enter_config_field();
-                        }
-                        _ => {}
-                    },
-                    AppMode::EditConfigField => match key.code {
-                        KeyCode::Esc => {
-                            app.mode = AppMode::EditConfig;
-                        }
-                        KeyCode::Enter => {
-                            app.save_config_field();
-                        }
-                        KeyCode::Backspace => {
-                            app.config_field_input.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            app.config_field_input.push(c);
-                        }
-                        _ => {}
-                    },
-                }
-            }
-        }
-
-        if last_data_refresh.elapsed() >= data_refresh_rate {
-            app.tick_count = app.tick_count.wrapping_add(1);
-            match app.tab {
-                TuiTab::Tasks => { let _ = app.refresh_all(); }
-                TuiTab::Recurring => { let _ = app.refresh_templates(); }
-                TuiTab::Report => { let _ = app.refresh_report(); }
-                TuiTab::Backup => { app.refresh_backups(); }
-            }
-            last_data_refresh = std::time::Instant::now();
-        }
-    }
-}
-
-fn handle_tasks_key(app: &mut App, code: KeyCode) {
-    let count = app.count_prefix.take().unwrap_or(1);
-    match code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.panes[app.active_pane].jump(count);
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            let sel = app.panes[app.active_pane].list_state.selected().unwrap_or(0);
-            if sel == 0 {
-                app.mode = AppMode::Search;
-            } else {
-                app.panes[app.active_pane].jump_back(count);
-            }
-        }
-        KeyCode::Char('h') | KeyCode::Left => app.move_pane_left(),
-        KeyCode::Char('l') | KeyCode::Right => app.move_pane_right(),
-        KeyCode::PageDown => {
-            app.panes[app.active_pane].jump(10);
-        }
-        KeyCode::PageUp => {
-            app.panes[app.active_pane].jump_back(10);
-        }
-        KeyCode::Char('G') => {
-            app.panes[app.active_pane].jump_to_last();
-        }
-        KeyCode::Char('g') => {
-            app.pending_g = true;
-        }
-        KeyCode::Char('s') => {
-            let _ = app.toggle_selected();
-        }
-        KeyCode::Char('d') => {
-            let _ = app.done();
-        }
-        KeyCode::Char('o') => app.cycle_sort(),
-        KeyCode::Char('/') => {
-            app.mode = AppMode::Search;
-        }
-        KeyCode::Char('n') => {
-            app.open_note_quick();
-        }
-        KeyCode::Char('a') => {
-            app.start_add_task();
-        }
-        KeyCode::Char('m') => {
-            app.start_move_task();
-        }
-        KeyCode::Char('<') => {
-            let _ = app.move_task_quick(-1);
-        }
-        KeyCode::Char('>') => {
-            let _ = app.move_task_quick(1);
-        }
-        KeyCode::Enter => {
-            app.start_edit_task();
-        }
-        KeyCode::Backspace | KeyCode::Delete => {
-            app.start_delete();
-        }
-        _ => {}
-    }
-}
-
-fn handle_recurring_key(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if !app.templates.is_empty() && app.template_selected < app.templates.len() - 1 {
-                app.template_selected += 1;
-            }
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if app.template_selected > 0 {
-                app.template_selected -= 1;
-            }
-        }
-        KeyCode::Char('a') => {
-            app.rec_add_input.clear();
-            app.mode = AppMode::RecAddTemplate;
-        }
-        KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => {
-            if !app.templates.is_empty() {
-                app.mode = AppMode::RecConfirmDelete;
-            }
-        }
-        KeyCode::Char('p') => {
-            if let Some(template) = app.templates.get(app.template_selected) {
-                if template.status == TaskStatus::Paused {
-                    let _ = app.db.resume_template(&template.id);
-                } else {
-                    let _ = app.db.pause_template(&template.id);
-                }
-                let _ = app.refresh_templates();
-            }
-        }
-        KeyCode::Char('g') => {
-            let _ = app.db.generate_instances();
-            let _ = app.refresh_templates();
-            let _ = app.refresh_all();
-        }
-        KeyCode::Char('e') | KeyCode::Enter => {
-            // Open edit modal for the selected template
-            if let Some(template) = app.templates.get(app.template_selected) {
-                app.edit_task_id = Some(template.id.clone());
-                app.edit_field_index = 0;
-                app.edit_field_values = [
-                    template.title.clone(),
-                    template.project.clone().unwrap_or_default(),
-                    template.context.clone().unwrap_or_default(),
-                    template.tags.clone().unwrap_or_default(),
-                    template.estimate_minutes.map(|m| format_estimate_tui(m)).unwrap_or_default(),
-                    template.deadline.map(|d| d.to_string()).unwrap_or_default(),
-                    template.scheduled.map(|d| d.to_string()).unwrap_or_default(),
-                    template.priority.map(|p| "!".repeat(p.clamp(1, 4) as usize)).unwrap_or_default(),
-                    template.recurrence.clone().unwrap_or_default(),
-                ];
-                app.edit_field_input.clear();
-                app.mode = AppMode::EditTask;
-            }
-        }
-        _ => {}
-    }
-}
-
-fn handle_backup_key(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if !app.backup_entries.is_empty() {
-                app.backup_selected = (app.backup_selected + 1) % app.backup_entries.len();
-            }
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if !app.backup_entries.is_empty() {
-                app.backup_selected = if app.backup_selected == 0 {
-                    app.backup_entries.len() - 1
-                } else {
-                    app.backup_selected - 1
-                };
-            }
-        }
-        KeyCode::Char('u') => {
-            if app.backup_config.is_ready() {
-                match dodo::backup::create_backup(&app.backup_config) {
-                    Ok(key) => {
-                        app.backup_status_msg = Some(format!("Uploaded: {}", key));
-                        app.refresh_backups();
-                    }
-                    Err(e) => {
-                        app.backup_status_msg = Some(format!("Upload failed: {}", e));
-                    }
-                }
-            } else {
-                app.backup_status_msg = Some("Backup not configured".to_string());
-            }
-        }
-        KeyCode::Char('r') => {
-            if let Some(entry) = app.backup_entries.get(app.backup_selected) {
-                let key = entry.key.clone();
-                match dodo::backup::restore_backup(&app.backup_config, &key) {
-                    Ok(()) => {
-                        app.backup_status_msg =
-                            Some(format!("Restored: {}", entry.display_name));
-                        let _ = app.refresh_all();
-                    }
-                    Err(e) => {
-                        app.backup_status_msg = Some(format!("Restore failed: {}", e));
-                    }
-                }
-            }
-        }
-        KeyCode::Char('d') | KeyCode::Delete => {
-            if let Some(entry) = app.backup_entries.get(app.backup_selected) {
-                let key = entry.key.clone();
-                match dodo::backup::delete_backup(&app.backup_config, &key) {
-                    Ok(()) => {
-                        app.backup_status_msg =
-                            Some(format!("Deleted: {}", entry.display_name));
-                        app.refresh_backups();
-                    }
-                    Err(e) => {
-                        app.backup_status_msg = Some(format!("Delete failed: {}", e));
-                    }
-                }
-            }
-        }
-        KeyCode::Char('e') => {
-            app.start_edit_config();
-        }
-        _ => {}
-    }
-}
-
-// ── Drawing ──────────────────────────────────────────────────────────
-
-fn draw_ui(f: &mut Frame, app: &App) {
+pub(super) fn draw_ui(f: &mut Frame, app: &App) {
     let search_height = if app.tab == TuiTab::Tasks { 3 } else { 0 };
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -1770,7 +102,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
     }
 }
 
-fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.mode == AppMode::Search;
     let has_filter = !app.search_input.is_empty();
 
@@ -1804,7 +136,7 @@ fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_header(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let running_info = if let Some(ref task) = app.running_task {
         format!(" \u{25B6} {} ", task)
     } else {
@@ -1873,7 +205,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(legend).alignment(Alignment::Right), cols[1]);
 }
 
-fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let keys: Vec<(&str, &str)> = match app.tab {
         TuiTab::Tasks => match app.mode {
             AppMode::AddTask => vec![
@@ -1959,7 +291,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
     let now = chrono::Local::now();
     let today = now.date_naive();
     let tomorrow = today + chrono::Duration::days(1);
@@ -1991,7 +323,7 @@ fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn draw_recurring_tab(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_recurring_tab(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::bordered()
         .title(Span::styled(
             " RECURRING ",
@@ -2112,7 +444,7 @@ fn draw_recurring_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, inner, &mut list_state);
 }
 
-fn draw_rec_add_bar(f: &mut Frame, app: &App) {
+pub(super) fn draw_rec_add_bar(f: &mut Frame, app: &App) {
     let area = f.area();
     // Bottom bar
     let bar_area = Rect::new(0, area.height.saturating_sub(3), area.width, 3);
@@ -2136,7 +468,7 @@ fn draw_rec_add_bar(f: &mut Frame, app: &App) {
     );
 }
 
-fn draw_rec_delete_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_rec_delete_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(40, 20, f.area());
     f.render_widget(Clear, area);
 
@@ -2183,7 +515,7 @@ fn draw_rec_delete_modal(f: &mut Frame, app: &App) {
     );
 }
 
-fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     let report = match &app.report {
         Some(r) => r,
         None => {
@@ -2506,7 +838,7 @@ fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
 // ── Pane Drawing ─────────────────────────────────────────────────────
 
 /// Pastel rainbow hue from 0.0–1.0, returns soft RGB.
-fn pastel_from_hue(hue: f64) -> Color {
+pub(super) fn pastel_from_hue(hue: f64) -> Color {
     let h = ((hue % 1.0) + 1.0) % 1.0;
     let (r, g, b) = match (h * 6.0) as u8 {
         0 => (1.0, h * 6.0, 0.0),
@@ -2525,7 +857,7 @@ fn pastel_from_hue(hue: f64) -> Color {
 }
 
 /// Apply pastel rainbow sweep effect: a glow spot moves continuously left→right.
-fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> Line<'static> {
+pub(super) fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> Line<'static> {
     let sigma = width as f64 * 0.25;
     let period = width as f64 + sigma * 4.0;
     let wave_center = (frame_count as f64 * 0.8) % period - sigma * 2.0;
@@ -2569,7 +901,7 @@ fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> Line<'static
     Line::from(result)
 }
 
-fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -2736,7 +1068,7 @@ fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(list, chunks[2]);
 }
 
-fn draw_pane(
+pub(super) fn draw_pane(
     f: &mut Frame,
     pane: &PaneState,
     label: &str,
@@ -2947,7 +1279,7 @@ fn draw_pane(
     }
 }
 
-fn is_task_overdue(task: &Task, today: chrono::NaiveDate) -> bool {
+pub(super) fn is_task_overdue(task: &Task, today: chrono::NaiveDate) -> bool {
     if task.status == TaskStatus::Done {
         return false;
     }
@@ -2959,7 +1291,7 @@ fn is_task_overdue(task: &Task, today: chrono::NaiveDate) -> bool {
     false
 }
 
-fn build_pane_stats(elapsed: i64, estimate: i64, done: usize, total: usize) -> String {
+pub(super) fn build_pane_stats(elapsed: i64, estimate: i64, done: usize, total: usize) -> String {
     if total == 0 {
         return "(0)".to_string();
     }
@@ -2983,7 +1315,7 @@ fn build_pane_stats(elapsed: i64, estimate: i64, done: usize, total: usize) -> S
     }
 }
 
-fn task_num_style(task: &Task) -> Style {
+pub(super) fn task_num_style(task: &Task) -> Style {
     match task.status {
         TaskStatus::Running => Style::default().fg(ACCENT_GREEN),
         TaskStatus::Done => Style::default().fg(FG_SUBTEXT),
@@ -2992,7 +1324,7 @@ fn task_num_style(task: &Task) -> Style {
     }
 }
 
-fn task_title_style(task: &Task) -> Style {
+pub(super) fn task_title_style(task: &Task) -> Style {
     match task.status {
         TaskStatus::Running => Style::default()
             .fg(ACCENT_GREEN)
@@ -3003,7 +1335,7 @@ fn task_title_style(task: &Task) -> Style {
     }
 }
 
-fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static>> {
+pub(super) fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> = vec![];
     let muted = Style::default().fg(FG_OVERLAY);
     let seven_days = today + chrono::Duration::days(7);
@@ -3123,7 +1455,7 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
 
 // ── Modals ───────────────────────────────────────────────────────────
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+pub(super) fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -3143,7 +1475,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn draw_shadow(f: &mut Frame, area: Rect) {
+pub(super) fn draw_shadow(f: &mut Frame, area: Rect) {
     if area.x + area.width < f.area().width && area.y + area.height < f.area().height {
         let shadow = Rect::new(area.x + 1, area.y + 1, area.width, area.height);
         let shadow_block = Block::default().style(Style::default().bg(Color::Rgb(20, 20, 30)));
@@ -3151,7 +1483,7 @@ fn draw_shadow(f: &mut Frame, area: Rect) {
     }
 }
 
-fn draw_delete_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_delete_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(50, 20, f.area());
     draw_shadow(f, area);
     f.render_widget(Clear, area);
@@ -3201,7 +1533,7 @@ fn draw_delete_modal(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(text), inner);
 }
 
-const EDIT_FIELD_HINTS: [&str; 9] = [
+pub(super) const EDIT_FIELD_HINTS: [&str; 9] = [
     "Task name (plain text)",
     "Project name (no + prefix needed)",
     "Comma-separated, e.g.: work, laptop",
@@ -3213,7 +1545,7 @@ const EDIT_FIELD_HINTS: [&str; 9] = [
     "Type to append. Alt+Enter for newline",
 ];
 
-fn draw_edit_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_edit_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(50, 70, f.area());
     draw_shadow(f, area);
     f.render_widget(Clear, area);
@@ -3408,7 +1740,7 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
     }
 }
 
-fn format_config_display_value(value: &str, field_type: ConfigFieldType) -> (String, Style) {
+pub(super) fn format_config_display_value(value: &str, field_type: ConfigFieldType) -> (String, Style) {
     match field_type {
         ConfigFieldType::Boolean => {
             if value == "true" {
@@ -3434,7 +1766,7 @@ fn format_config_display_value(value: &str, field_type: ConfigFieldType) -> (Str
     }
 }
 
-fn draw_config_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(60, 75, f.area());
     draw_shadow(f, area);
     f.render_widget(Clear, area);
@@ -3571,7 +1903,7 @@ fn draw_config_modal(f: &mut Frame, app: &App) {
     }
 }
 
-fn draw_note_view_modal(f: &mut Frame, app: &App) {
+pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
     let area = centered_rect(50, 70, f.area());
     draw_shadow(f, area);
     f.render_widget(Clear, area);
@@ -3661,7 +1993,7 @@ fn draw_note_view_modal(f: &mut Frame, app: &App) {
     }
 }
 
-fn draw_add_bar(f: &mut Frame, app: &App) {
+pub(super) fn draw_add_bar(f: &mut Frame, app: &App) {
     // Render input bar at the bottom of the content area, above the footer
     let area = f.area();
     if area.height < 5 {
@@ -3695,7 +2027,7 @@ fn draw_add_bar(f: &mut Frame, app: &App) {
     );
 }
 
-fn draw_move_bar(f: &mut Frame, app: &App) {
+pub(super) fn draw_move_bar(f: &mut Frame, app: &App) {
     let area = f.area();
     if area.height < 4 {
         return;
@@ -3741,41 +2073,4 @@ fn draw_move_bar(f: &mut Frame, app: &App) {
     ));
 
     f.render_widget(Paragraph::new(Line::from(spans)), bar_area);
-}
-
-// ── Formatting helpers ───────────────────────────────────────────────
-
-fn format_dur(seconds: i64) -> String {
-    let hours = seconds / 3600;
-    let mins = (seconds % 3600) / 60;
-    let secs = seconds % 60;
-    if hours > 0 {
-        format!("{}h{}m{}s", hours, mins, secs)
-    } else if mins > 0 {
-        format!("{}m{}s", mins, secs)
-    } else {
-        format!("{}s", secs)
-    }
-}
-
-fn format_dur_short(seconds: i64) -> String {
-    let hours = seconds / 3600;
-    let mins = (seconds % 3600) / 60;
-    if hours > 0 {
-        format!("{}h{}m", hours, mins)
-    } else {
-        format!("{}m", mins)
-    }
-}
-
-fn format_est(minutes: i64) -> String {
-    let hours = minutes / 60;
-    let mins = minutes % 60;
-    if hours > 0 && mins > 0 {
-        format!("{}h{}m", hours, mins)
-    } else if hours > 0 {
-        format!("{}h", hours)
-    } else {
-        format!("{}m", mins)
-    }
 }
