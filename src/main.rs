@@ -7,7 +7,7 @@ use std::io::{self, BufRead};
 mod tui;
 
 use dodo::backup;
-use dodo::cli::{Area as CliArea, BackupAction, Cli, Commands, RecurringAction, SyncAction};
+use dodo::cli::{BackupAction, Cli, Commands, RecurringAction, SyncAction};
 use dodo::config::Config;
 use dodo::db::Database;
 use dodo::notation::parse_notation;
@@ -93,7 +93,7 @@ fn main() -> Result<()> {
         }
         Some(Commands::List(args)) => {
             // Parse positional args for filters
-            let mut filter_area: Option<CliArea> = None;
+            let mut filter_area: Option<Area> = None;
             let mut filter_project: Option<String> = args.project.clone();
             let mut filter_context: Option<String> = None;
             let mut filter_tag: Option<String> = None;
@@ -108,10 +108,10 @@ fn main() -> Result<()> {
                 } else {
                     // Try area name
                     match arg.to_lowercase().as_str() {
-                        "today" => filter_area = Some(CliArea::Today),
-                        "week" => filter_area = Some(CliArea::ThisWeek),
-                        "long" => filter_area = Some(CliArea::LongTerm),
-                        "done" => filter_area = Some(CliArea::Completed),
+                        "today" => filter_area = Some(Area::Today),
+                        "week" => filter_area = Some(Area::ThisWeek),
+                        "long" => filter_area = Some(Area::LongTerm),
+                        "done" => filter_area = Some(Area::Completed),
                         _ => {}
                     }
                 }
@@ -548,7 +548,7 @@ fn main() -> Result<()> {
 
 fn apply_filters<'a>(
     tasks: &[&'a Task],
-    _area: Option<CliArea>,
+    _area: Option<Area>,
     _project: Option<&str>,
     context: Option<&str>,
     tag: Option<&str>,

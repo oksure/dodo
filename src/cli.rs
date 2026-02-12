@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
+pub use crate::task::Area;
+
 #[derive(Parser)]
 #[command(name = "dodo")]
 #[command(about = "Keyboard-first todo + time tracker CLI")]
@@ -216,18 +218,6 @@ pub struct RecurringQueryArgs {
     pub query: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum Area {
-    #[value(name = "long")]
-    LongTerm,
-    #[value(name = "week")]
-    ThisWeek,
-    #[value(name = "today")]
-    Today,
-    #[value(name = "done")]
-    Completed,
-}
-
 #[derive(Parser)]
 pub struct SyncArgs {
     #[command(subcommand)]
@@ -274,13 +264,3 @@ pub struct BackupDeleteArgs {
     pub name: String,
 }
 
-impl From<Area> for String {
-    fn from(area: Area) -> String {
-        match area {
-            Area::LongTerm => "LongTerm".to_string(),
-            Area::ThisWeek => "ThisWeek".to_string(),
-            Area::Today => "Today".to_string(),
-            Area::Completed => "Completed".to_string(),
-        }
-    }
-}

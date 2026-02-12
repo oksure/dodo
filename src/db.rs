@@ -3,7 +3,7 @@ use chrono::{DateTime, NaiveDate, Utc};
 use libsql::{params, Connection, Value};
 use std::path::PathBuf;
 
-use crate::cli::{Area as CliArea, SortBy};
+use crate::cli::SortBy;
 use crate::fuzzy::{find_best_match, rank_matches};
 use crate::notation::ParsedInput;
 use crate::session::Session;
@@ -245,7 +245,7 @@ impl Database {
     pub fn add_task(
         &self,
         title: &str,
-        area: CliArea,
+        area: Area,
         project: Option<String>,
         context: Option<String>,
         estimate_minutes: Option<i64>,
@@ -254,7 +254,7 @@ impl Database {
         tags: Option<String>,
         priority: Option<i64>,
     ) -> Result<i64> {
-        let task = Task::new(title, Area::from(area), project, context);
+        let task = Task::new(title, area, project, context);
 
         self.rt.block_on(async {
             let mut rows = self.conn.query(
@@ -313,17 +313,17 @@ impl Database {
         }
     }
 
-    pub fn list_tasks(&self, area: Option<CliArea>) -> Result<Vec<Task>> {
+    pub fn list_tasks(&self, area: Option<Area>) -> Result<Vec<Task>> {
         self.list_tasks_sorted(area, SortBy::Created)
     }
 
-    pub fn list_tasks_sorted(&self, area: Option<CliArea>, sort: SortBy) -> Result<Vec<Task>> {
+    pub fn list_tasks_sorted(&self, area: Option<Area>, sort: SortBy) -> Result<Vec<Task>> {
         self.rt.block_on(async {
             let mut tasks = Vec::new();
 
             if let Some(area) = area {
-                let area_str = Area::from(area).as_str();
-                let is_completed = matches!(area, CliArea::Completed);
+                let area_str = area.as_str();
+                let is_completed = matches!(area, Area::Completed);
                 let order = Self::sort_order_sql(sort, is_completed);
                 let filter = if is_completed {
                     "WHERE t.area = ?1 AND COALESCE(t.is_template, 0) = 0"
@@ -619,7 +619,7 @@ impl Database {
         Ok((task.title, notes))
     }
 
-    pub fn update_task_fields(&self, query: &str, input: &ParsedInput, area: Option<CliArea>) -> Result<String> {
+    pub fn update_task_fields(&self, query: &str, input: &ParsedInput, area: Option<Area>) -> Result<String> {
         let task = self.resolve_task(query)?;
         self.update_task_fields_by_id(&task.id, input, area)?;
         Ok(task.title)
@@ -758,7 +758,7 @@ impl Database {
         })
     }
 
-    pub fn update_task_fields_by_id(&self, task_id: &str, input: &ParsedInput, area: Option<CliArea>) -> Result<()> {
+    pub fn update_task_fields_by_id(&self, task_id: &str, input: &ParsedInput, area: Option<Area>) -> Result<()> {
         self.rt.block_on(async {
             if let Some(ref project) = input.project {
                 self.conn.execute(
@@ -807,7 +807,7 @@ impl Database {
             if let Some(area) = area {
                 self.conn.execute(
                     "UPDATE tasks SET area = ?1 WHERE id = ?2",
-                    params![Area::from(area).as_str(), task_id],
+                    params![area.as_str(), task_id],
                 ).await?;
             }
             self.conn.execute(
@@ -1482,13 +1482,3 @@ fn row_to_session(row: &libsql::Row) -> Result<Session> {
     })
 }
 
-impl From<CliArea> for Area {
-    fn from(area: CliArea) -> Self {
-        match area {
-            CliArea::LongTerm => Area::LongTerm,
-            CliArea::ThisWeek => Area::ThisWeek,
-            CliArea::Today => Area::Today,
-            CliArea::Completed => Area::Completed,
-        }
-    }
-}

@@ -17,7 +17,7 @@ use ratatui::{
 };
 use std::io;
 
-use dodo::cli::{Area as CliArea, SortBy};
+use dodo::cli::SortBy;
 use dodo::db::Database;
 use dodo::notation::{parse_date, parse_duration, parse_notation};
 use dodo::task::{Area, Task, TaskStatus};
@@ -677,7 +677,7 @@ impl<'a> App<'a> {
 
             self.db.add_task(
                 &title,
-                CliArea::Today,
+                Area::Today,
                 parsed.project,
                 context,
                 estimate,

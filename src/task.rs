@@ -1,4 +1,5 @@
 use chrono::{DateTime, Local, NaiveDate, Utc};
+use clap::ValueEnum;
 use std::fmt;
 
 #[derive(Clone, Debug)]
@@ -25,11 +26,15 @@ pub struct Task {
     pub template_id: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
 pub enum Area {
+    #[value(name = "long")]
     LongTerm,
+    #[value(name = "week")]
     ThisWeek,
+    #[value(name = "today")]
     Today,
+    #[value(name = "done")]
     Completed,
 }
 
@@ -243,6 +248,12 @@ impl Area {
             Area::Today => "Today",
             Area::Completed => "Completed",
         }
+    }
+}
+
+impl From<Area> for String {
+    fn from(area: Area) -> String {
+        area.as_str().to_string()
     }
 }
 
