@@ -615,66 +615,7 @@ impl Database {
 
     pub fn update_task_fields(&self, query: &str, input: &ParsedInput, area: Option<CliArea>) -> Result<String> {
         let task = self.resolve_task(query)?;
-
-        self.rt.block_on(async {
-            if let Some(ref project) = input.project {
-                self.conn.execute(
-                    "UPDATE tasks SET project = ?1 WHERE id = ?2",
-                    params![project.clone(), task.id.clone()],
-                ).await?;
-            }
-            if !input.contexts.is_empty() {
-                let ctx = input.contexts.join(",");
-                self.conn.execute(
-                    "UPDATE tasks SET context = ?1 WHERE id = ?2",
-                    params![ctx, task.id.clone()],
-                ).await?;
-            }
-            if !input.tags.is_empty() {
-                let tags = input.tags.join(",");
-                self.conn.execute(
-                    "UPDATE tasks SET tags = ?1 WHERE id = ?2",
-                    params![tags, task.id.clone()],
-                ).await?;
-            }
-            if let Some(est) = input.estimate_minutes {
-                self.conn.execute(
-                    "UPDATE tasks SET estimate_minutes = ?1 WHERE id = ?2",
-                    params![est, task.id.clone()],
-                ).await?;
-            }
-            if let Some(ref dl) = input.deadline {
-                self.conn.execute(
-                    "UPDATE tasks SET deadline = ?1 WHERE id = ?2",
-                    params![dl.to_string(), task.id.clone()],
-                ).await?;
-            }
-            if let Some(ref sc) = input.scheduled {
-                self.conn.execute(
-                    "UPDATE tasks SET scheduled = ?1 WHERE id = ?2",
-                    params![sc.to_string(), task.id.clone()],
-                ).await?;
-            }
-            if let Some(p) = input.priority {
-                self.conn.execute(
-                    "UPDATE tasks SET priority = ?1 WHERE id = ?2",
-                    params![p, task.id.clone()],
-                ).await?;
-            }
-            if let Some(area) = area {
-                self.conn.execute(
-                    "UPDATE tasks SET area = ?1 WHERE id = ?2",
-                    params![Area::from(area).as_str(), task.id.clone()],
-                ).await?;
-            }
-            self.conn.execute(
-                "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
-                params![Utc::now().to_rfc3339(), task.id.clone()],
-            ).await?;
-
-            Ok::<(), anyhow::Error>(())
-        })?;
-
+        self.update_task_fields_by_id(&task.id, input, area)?;
         Ok(task.title)
     }
 
