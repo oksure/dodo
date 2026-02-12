@@ -22,8 +22,11 @@ anyhow = "1.0"
 # CLI parsing
 clap = { version = "4.5", features = ["derive"] }
 
-# Database
-rusqlite = { version = "0.38", features = ["bundled", "chrono", "uuid"] }
+# Database (libsql — SQLite-compatible, supports Turso sync)
+libsql = "0.9"
+
+# Async runtime (required by libsql)
+tokio = { version = "1.40", features = ["rt", "macros"] }
 
 # TUI
 ratatui = "0.30"
@@ -46,17 +49,12 @@ dirs = "6.0"
 # CLI colors
 colored = "3"
 
-# HTTP (for sync/MCP)
-reqwest = { version = "0.12", features = ["json"], optional = true }
-tokio = { version = "1.40", features = ["full"], optional = true }
+# AWS SDK for S3-compatible backup
+aws-config = "1.5"
+aws-sdk-s3 = "1.47"
 
-# AWS SDK for R2
-aws-config = { version = "1.5", optional = true }
-aws-sdk-s3 = { version = "1.47", optional = true }
-
-[features]
-default = []
-sync = ["reqwest", "tokio", "aws-config", "aws-sdk-s3"]
+# Compression for backups
+flate2 = "1.0"
 
 [dev-dependencies]
 tempfile = "3.12"

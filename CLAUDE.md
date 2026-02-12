@@ -15,20 +15,23 @@ cargo test
 - `src/lib.rs` — library crate root, re-exports all modules
 - `src/main.rs` — binary entry point, command dispatch, output formatting
 - `src/cli.rs` — clap command/argument definitions
-- `src/db.rs` — SQLite database (rusqlite), migrations, all queries, session lifecycle
+- `src/db.rs` — SQLite database (libsql), migrations, all queries, session lifecycle
 - `src/task.rs` — `Task` struct, `Area`/`TaskStatus` enums, `Display` impl
 - `src/session.rs` — `Session` struct with `elapsed_seconds()`, `stop()`, `is_running()`
 - `src/fuzzy.rs` — fuzzy matching with scored ranking (`score()`, `find_best_match()`, `rank_matches()`)
 - `src/notation.rs` — inline notation parser (`parse_notation()`, `parse_duration()`, `parse_date()`)
-- `src/tui.rs` — ratatui terminal UI with four-pane layout and report tab (binary-only, not in lib)
+- `src/config.rs` — config file parsing (`~/.config/dodo/config.toml`) for sync and backup settings
+- `src/backup.rs` — S3-compatible backup operations (create, list, restore, delete, prune, age check)
+- `src/tui.rs` — ratatui terminal UI with four-pane layout, report tab, and backup tab (binary-only, not in lib)
 - `tests/fuzzy_test.rs` — 8 unit tests for fuzzy scoring logic
-- `tests/notation_test.rs` — 41 unit tests for notation/duration/date/priority parsing
-- `tests/workflow_test.rs` — 30 integration tests covering real-world workflows
+- `tests/notation_test.rs` — 61 unit tests for notation/duration/date/priority/recurrence parsing
+- `tests/config_test.rs` — 22 unit tests for config parsing, defaults, is_ready checks, serialization roundtrip
+- `tests/workflow_test.rs` — 43 integration tests covering real-world workflows
 - `USAGE.md` — real-world use cases with GTD, Pomodoro, Eisenhower frameworks
 
 ## Key Patterns
 
-- **Lib/bin split**: `src/lib.rs` exposes `cli`, `db`, `fuzzy`, `notation`, `session`, `task` as public modules. `src/main.rs` is the binary that also owns `tui` (since it depends on ratatui/crossterm). Integration tests import via `dodo::`.
+- **Lib/bin split**: `src/lib.rs` exposes `backup`, `cli`, `config`, `db`, `fuzzy`, `notation`, `session`, `task` as public modules. `src/main.rs` is the binary that also owns `tui` (since it depends on ratatui/crossterm). Integration tests import via `dodo::`.
 - **Inline notation**: `notation.rs::parse_notation()` extracts 7 token types from input: `+project`, `@context` (multiple), `#tag` (multiple), `~duration`, `^deadline`, `=scheduled`, `!`–`!!!!` priority. Remaining text becomes the title. Single-value tokens use last-wins; multi-value tokens collect all. Tokens must be preceded by whitespace (e.g., `email@test` is not parsed).
 - **Duration parsing**: `~30m`, `~1h`, `~1h30m`, `~1d` (480m = 8h workday), `~1w` (2400m = 5×8h). Units are composable: `~2d4h`.
 - **Date parsing**: Named (`today`/`tdy`, `tomorrow`/`tmr`, `yesterday`/`ytd`), day names (`mon`–`sun` → next occurrence), relative (`3d`, `2w`, `1m`, `-3d`), MMDD (`0115`), YYYYMMDD (`20250502`), ISO (`2025-05-02`).
@@ -43,31 +46,46 @@ cargo test
 - **Start/stop toggle**: `dodo s` with no args pauses the running task. No separate `pause` command. In TUI, `s` toggles: if task is Running, pauses it; otherwise starts it.
 - **CLI grouped list**: `dodo ls` with no area shows all four groups (TODAY, THIS WEEK, LONG TERM, DONE) with section headers and counts. DONE is limited to 5 tasks. Specifying an area (`dodo ls today`) shows just that area. `--project` flag filters by project.
 - **Display format**: Tasks render as `[num_id] [status_icon] AREA title [*] !priority +project @context #tag ~estimate ^deadline =scheduled (elapsed/estimate) [running]`. The `*` appears after the title if the task has notes.
-- **Sorting**: `SortBy` enum in `cli.rs` (`Created`, `Modified`, `Area`, `Title`). Non-done tasks sort ASC (oldest first), done tasks sort DESC (newest first). TUI cycles sort with `o` key.
+- **Sorting**: `SortBy` enum in `cli.rs` (`Created`, `Modified`, `Area`, `Title`). Per-pane `sort_ascending` flag. TUI `o` key cycles: `created↑ → created↓ → modified↑ → modified↓ → title↑ → title↓`. DONE pane defaults to `modified↓` (newest done first). Pane header shows sort label with ↑/↓ arrow right-aligned.
 - **Modified tracking**: `modified_at` column on tasks, updated by all mutation methods (`start_timer`, `pause_timer`, `complete_task`, `update_task_fields`, `append_note`, `clear_notes`). Used for `--sort modified` ordering.
 - **TUI header legend**: Right-aligned symbol legend on the DODO header line showing status icons (`○ ▶ ⏸ ✓`) and notation symbols (`+proj @ctx ~est ^dead =sched !pri`) with matching colors.
-- **TUI two-tab layout**: Tab 1 (Tasks): four vertical panes (LONG TERM, THIS WEEK, TODAY, DONE) with `h`/`l` pane navigation, `j`/`k` task navigation. Pane headers show elapsed/estimate/percentage/done stats. Tab 2 (Report): productivity stats with DAY/WEEK/MONTH/YEAR/ALL range selector. Switch tabs with `t`/`r`/`Tab`.
-- **TUI colors**: Running tasks animate (Green→LightGreen→Cyan cycling). Priority colored by level (Red for !!!!). Projects in Magenta. Elapsed colored by estimate progress (Green→Yellow→Red). Deadlines Red if overdue, Yellow if upcoming.
-- **TUI note modal**: `n` key opens NoteView if task has notes (j/k navigate, `e` edit, `d` delete, `a` append), or goes straight to append input if no notes. `Alt+Enter` inserts newlines within a note entry. `AppMode` enum: Normal, AddTask, MoveTask, ConfirmDelete, EditTask, EditTaskField, NoteView. NoteView supports inline editing with `note_editing` flag.
+- **TUI search bar**: Bordered box between tab bar and panes, activated with `/`. Live-filters tasks across all panes as you type. Supports `+project` (project filter), `@context` (context filter), and plain text (title substring match), all AND-ed. `Enter`/`Esc` exits search mode (filter stays). `AppMode::Search` handles input.
+- **TUI done/undone follows cursor**: Pressing `d` to mark done/undone moves the cursor to the task's new pane (e.g., TODAY→DONE or DONE→TODAY).
+- **TUI pane layout**: Tasks tab has four vertical panes (LONG TERM, THIS WEEK, TODAY, DONE) with `h`/`l` pane navigation, `j`/`k` task navigation. Pane headers show elapsed/estimate/percentage/done stats. Report tab has DAY/WEEK/MONTH/YEAR/ALL range selector. Switch tabs with `t`/`c`/`r`/`Tab`.
+- **TUI colors**: Running tasks animate with pastel rainbow sweep (continuous left→right). Priority colored by level (Red for !!!!). Projects in Magenta. Elapsed colored by estimate progress (Green→Yellow→Red). Deadlines Red if overdue, Yellow if upcoming.
+- **TUI note modal**: `n` key opens NoteView if task has notes (j/k navigate, `e` edit, `d` delete, `a` append), or goes straight to append input if no notes. `Alt+Enter` inserts newlines within a note entry. `AppMode` enum: Normal, AddTask, MoveTask, ConfirmDelete, EditTask, EditTaskField, NoteView, Search. NoteView supports inline editing with `note_editing` flag.
 - **TUI responsiveness**: Event loop polls at 16ms (~60fps) for instant key response, data refresh on 1-second timer. Tick counter drives running task animation.
 - **Report queries**: `db.rs` has 7 report methods: `report_tasks_done`, `report_total_seconds`, `report_by_hour`, `report_by_weekday`, `report_by_project`, `report_done_tasks`, `report_active_days`. All take date range strings.
 - **DB migrations**: Schema changes use check-then-alter pattern in `db.rs::migrate()`. New columns are added with `ALTER TABLE` guarded by a `SELECT` probe.
 - **Complete prefers running**: `complete_task()` uses `ORDER BY` to prefer Running tasks over Paused ones when multiple are active.
 - **Quote-free input**: Add, Start, Remove, Edit, Note commands use `Vec<String>` with `trailing_var_arg` so users can type `dodo a fix login bug +backend ~2h !!!` without quotes.
 - **Notation precedence**: Inline notation tokens override CLI flags (e.g., `+backend` in text overrides `--project`).
+- **Recurring tasks**: Template + instance model. Templates (`is_template=1`) live in the Recurring tab and generate instances that appear in normal panes. Recurrence patterns: `*daily`, `*3d`, `*weekly`, `*2w`, `*monthly`, `*3m`, `*mon,wed,fri`, `*day15`. One active instance per template. Completing an instance auto-generates the next. Deleting an instance = skip; `g` (generate) recreates. Paused templates stop generating. CLI: `dodo rec` (list/add/edit/delete/pause/resume/generate/history).
+- **TUI four-tab layout**: Tab 1 (Tasks, `t`): four vertical panes. Tab 2 (Recurring, `c`): template list with pause/generate/edit. Tab 3 (Report, `r`): productivity stats. Tab 4 (Backup, `b`): S3 backup list with upload/restore/delete. `Tab` cycles through all four.
+- **Recurrence notation**: `parse_recurrence()` validates patterns. `next_occurrence()` computes the next date from a pattern + reference date. Day-of-month clamps to last day (e.g., day31 in Feb → Feb 28).
+- **Instance indicator**: Recurring instances show `↻` after the title in task panes.
+- **Database engine**: Uses `libsql` (SQLite-compatible fork supporting Turso embedded replicas). `Database` struct stores `libsql::Database` handle + `Connection` + `tokio::runtime::Runtime`. Local-only via `Database::new()` / `Builder::new_local()`. Turso sync via `Database::new_with_sync(url, token)` / `Builder::new_remote_replica()` with 60s auto-sync interval and `read_your_writes(true)`. `db.sync()` triggers on-demand sync. All DB methods use an async bridge: each method wraps async libsql calls in `self.rt.block_on()`. Row value extraction uses helper functions (`val_string`, `val_i64`, `val_bool`, `val_opt_string`, `val_opt_i64`, `val_opt_bool`) since libsql uses a `Value` enum for nullable fields.
+- **Config file**: `~/.config/dodo/config.toml` with `[sync]` and `[backup]` sections. Parsed via `config.rs` with serde. Env var fallbacks: `DODO_TURSO_TOKEN`, `DODO_S3_ACCESS_KEY`, `DODO_S3_SECRET_KEY` (only used when config field is `None`). `SyncConfig::is_ready()` and `BackupConfig::is_ready()` check all required fields are present and enabled.
+- **S3 backup**: `backup.rs` provides `create_backup` (gzip compress + upload), `list_backups` (newest first), `restore_backup` (download + decompress + safety `.pre-restore` copy), `delete_backup`, `check_backup_age` (startup overdue warning). Auto-prunes old backups beyond `max_backups` limit. CLI: `dodo backup` (create), `dodo backup list`, `dodo backup restore [latest]`, `dodo backup delete <name>`.
+- **Turso sync**: Wired up via `Database::new_with_sync()` when `SyncConfig::is_ready()`. Uses `Builder::new_remote_replica()` with 60s auto-sync interval. `main.rs` loads config before DB init and branches on sync readiness. `dodo sync status/enable/disable` commands. Sync config stored in `[sync]` section of config file. Enable flow is interactive (prompts for URL/token).
+- **TUI Backup tab**: Shows config instructions when not configured, or backup list with name/age/size. Sync status indicator at top: `● enabled` (green) with Turso URL, or `○ not configured` (dim). When backup is unconfigured, also shows sync config instructions. Keys: `j/k` navigate, `u` upload, `r` restore, `d` delete. Status messages shown for operation results.
+- **Startup backup check**: On every CLI invocation, if backup is configured and overdue (>= `schedule_days` since last backup), prints a reminder to stderr.
 
 ## Database
 
-- SQLite stored at `~/.local/share/dodo/dodo.db`
+- libsql (SQLite-compatible) stored at `~/.local/share/dodo/dodo.db`
+- `Database::new_with_sync(url, token)` for Turso embedded replica mode
 - `Database::in_memory()` available for tests
-- Tables: `tasks` (with `num_id INTEGER UNIQUE`, `estimate_minutes`, `deadline`, `scheduled`, `tags`, `task_notes`, `priority`, `modified_at`), `sessions`
+- Tables: `tasks` (with `num_id INTEGER UNIQUE`, `estimate_minutes`, `deadline`, `scheduled`, `tags`, `task_notes`, `priority`, `modified_at`, `recurrence`, `is_template`, `template_id`), `sessions`
 
 ## Testing
 
-- `cargo test` runs all 79 tests
-- `tests/fuzzy_test.rs` — unit tests for fuzzy scoring (exact, prefix, substring, word-level, ranking)
-- `tests/notation_test.rs` — unit tests for notation parsing (duration, dates, token extraction, title cleanup, edge cases)
-- `tests/workflow_test.rs` — integration tests using `Database::in_memory()`, covering: simple daily list, Pomodoro start/pause/resume, GTD four horizons with contexts and projects, Eisenhower quadrants, freelance multi-project time tracking, numeric ID selection, fuzzy matching integration, academic multi-area workflow, session lifecycle, estimates, elapsed time, notes, edit command, multiple contexts, tags, deadlines, priority
+- `cargo test` runs all 159 tests
+- `src/backup.rs` (inline) — 25 unit tests for format_size, format_age, parse_backup_timestamp
+- `tests/config_test.rs` — 22 unit tests for config parsing, TOML deserialization, defaults, is_ready checks, serialize/deserialize roundtrip
+- `tests/fuzzy_test.rs` — 8 unit tests for fuzzy scoring (exact, prefix, substring, word-level, ranking)
+- `tests/notation_test.rs` — 61 unit tests for notation parsing (duration, dates, token extraction, title cleanup, edge cases, recurrence patterns, next occurrence computation)
+- `tests/workflow_test.rs` — 43 integration tests using `Database::in_memory()`, covering: simple daily list, Pomodoro start/pause/resume, GTD four horizons with contexts and projects, Eisenhower quadrants, freelance multi-project time tracking, numeric ID selection, fuzzy matching integration, academic multi-area workflow, session lifecycle, estimates, elapsed time, notes, edit command, multiple contexts, tags, deadlines, priority, recurring template CRUD, instance generation, pause/resume, history, update_notes_by_id
 
 ## Conventions
 

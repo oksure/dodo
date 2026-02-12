@@ -509,3 +509,243 @@ fn priority_stored_and_displayed() {
     let display = format!("{}", task);
     assert!(display.contains("!!!"));
 }
+
+// ── 18. Recurring: Template CRUD ────────────────────────────────────
+
+#[test]
+fn recurring_add_template_creates_template_and_instance() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    let num_id = db.add_template(
+        "standup", "daily", Some("work".into()), None,
+        Some(15), None, Some(today), None, None,
+    ).unwrap();
+    assert_eq!(num_id, 1);
+
+    // Template should be in templates list
+    let templates = db.list_templates().unwrap();
+    assert_eq!(templates.len(), 1);
+    assert_eq!(templates[0].title, "standup");
+    assert!(templates[0].is_template);
+    assert_eq!(templates[0].recurrence, Some("daily".into()));
+
+    // First instance should be created
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all.len(), 1); // Just the instance (templates are excluded)
+    assert_eq!(all[0].title, "standup");
+    assert!(!all[0].is_template);
+    assert_eq!(all[0].template_id, Some(templates[0].id.clone()));
+}
+
+#[test]
+fn recurring_templates_excluded_from_normal_listings() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_template("standup", "daily", None, None, Some(15), None, Some(today), None, None).unwrap();
+    db.add_task("normal task", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    // Should see instance + normal task, but NOT the template
+    assert_eq!(all.len(), 2);
+    assert!(all.iter().all(|t| !t.is_template));
+}
+
+#[test]
+fn recurring_delete_template_removes_template_and_active_instance() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+
+    let templates = db.list_templates().unwrap();
+    assert_eq!(templates.len(), 1);
+
+    db.delete_template(&templates[0].id).unwrap();
+
+    let templates = db.list_templates().unwrap();
+    assert!(templates.is_empty());
+
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert!(all.is_empty());
+}
+
+// ── 19. Recurring: Instance Generation ──────────────────────────────
+
+#[test]
+fn recurring_complete_instance_generates_next() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_template("standup", "daily", None, None, Some(15), None, Some(today), None, None).unwrap();
+
+    // Find the instance
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all.len(), 1);
+    let instance_id = all[0].id.clone();
+
+    // Complete the instance
+    db.complete_task_by_id(&instance_id).unwrap();
+
+    // Should now have a new instance (old one is in Done)
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    let non_done: Vec<_> = all.iter().filter(|t| t.status != dodo::task::TaskStatus::Done).collect();
+    let done: Vec<_> = all.iter().filter(|t| t.status == dodo::task::TaskStatus::Done).collect();
+    assert_eq!(non_done.len(), 1, "should have 1 active instance");
+    assert_eq!(done.len(), 1, "should have 1 done instance");
+    assert_eq!(non_done[0].title, "standup");
+}
+
+#[test]
+fn recurring_one_active_instance_constraint() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+
+    // Generate should create nothing since there's already an active instance
+    let created = db.generate_instances().unwrap();
+    assert_eq!(created, 0);
+}
+
+#[test]
+fn recurring_generate_after_delete_recreates() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+
+    // Delete the instance (skip)
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all.len(), 1);
+    db.delete_task_by_id(&all[0].id).unwrap();
+
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert!(all.is_empty());
+
+    // Generate should recreate
+    let created = db.generate_instances().unwrap();
+    assert_eq!(created, 1);
+
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].title, "standup");
+}
+
+// ── 20. Recurring: Pause/Resume ─────────────────────────────────────
+
+#[test]
+fn recurring_pause_stops_generation() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+
+    let templates = db.list_templates().unwrap();
+    let tid = templates[0].id.clone();
+
+    // Pause the template
+    db.pause_template(&tid).unwrap();
+
+    // Complete the active instance
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    db.complete_task_by_id(&all[0].id).unwrap();
+
+    // Should NOT generate a new instance since template is paused
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    let non_done: Vec<_> = all.iter().filter(|t| t.status != dodo::task::TaskStatus::Done).collect();
+    assert_eq!(non_done.len(), 0, "paused template should not generate new instance");
+
+    // Resume and generate
+    db.resume_template(&tid).unwrap();
+    let created = db.generate_instances().unwrap();
+    assert_eq!(created, 1);
+}
+
+// ── 21. Recurring: History ──────────────────────────────────────────
+
+#[test]
+fn recurring_history_shows_completed_instances() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+
+    let templates = db.list_templates().unwrap();
+    let tid = templates[0].id.clone();
+
+    // Complete two instances
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    db.complete_task_by_id(&all[0].id).unwrap();
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    let active: Vec<_> = all.iter().filter(|t| t.status != dodo::task::TaskStatus::Done).collect();
+    db.complete_task_by_id(&active[0].id).unwrap();
+
+    let history = db.template_history(&tid).unwrap();
+    assert_eq!(history.len(), 2);
+}
+
+// ── 22. Recurring: Resolve Template ─────────────────────────────────
+
+#[test]
+fn recurring_resolve_template_by_name() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+
+    let template = db.resolve_template("standup").unwrap();
+    assert!(template.is_template);
+    assert_eq!(template.title, "standup");
+}
+
+#[test]
+fn recurring_resolve_template_by_num_id() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    let num_id = db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+
+    let template = db.resolve_template(&num_id.to_string()).unwrap();
+    assert!(template.is_template);
+    assert_eq!(template.title, "standup");
+}
+
+// ── Update notes by ID ──────────────────────────────────────────────
+
+#[test]
+fn update_notes_by_id_sets_notes() {
+    let db = test_db();
+    let num_id = db
+        .add_task("test task", Area::Today, None, None, None, None, None, None, None)
+        .unwrap();
+    let tasks = db.list_tasks(Some(Area::Today)).unwrap();
+    let task = tasks.iter().find(|t| t.num_id == Some(num_id)).unwrap();
+
+    db.update_notes_by_id(&task.id, "line one\nline two").unwrap();
+    let notes = db.get_task_notes_by_id(&task.id).unwrap();
+    assert_eq!(notes, Some("line one\nline two".to_string()));
+}
+
+#[test]
+fn update_notes_by_id_empty_clears_notes() {
+    let db = test_db();
+    let num_id = db
+        .add_task("test task", Area::Today, None, None, None, None, None, None, None)
+        .unwrap();
+    let tasks = db.list_tasks(Some(Area::Today)).unwrap();
+    let task = tasks.iter().find(|t| t.num_id == Some(num_id)).unwrap();
+
+    db.append_note(&task.id, "existing note").unwrap();
+    assert!(db.get_task_notes_by_id(&task.id).unwrap().is_some());
+
+    db.update_notes_by_id(&task.id, "").unwrap();
+    let notes = db.get_task_notes_by_id(&task.id).unwrap();
+    assert!(notes.is_none());
+}
+
+#[test]
+fn update_notes_by_id_replaces_existing() {
+    let db = test_db();
+    let num_id = db
+        .add_task("test task", Area::Today, None, None, None, None, None, None, None)
+        .unwrap();
+    let tasks = db.list_tasks(Some(Area::Today)).unwrap();
+    let task = tasks.iter().find(|t| t.num_id == Some(num_id)).unwrap();
+
+    db.append_note(&task.id, "old note").unwrap();
+    db.update_notes_by_id(&task.id, "completely new content").unwrap();
+    let notes = db.get_task_notes_by_id(&task.id).unwrap();
+    assert_eq!(notes, Some("completely new content".to_string()));
+}

@@ -12,10 +12,11 @@ A keyboard-first todo + time tracker CLI written in Rust.
 - **Time tracking** — start/stop toggle, elapsed/estimate display with seconds
 - **Estimates & deadlines** — `~2h` estimates, `^friday` deadlines, `=wed` scheduling
 - **Priority** — `!` to `!!!!` urgency levels (4 = most urgent)
-- **Notes** — timestamped notes on any task
+- **Notes** — timestamped notes on any task, per-note editing/deletion in TUI
 - **TUI mode** — four-pane task layout + report tab with productivity stats
-- **TUI colors** — animated running tasks, color-coded priority/deadlines/progress
-- **Sorting** — `--sort created|modified|title|area` on list command
+- **TUI search** — live-filtering search bar with `+project`, `@context`, and fuzzy text
+- **TUI colors** — pastel rainbow sweep on running tasks, color-coded priority/deadlines/progress
+- **Sorting** — per-pane sort cycling (`o` key): created/modified/title with ↑asc/↓desc
 - **Cloud sync** — R2/Dropbox support (optional)
 
 ## Quick Start
@@ -56,8 +57,8 @@ dodo n 1              # interactive: type note, Ctrl+D to finish
 # Remove by numeric ID or fuzzy match
 dodo rm 1
 
-# Open TUI (four-pane tasks + report tab)
-dodo tui
+# Open TUI (default when running dodo with no command)
+dodo
 ```
 
 ## Inline Notation
@@ -88,7 +89,9 @@ Notation tokens are extracted and the remaining text becomes the title. Flags (`
 | `edit` | `e` | Edit task metadata via notation |
 | `note` | `n` | Add/view/clear notes on a task |
 | `remove` | `rm` | Delete task (by ID or fuzzy match) |
-| `tui` | `t` | Open TUI |
+| `help` | `h` | Show CLI help |
+
+Running `dodo` with no command launches the TUI.
 
 ## TUI Keys
 
@@ -101,19 +104,33 @@ The TUI has two tabs: **Tasks** (four-pane layout) and **Report** (productivity 
 | `h`/`l` | Move between panes |
 | `j`/`k` | Navigate tasks within pane |
 | `s` | Toggle start/stop on selected task |
-| `d` | Mark running task done |
+| `d` | Mark done/undone (cursor follows task) |
+| `a` | Add new task |
 | `n` | Open note modal for selected task |
-| `o` | Cycle sort (created → modified → title) |
-| `r` | Refresh |
-| `1`/`2`/`Tab` | Switch tabs |
+| `o` | Cycle sort (created↑ → created↓ → modified↑ → ... → title↓) |
+| `/` | Focus search bar (filter by `+project`, `@context`, or text) |
+| `<`/`>` | Quick-move task between panes |
+| `Enter` | Open task detail/edit modal |
+| `Backspace` | Delete task (with confirmation) |
+| `t`/`r`/`Tab` | Switch tabs |
 | `q`/`Esc` | Quit |
+
+### Search Bar
+
+| Key | Action |
+|-----|--------|
+| `/` | Focus search bar |
+| type | Live-filter tasks across all panes |
+| `Enter`/`Esc` | Exit search (filter stays active) |
+
+Filter syntax: `+backend` (project), `@john` (context), `fix bug` (title substring). All terms are AND-ed.
 
 ### Report Tab
 
 | Key | Action |
 |-----|--------|
 | `h`/`l` | Change time range (Day/Week/Month/Year/All) |
-| `1`/`2`/`Tab` | Switch tabs |
+| `t`/`r`/`Tab` | Switch tabs |
 | `q`/`Esc` | Quit |
 
 ## Installation

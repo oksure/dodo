@@ -20,6 +20,9 @@ pub struct Task {
     pub tags: Option<String>,
     pub notes: Option<String>,
     pub elapsed_seconds: Option<i64>,
+    pub recurrence: Option<String>,
+    pub is_template: bool,
+    pub template_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -58,6 +61,9 @@ impl Task {
             tags: None,
             notes: None,
             elapsed_seconds: None,
+            recurrence: None,
+            is_template: false,
+            template_id: None,
         }
     }
 

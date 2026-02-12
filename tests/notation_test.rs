@@ -321,3 +321,168 @@ fn five_bangs_not_priority() {
     assert_eq!(p.title, "Task !!!!!");
     assert_eq!(p.priority, None);
 }
+
+// ── Recurrence notation ────────────────────────────────────────────
+
+use dodo::notation::{parse_recurrence, next_occurrence};
+
+#[test]
+fn recurrence_daily() {
+    assert_eq!(parse_recurrence("daily"), Some("daily".into()));
+    assert_eq!(parse_recurrence("1d"), Some("daily".into()));
+}
+
+#[test]
+fn recurrence_weekly() {
+    assert_eq!(parse_recurrence("weekly"), Some("weekly".into()));
+    assert_eq!(parse_recurrence("1w"), Some("weekly".into()));
+}
+
+#[test]
+fn recurrence_monthly() {
+    assert_eq!(parse_recurrence("monthly"), Some("monthly".into()));
+    assert_eq!(parse_recurrence("1m"), Some("monthly".into()));
+}
+
+#[test]
+fn recurrence_interval_days() {
+    assert_eq!(parse_recurrence("3d"), Some("3d".into()));
+    assert_eq!(parse_recurrence("14d"), Some("14d".into()));
+}
+
+#[test]
+fn recurrence_interval_weeks() {
+    assert_eq!(parse_recurrence("2w"), Some("2w".into()));
+}
+
+#[test]
+fn recurrence_interval_months() {
+    assert_eq!(parse_recurrence("3m"), Some("3m".into()));
+}
+
+#[test]
+fn recurrence_day_of_month() {
+    assert_eq!(parse_recurrence("day15"), Some("day15".into()));
+    assert_eq!(parse_recurrence("day1"), Some("day1".into()));
+    assert_eq!(parse_recurrence("day31"), Some("day31".into()));
+}
+
+#[test]
+fn recurrence_weekday_list() {
+    assert_eq!(parse_recurrence("mon,wed,fri"), Some("mon,wed,fri".into()));
+    assert_eq!(parse_recurrence("tue,thu"), Some("tue,thu".into()));
+}
+
+#[test]
+fn recurrence_invalid() {
+    assert_eq!(parse_recurrence("foo"), None);
+    assert_eq!(parse_recurrence("0d"), None);
+    assert_eq!(parse_recurrence("day0"), None);
+    assert_eq!(parse_recurrence("day32"), None);
+}
+
+#[test]
+fn recurrence_token_in_notation() {
+    let p = parse_notation("standup *daily +work ~15m");
+    assert_eq!(p.title, "standup");
+    assert_eq!(p.recurrence, Some("daily".into()));
+    assert_eq!(p.project, Some("work".into()));
+    assert_eq!(p.estimate_minutes, Some(15));
+}
+
+#[test]
+fn recurrence_weekday_in_notation() {
+    let p = parse_notation("code review *mon,wed,fri +backend");
+    assert_eq!(p.title, "code review");
+    assert_eq!(p.recurrence, Some("mon,wed,fri".into()));
+    assert_eq!(p.project, Some("backend".into()));
+}
+
+#[test]
+fn recurrence_day_of_month_in_notation() {
+    let p = parse_notation("pay rent *day15 !!");
+    assert_eq!(p.title, "pay rent");
+    assert_eq!(p.recurrence, Some("day15".into()));
+    assert_eq!(p.priority, Some(2));
+}
+
+// ── Next occurrence computation ────────────────────────────────────
+
+#[test]
+fn next_occurrence_daily() {
+    let from = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+    assert_eq!(
+        next_occurrence("daily", from),
+        Some(NaiveDate::from_ymd_opt(2026, 2, 11).unwrap())
+    );
+}
+
+#[test]
+fn next_occurrence_3d() {
+    let from = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+    assert_eq!(
+        next_occurrence("3d", from),
+        Some(NaiveDate::from_ymd_opt(2026, 2, 13).unwrap())
+    );
+}
+
+#[test]
+fn next_occurrence_weekly() {
+    let from = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+    assert_eq!(
+        next_occurrence("weekly", from),
+        Some(NaiveDate::from_ymd_opt(2026, 2, 17).unwrap())
+    );
+}
+
+#[test]
+fn next_occurrence_monthly() {
+    let from = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+    assert_eq!(
+        next_occurrence("monthly", from),
+        Some(NaiveDate::from_ymd_opt(2026, 2, 15).unwrap())
+    );
+}
+
+#[test]
+fn next_occurrence_day_of_month() {
+    // From day 10, day15 should give 15th of same month
+    let from = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+    assert_eq!(
+        next_occurrence("day15", from),
+        Some(NaiveDate::from_ymd_opt(2026, 2, 15).unwrap())
+    );
+
+    // From day 20, day15 should give 15th of next month
+    let from = NaiveDate::from_ymd_opt(2026, 2, 20).unwrap();
+    assert_eq!(
+        next_occurrence("day15", from),
+        Some(NaiveDate::from_ymd_opt(2026, 3, 15).unwrap())
+    );
+}
+
+#[test]
+fn next_occurrence_day31_in_february() {
+    // day31 in February should clamp to Feb 28
+    let from = NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+    assert_eq!(
+        next_occurrence("day31", from),
+        Some(NaiveDate::from_ymd_opt(2026, 2, 28).unwrap())
+    );
+}
+
+#[test]
+fn next_occurrence_weekday_list() {
+    // Feb 10, 2026 is Tuesday. mon,wed,fri → next is Wed Feb 11
+    let from = NaiveDate::from_ymd_opt(2026, 2, 10).unwrap();
+    let next = next_occurrence("mon,wed,fri", from);
+    assert_eq!(next, Some(NaiveDate::from_ymd_opt(2026, 2, 11).unwrap()));
+}
+
+#[test]
+fn next_occurrence_weekday_wraps() {
+    // Feb 13, 2026 is Friday. mon,wed,fri → next is Mon Feb 16
+    let from = NaiveDate::from_ymd_opt(2026, 2, 13).unwrap();
+    let next = next_occurrence("mon,wed,fri", from);
+    assert_eq!(next, Some(NaiveDate::from_ymd_opt(2026, 2, 16).unwrap()));
+}

@@ -69,6 +69,7 @@ struct PaneState {
     tasks: Vec<Task>,
     list_state: ListState,
     sort_index: usize,
+    sort_ascending: bool,
 }
 
 impl PaneState {
@@ -79,6 +80,7 @@ impl PaneState {
             tasks: Vec::new(),
             list_state,
             sort_index: 0,
+            sort_ascending: true,
         }
     }
 
@@ -146,12 +148,17 @@ enum AppMode {
     EditTask,
     EditTaskField,
     NoteView,
+    Search,
+    RecAddTemplate,
+    RecConfirmDelete,
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum TuiTab {
     Tasks,
+    Recurring,
     Report,
+    Backup,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -264,20 +271,36 @@ struct App<'a> {
     note_lines: Vec<String>,
     note_selected: usize,
     note_editing: bool,
+    // Search
+    search_input: String,
     // Vim count prefix & g key
     count_prefix: Option<usize>,
     pending_g: bool,
+    // Recurring tab
+    templates: Vec<Task>,
+    template_selected: usize,
+    rec_add_input: String,
+    // Backup tab
+    backup_entries: Vec<dodo::backup::BackupEntry>,
+    backup_selected: usize,
+    backup_config: dodo::config::BackupConfig,
+    sync_config: dodo::config::SyncConfig,
+    backup_status_msg: Option<String>,
 }
 
 impl<'a> App<'a> {
     fn new(db: &'a Database) -> Self {
+        let mut panes = [
+            PaneState::new(),
+            PaneState::new(),
+            PaneState::new(),
+            PaneState::new(),
+        ];
+        panes[3].sort_index = 1; // DONE pane defaults to modified
+        panes[3].sort_ascending = false; // descending (newest done first)
+        let config = dodo::config::Config::load().unwrap_or_default();
         Self {
-            panes: [
-                PaneState::new(),
-                PaneState::new(),
-                PaneState::new(),
-                PaneState::new(),
-            ],
+            panes,
             active_pane: 2,
             running_task: None,
             db,
@@ -300,17 +323,118 @@ impl<'a> App<'a> {
             note_lines: Vec::new(),
             note_selected: 0,
             note_editing: false,
+            search_input: String::new(),
             count_prefix: None,
             pending_g: false,
+            templates: Vec::new(),
+            template_selected: 0,
+            rec_add_input: String::new(),
+            backup_entries: Vec::new(),
+            backup_selected: 0,
+            backup_config: config.backup,
+            sync_config: config.sync,
+            backup_status_msg: None,
         }
     }
 
     fn cycle_sort(&mut self) {
         let pane = &mut self.panes[self.active_pane];
-        pane.sort_index = (pane.sort_index + 1) % SORT_MODES.len();
+        if pane.sort_ascending {
+            pane.sort_ascending = false;
+        } else {
+            pane.sort_index = (pane.sort_index + 1) % SORT_MODES.len();
+            pane.sort_ascending = true;
+        }
         let sort = SORT_MODES[pane.sort_index];
-        let is_done = self.active_pane == 3;
-        pane.tasks.sort_by(|a, b| sort_tasks(a, b, sort, is_done));
+        let ascending = pane.sort_ascending;
+        pane.tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
+    }
+
+    fn matches_search(&self, task: &Task) -> bool {
+        if self.search_input.is_empty() {
+            return true;
+        }
+        let query = self.search_input.to_lowercase();
+        let today = chrono::Local::now().date_naive();
+        for token in query.split_whitespace() {
+            if let Some(proj) = token.strip_prefix('+') {
+                let task_proj = task.project.as_deref().unwrap_or("").to_lowercase();
+                if !task_proj.contains(proj) {
+                    return false;
+                }
+            } else if let Some(ctx) = token.strip_prefix('@') {
+                let task_ctx = task.context.as_deref().unwrap_or("").to_lowercase();
+                if !task_ctx.contains(ctx) {
+                    return false;
+                }
+            } else if token.chars().all(|c| c == '!') && !token.is_empty() {
+                // Priority: !! means priority >= 2
+                let min_pri = token.len() as i64;
+                if task.priority.unwrap_or(0) < min_pri {
+                    return false;
+                }
+            } else if let Some(rest) = token.strip_prefix("=<") {
+                // Scheduled within N days: =<10d
+                if let Some(days) = parse_filter_days(rest) {
+                    let cutoff = today + chrono::Duration::days(days);
+                    match task.scheduled {
+                        Some(sc) if sc <= cutoff => {}
+                        _ => return false,
+                    }
+                }
+            } else if let Some(rest) = token.strip_prefix("=>") {
+                // Scheduled beyond N days: =>3d
+                if let Some(days) = parse_filter_days(rest) {
+                    let cutoff = today + chrono::Duration::days(days);
+                    match task.scheduled {
+                        Some(sc) if sc >= cutoff => {}
+                        _ => return false,
+                    }
+                }
+            } else if let Some(rest) = token.strip_prefix("^<") {
+                // Deadline within N days: ^<3d
+                if let Some(days) = parse_filter_days(rest) {
+                    let cutoff = today + chrono::Duration::days(days);
+                    match task.deadline {
+                        Some(dl) if dl <= cutoff => {}
+                        _ => return false,
+                    }
+                }
+            } else if let Some(rest) = token.strip_prefix("^>") {
+                // Deadline beyond N days: ^>5d
+                if let Some(days) = parse_filter_days(rest) {
+                    let cutoff = today + chrono::Duration::days(days);
+                    match task.deadline {
+                        Some(dl) if dl >= cutoff => {}
+                        _ => return false,
+                    }
+                }
+            } else if let Some(rest) = token.strip_prefix('^') {
+                // ^3d is shorthand for ^<3d
+                if let Some(days) = parse_filter_days(rest) {
+                    let cutoff = today + chrono::Duration::days(days);
+                    match task.deadline {
+                        Some(dl) if dl <= cutoff => {}
+                        _ => return false,
+                    }
+                }
+            } else if let Some(rest) = token.strip_prefix('=') {
+                // =1w is shorthand for =<1w
+                if let Some(days) = parse_filter_days(rest) {
+                    let cutoff = today + chrono::Duration::days(days);
+                    match task.scheduled {
+                        Some(sc) if sc <= cutoff => {}
+                        _ => return false,
+                    }
+                }
+            } else {
+                let title = task.title.to_lowercase();
+                if !title.contains(token) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn refresh_all(&mut self) -> Result<()> {
@@ -318,6 +442,9 @@ impl<'a> App<'a> {
 
         let mut groups: [Vec<Task>; 4] = [vec![], vec![], vec![], vec![]];
         for task in all_tasks {
+            if !self.matches_search(&task) {
+                continue;
+            }
             let effective = task.effective_area();
             let idx = match effective {
                 Area::LongTerm => 0,
@@ -331,8 +458,8 @@ impl<'a> App<'a> {
         for (i, group) in groups.into_iter().enumerate() {
             self.panes[i].tasks = group;
             let sort = SORT_MODES[self.panes[i].sort_index];
-            let is_done = i == 3;
-            self.panes[i].tasks.sort_by(|a, b| sort_tasks(a, b, sort, is_done));
+            let ascending = self.panes[i].sort_ascending;
+            self.panes[i].tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
             let len = self.panes[i].tasks.len();
             if len == 0 {
                 self.panes[i].list_state.select(None);
@@ -368,6 +495,34 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    fn refresh_templates(&mut self) -> Result<()> {
+        self.templates = self.db.list_templates()?;
+        if self.templates.is_empty() {
+            self.template_selected = 0;
+        } else if self.template_selected >= self.templates.len() {
+            self.template_selected = self.templates.len() - 1;
+        }
+        Ok(())
+    }
+
+    fn refresh_backups(&mut self) {
+        if self.backup_config.is_ready() {
+            match dodo::backup::list_backups(&self.backup_config) {
+                Ok(entries) => {
+                    self.backup_entries = entries;
+                    if self.backup_entries.is_empty() {
+                        self.backup_selected = 0;
+                    } else if self.backup_selected >= self.backup_entries.len() {
+                        self.backup_selected = self.backup_entries.len() - 1;
+                    }
+                }
+                Err(e) => {
+                    self.backup_status_msg = Some(format!("Error: {}", e));
+                }
+            }
+        }
+    }
+
     fn move_pane_left(&mut self) {
         if self.active_pane > 0 {
             self.active_pane -= 1;
@@ -398,14 +553,31 @@ impl<'a> App<'a> {
     }
 
     fn done(&mut self) -> Result<()> {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            if task.status == TaskStatus::Done {
-                self.db.uncomplete_task_by_id(&task.id)?;
+        let task_id = self.panes[self.active_pane]
+            .selected_task()
+            .map(|t| t.id.clone());
+        if let Some(ref id) = task_id {
+            let was_done = self.panes[self.active_pane]
+                .selected_task()
+                .map(|t| t.status == TaskStatus::Done)
+                .unwrap_or(false);
+            if was_done {
+                self.db.uncomplete_task_by_id(id)?;
             } else {
-                self.db.complete_task_by_id(&task.id)?;
+                self.db.complete_task_by_id(id)?;
             }
         }
         self.refresh_all()?;
+        // Follow the task to its new pane
+        if let Some(ref id) = task_id {
+            for pane_idx in 0..4 {
+                if let Some(pos) = self.panes[pane_idx].tasks.iter().position(|t| t.id == *id) {
+                    self.active_pane = pane_idx;
+                    self.panes[pane_idx].list_state.select(Some(pos));
+                    break;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -737,9 +909,33 @@ impl<'a> App<'a> {
     }
 }
 
+// ── Search helpers ───────────────────────────────────────────────────
+
+fn format_estimate_tui(minutes: i64) -> String {
+    let hours = minutes / 60;
+    let mins = minutes % 60;
+    if hours > 0 && mins > 0 {
+        format!("{}h{}m", hours, mins)
+    } else if hours > 0 {
+        format!("{}h", hours)
+    } else {
+        format!("{}m", mins)
+    }
+}
+
+fn parse_filter_days(s: &str) -> Option<i64> {
+    if let Some(num) = s.strip_suffix('d') {
+        num.parse::<i64>().ok()
+    } else if let Some(num) = s.strip_suffix('w') {
+        num.parse::<i64>().ok().map(|n| n * 7)
+    } else {
+        s.parse::<i64>().ok()
+    }
+}
+
 // ── Sorting ──────────────────────────────────────────────────────────
 
-fn sort_tasks(a: &Task, b: &Task, sort: SortBy, is_done: bool) -> std::cmp::Ordering {
+fn sort_tasks(a: &Task, b: &Task, sort: SortBy, ascending: bool) -> std::cmp::Ordering {
     let ord = match sort {
         SortBy::Created | SortBy::Area => a.created.cmp(&b.created),
         SortBy::Modified => {
@@ -749,7 +945,7 @@ fn sort_tasks(a: &Task, b: &Task, sort: SortBy, is_done: bool) -> std::cmp::Orde
         }
         SortBy::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
     };
-    if is_done { ord.reverse() } else { ord }
+    if ascending { ord } else { ord.reverse() }
 }
 
 fn sort_label(sort: SortBy) -> &'static str {
@@ -785,18 +981,41 @@ where
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
+                        KeyCode::Char('c') => {
+                            app.tab = TuiTab::Recurring;
+                            let _ = app.refresh_templates();
+                            app.count_prefix = None;
+                            app.pending_g = false;
+                        }
                         KeyCode::Char('r') => {
                             app.tab = TuiTab::Report;
                             let _ = app.refresh_report();
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
+                        KeyCode::Char('b') if app.tab != TuiTab::Tasks => {
+                            app.tab = TuiTab::Backup;
+                            app.refresh_backups();
+                            app.count_prefix = None;
+                            app.pending_g = false;
+                        }
                         KeyCode::Tab => {
-                            if app.tab == TuiTab::Tasks {
-                                app.tab = TuiTab::Report;
-                                let _ = app.refresh_report();
-                            } else {
-                                app.tab = TuiTab::Tasks;
+                            match app.tab {
+                                TuiTab::Tasks => {
+                                    app.tab = TuiTab::Recurring;
+                                    let _ = app.refresh_templates();
+                                }
+                                TuiTab::Recurring => {
+                                    app.tab = TuiTab::Report;
+                                    let _ = app.refresh_report();
+                                }
+                                TuiTab::Report => {
+                                    app.tab = TuiTab::Backup;
+                                    app.refresh_backups();
+                                }
+                                TuiTab::Backup => {
+                                    app.tab = TuiTab::Tasks;
+                                }
                             }
                             app.count_prefix = None;
                             app.pending_g = false;
@@ -837,6 +1056,10 @@ where
                                         }
                                     }
                                 }
+                            } else if app.tab == TuiTab::Recurring {
+                                handle_recurring_key(app, key.code);
+                            } else if app.tab == TuiTab::Backup {
+                                handle_backup_key(app, key.code);
                             } else {
                                 match key.code {
                                     KeyCode::Char('l') | KeyCode::Right => {
@@ -931,6 +1154,90 @@ where
                         }
                         _ => {}
                     },
+                    AppMode::Search => match key.code {
+                        KeyCode::Esc | KeyCode::Enter => {
+                            app.mode = AppMode::Normal;
+                        }
+                        KeyCode::Down => {
+                            app.mode = AppMode::Normal;
+                        }
+                        KeyCode::Backspace => {
+                            app.search_input.pop();
+                            let _ = app.refresh_all();
+                        }
+                        KeyCode::Char(c) => {
+                            app.search_input.push(c);
+                            let _ = app.refresh_all();
+                        }
+                        _ => {}
+                    },
+                    AppMode::RecAddTemplate => match key.code {
+                        KeyCode::Esc => {
+                            app.mode = AppMode::Normal;
+                        }
+                        KeyCode::Enter => {
+                            if !app.rec_add_input.is_empty() {
+                                let parsed = parse_notation(&app.rec_add_input);
+                                if let Some(ref recurrence) = parsed.recurrence {
+                                    let title = if parsed.title.is_empty() {
+                                        app.rec_add_input.clone()
+                                    } else {
+                                        parsed.title.clone()
+                                    };
+                                    let context = if !parsed.contexts.is_empty() {
+                                        Some(parsed.contexts.join(","))
+                                    } else {
+                                        None
+                                    };
+                                    let tags = if !parsed.tags.is_empty() {
+                                        Some(parsed.tags.join(","))
+                                    } else {
+                                        None
+                                    };
+                                    let estimate = parsed.estimate_minutes.or(Some(60));
+                                    let scheduled = parsed
+                                        .scheduled
+                                        .or_else(|| Some(chrono::Local::now().date_naive()));
+
+                                    let _ = app.db.add_template(
+                                        &title,
+                                        recurrence,
+                                        parsed.project,
+                                        context,
+                                        estimate,
+                                        parsed.deadline,
+                                        scheduled,
+                                        tags,
+                                        parsed.priority,
+                                    );
+                                    let _ = app.refresh_templates();
+                                    let _ = app.refresh_all();
+                                }
+                            }
+                            app.mode = AppMode::Normal;
+                        }
+                        KeyCode::Backspace => {
+                            app.rec_add_input.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.rec_add_input.push(c);
+                        }
+                        _ => {}
+                    },
+                    AppMode::RecConfirmDelete => match key.code {
+                        KeyCode::Char('y') | KeyCode::Enter => {
+                            if let Some(template) = app.templates.get(app.template_selected) {
+                                let _ = app.db.delete_template(&template.id);
+                                let _ = app.refresh_templates();
+                                let _ = app.refresh_all();
+                            }
+                            app.mode = AppMode::Normal;
+                        }
+                        KeyCode::Char('n') | KeyCode::Esc => {
+                            app.mode = AppMode::Normal;
+                        }
+                        _ => {}
+                    },
                     AppMode::NoteView => {
                         if app.note_editing {
                             match key.code {
@@ -1012,10 +1319,11 @@ where
 
         if last_data_refresh.elapsed() >= data_refresh_rate {
             app.tick_count = app.tick_count.wrapping_add(1);
-            if app.tab == TuiTab::Tasks {
-                let _ = app.refresh_all();
-            } else {
-                let _ = app.refresh_report();
+            match app.tab {
+                TuiTab::Tasks => { let _ = app.refresh_all(); }
+                TuiTab::Recurring => { let _ = app.refresh_templates(); }
+                TuiTab::Report => { let _ = app.refresh_report(); }
+                TuiTab::Backup => { app.refresh_backups(); }
             }
             last_data_refresh = std::time::Instant::now();
         }
@@ -1029,7 +1337,12 @@ fn handle_tasks_key(app: &mut App, code: KeyCode) {
             app.panes[app.active_pane].jump(count);
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.panes[app.active_pane].jump_back(count);
+            let sel = app.panes[app.active_pane].list_state.selected().unwrap_or(0);
+            if sel == 0 {
+                app.mode = AppMode::Search;
+            } else {
+                app.panes[app.active_pane].jump_back(count);
+            }
         }
         KeyCode::Char('h') | KeyCode::Left => app.move_pane_left(),
         KeyCode::Char('l') | KeyCode::Right => app.move_pane_right(),
@@ -1052,6 +1365,9 @@ fn handle_tasks_key(app: &mut App, code: KeyCode) {
             let _ = app.done();
         }
         KeyCode::Char('o') => app.cycle_sort(),
+        KeyCode::Char('/') => {
+            app.mode = AppMode::Search;
+        }
         KeyCode::Char('n') => {
             app.open_note_quick();
         }
@@ -1077,16 +1393,143 @@ fn handle_tasks_key(app: &mut App, code: KeyCode) {
     }
 }
 
+fn handle_recurring_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if !app.templates.is_empty() && app.template_selected < app.templates.len() - 1 {
+                app.template_selected += 1;
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.template_selected > 0 {
+                app.template_selected -= 1;
+            }
+        }
+        KeyCode::Char('a') => {
+            app.rec_add_input.clear();
+            app.mode = AppMode::RecAddTemplate;
+        }
+        KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => {
+            if !app.templates.is_empty() {
+                app.mode = AppMode::RecConfirmDelete;
+            }
+        }
+        KeyCode::Char('p') => {
+            if let Some(template) = app.templates.get(app.template_selected) {
+                if template.status == TaskStatus::Paused {
+                    let _ = app.db.resume_template(&template.id);
+                } else {
+                    let _ = app.db.pause_template(&template.id);
+                }
+                let _ = app.refresh_templates();
+            }
+        }
+        KeyCode::Char('g') => {
+            let _ = app.db.generate_instances();
+            let _ = app.refresh_templates();
+            let _ = app.refresh_all();
+        }
+        KeyCode::Char('e') | KeyCode::Enter => {
+            // Open edit modal for the selected template
+            if let Some(template) = app.templates.get(app.template_selected) {
+                app.edit_task_id = Some(template.id.clone());
+                app.edit_field_index = 0;
+                app.edit_field_values = [
+                    template.title.clone(),
+                    template.project.clone().unwrap_or_default(),
+                    template.context.clone().unwrap_or_default(),
+                    template.tags.clone().unwrap_or_default(),
+                    template.estimate_minutes.map(|m| format_estimate_tui(m)).unwrap_or_default(),
+                    template.deadline.map(|d| d.to_string()).unwrap_or_default(),
+                    template.scheduled.map(|d| d.to_string()).unwrap_or_default(),
+                    template.priority.map(|p| "!".repeat(p.clamp(1, 4) as usize)).unwrap_or_default(),
+                    template.recurrence.clone().unwrap_or_default(),
+                ];
+                app.edit_field_input.clear();
+                app.mode = AppMode::EditTask;
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_backup_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            if !app.backup_entries.is_empty() {
+                app.backup_selected = (app.backup_selected + 1) % app.backup_entries.len();
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if !app.backup_entries.is_empty() {
+                app.backup_selected = if app.backup_selected == 0 {
+                    app.backup_entries.len() - 1
+                } else {
+                    app.backup_selected - 1
+                };
+            }
+        }
+        KeyCode::Char('u') => {
+            if app.backup_config.is_ready() {
+                match dodo::backup::create_backup(&app.backup_config) {
+                    Ok(key) => {
+                        app.backup_status_msg = Some(format!("Uploaded: {}", key));
+                        app.refresh_backups();
+                    }
+                    Err(e) => {
+                        app.backup_status_msg = Some(format!("Upload failed: {}", e));
+                    }
+                }
+            } else {
+                app.backup_status_msg = Some("Backup not configured".to_string());
+            }
+        }
+        KeyCode::Char('r') => {
+            if let Some(entry) = app.backup_entries.get(app.backup_selected) {
+                let key = entry.key.clone();
+                match dodo::backup::restore_backup(&app.backup_config, &key) {
+                    Ok(()) => {
+                        app.backup_status_msg =
+                            Some(format!("Restored: {}", entry.display_name));
+                        let _ = app.refresh_all();
+                    }
+                    Err(e) => {
+                        app.backup_status_msg = Some(format!("Restore failed: {}", e));
+                    }
+                }
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Delete => {
+            if let Some(entry) = app.backup_entries.get(app.backup_selected) {
+                let key = entry.key.clone();
+                match dodo::backup::delete_backup(&app.backup_config, &key) {
+                    Ok(()) => {
+                        app.backup_status_msg =
+                            Some(format!("Deleted: {}", entry.display_name));
+                        app.refresh_backups();
+                    }
+                    Err(e) => {
+                        app.backup_status_msg = Some(format!("Delete failed: {}", e));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── Drawing ──────────────────────────────────────────────────────────
 
 fn draw_ui(f: &mut Frame, app: &App) {
+    let search_height = if app.tab == TuiTab::Tasks { 3 } else { 0 };
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2), // Header
-            Constraint::Length(1), // Tab bar
-            Constraint::Min(0),   // Content
-            Constraint::Length(1), // Footer
+            Constraint::Length(2),            // Header [0]
+            Constraint::Length(1),            // Tab bar [1]
+            Constraint::Length(search_height), // Search bar [2]
+            Constraint::Min(0),              // Content [3]
+            Constraint::Length(1),            // Footer [4]
         ])
         .split(f.area());
 
@@ -1094,8 +1537,34 @@ fn draw_ui(f: &mut Frame, app: &App) {
     draw_header(f, app, outer[0]);
 
     // Tab bar
-    let tab_titles: Vec<Line> = vec![Line::from(" Tasks (t) "), Line::from(" Report (r) ")];
-    let tab_index = if app.tab == TuiTab::Tasks { 0 } else { 1 };
+    let tab_titles: Vec<Line> = vec![
+        Line::from(vec![
+            Span::raw(" Tasks "),
+            Span::styled(" t ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+            Span::raw(" "),
+        ]),
+        Line::from(vec![
+            Span::raw(" Recurring "),
+            Span::styled(" c ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+            Span::raw(" "),
+        ]),
+        Line::from(vec![
+            Span::raw(" Report "),
+            Span::styled(" r ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+            Span::raw(" "),
+        ]),
+        Line::from(vec![
+            Span::raw(" Backup "),
+            Span::styled(" b ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+            Span::raw(" "),
+        ]),
+    ];
+    let tab_index = match app.tab {
+        TuiTab::Tasks => 0,
+        TuiTab::Recurring => 1,
+        TuiTab::Report => 2,
+        TuiTab::Backup => 3,
+    };
     let tabs = Tabs::new(tab_titles)
         .select(tab_index)
         .style(Style::default().fg(FG_OVERLAY))
@@ -1108,23 +1577,66 @@ fn draw_ui(f: &mut Frame, app: &App) {
         .divider(Span::styled(" | ", Style::default().fg(FG_OVERLAY)));
     f.render_widget(tabs, outer[1]);
 
+    // Search bar (Tasks tab only)
+    if app.tab == TuiTab::Tasks {
+        draw_search_bar(f, app, outer[2]);
+    }
+
     // Content
     match app.tab {
-        TuiTab::Tasks => draw_tasks_tab(f, app, outer[2]),
-        TuiTab::Report => draw_report_tab(f, app, outer[2]),
+        TuiTab::Tasks => draw_tasks_tab(f, app, outer[3]),
+        TuiTab::Recurring => draw_recurring_tab(f, app, outer[3]),
+        TuiTab::Report => draw_report_tab(f, app, outer[3]),
+        TuiTab::Backup => draw_backup_tab(f, app, outer[3]),
     }
 
     // Footer
-    draw_footer(f, app, outer[3]);
+    draw_footer(f, app, outer[4]);
 
     // Modal overlays
     match app.mode {
         AppMode::ConfirmDelete => draw_delete_modal(f, app),
+        AppMode::RecConfirmDelete => draw_rec_delete_modal(f, app),
         AppMode::EditTask | AppMode::EditTaskField => draw_edit_modal(f, app),
         AppMode::NoteView => draw_note_view_modal(f, app),
         AppMode::AddTask => draw_add_bar(f, app),
+        AppMode::RecAddTemplate => draw_rec_add_bar(f, app),
         AppMode::MoveTask => draw_move_bar(f, app),
-        _ => {}
+        AppMode::Normal | AppMode::Search => {}
+    }
+}
+
+fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
+    let is_focused = app.mode == AppMode::Search;
+    let has_filter = !app.search_input.is_empty();
+
+    let border_color = if is_focused { ACCENT_BLUE } else { FG_OVERLAY };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color))
+        .padding(Padding::horizontal(1));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if is_focused {
+        let input_text = format!("/ {}\u{2588}", app.search_input);
+        f.render_widget(
+            Paragraph::new(input_text).style(Style::default().fg(FG_TEXT)),
+            inner,
+        );
+    } else if has_filter {
+        let filter_text = format!("/ {}", app.search_input);
+        f.render_widget(
+            Paragraph::new(filter_text).style(Style::default().fg(ACCENT_BLUE)),
+            inner,
+        );
+    } else {
+        let hint = "/ +proj @ctx !! ^<3d =<1w keyword";
+        f.render_widget(
+            Paragraph::new(hint).style(Style::default().fg(FG_OVERLAY)),
+            inner,
+        );
     }
 }
 
@@ -1198,8 +1710,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
-    let keys: Vec<(&str, &str)> = if app.tab == TuiTab::Tasks {
-        match app.mode {
+    let keys: Vec<(&str, &str)> = match app.tab {
+        TuiTab::Tasks => match app.mode {
             AppMode::AddTask => vec![
                 ("Enter", "add"),
                 ("Esc", "cancel"),
@@ -1208,6 +1720,10 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("h/l", "select"),
                 ("Enter", "move"),
                 ("Esc", "cancel"),
+            ],
+            AppMode::Search => vec![
+                ("type", "filter"),
+                ("Enter/Esc", "done"),
             ],
             _ => vec![
                 ("a", "add"),
@@ -1218,16 +1734,35 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("d", "done"),
                 ("n", "note"),
                 ("o", "sort"),
-                ("r", "report"),
+                ("/", "search"),
                 ("q", "quit"),
             ],
-        }
-    } else {
-        vec![
+        },
+        TuiTab::Recurring => match app.mode {
+            AppMode::RecAddTemplate => vec![
+                ("Enter", "add"),
+                ("Esc", "cancel"),
+            ],
+            _ => vec![
+                ("a", "add"),
+                ("e", "edit"),
+                ("d", "del"),
+                ("p", "pause"),
+                ("g", "generate"),
+                ("q", "quit"),
+            ],
+        },
+        TuiTab::Report => vec![
             ("h/l", "range"),
-            ("t", "tasks"),
             ("q", "quit"),
-        ]
+        ],
+        TuiTab::Backup => vec![
+            ("j/k", "navigate"),
+            ("u", "upload"),
+            ("r", "restore"),
+            ("d", "delete"),
+            ("q", "quit"),
+        ],
     };
 
     let mut spans: Vec<Span> = vec![Span::styled(" ", Style::default())];
@@ -1274,8 +1809,202 @@ fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
     for i in 0..4 {
         let is_active = i == app.active_pane;
         let sl = sort_label(SORT_MODES[app.panes[i].sort_index]);
-        draw_pane(f, &app.panes[i], &headers[i], is_active, app.frame_count, sl, pane_chunks[i]);
+        let arrow = if app.panes[i].sort_ascending { "\u{2191}" } else { "\u{2193}" };
+        let sort_display = format!("{}{}", sl, arrow);
+        draw_pane(f, &app.panes[i], &headers[i], is_active, app.frame_count, &sort_display, pane_chunks[i]);
     }
+}
+
+fn draw_recurring_tab(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::bordered()
+        .title(Span::styled(
+            " RECURRING ",
+            Style::default()
+                .fg(ACCENT_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_BLUE));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.templates.is_empty() {
+        let msg = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "No recurring templates.",
+                Style::default().fg(FG_SUBTEXT),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press 'a' to add one (e.g., standup *daily +work ~15m)",
+                Style::default().fg(FG_OVERLAY),
+            )),
+        ])
+        .alignment(Alignment::Center);
+        f.render_widget(msg, inner);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .templates
+        .iter()
+        .enumerate()
+        .map(|(idx, template)| {
+            let is_selected = idx == app.template_selected;
+            let is_paused = template.status == TaskStatus::Paused;
+
+            let icon = if is_paused { "\u{23F8}" } else { "\u{21BB}" };
+            let icon_style = if is_paused {
+                Style::default().fg(ACCENT_YELLOW)
+            } else {
+                Style::default().fg(ACCENT_GREEN)
+            };
+
+            let recurrence = template.recurrence.as_deref().unwrap_or("?");
+
+            let last_date = app.db.template_last_date(&template.id).ok().flatten();
+            let last_str = last_date
+                .map(|d| d.format("%b %d").to_string())
+                .unwrap_or_else(|| "-".into());
+            let next_str = if is_paused {
+                "(paused)".to_string()
+            } else {
+                last_date
+                    .and_then(|d| dodo::notation::next_occurrence(recurrence, d))
+                    .map(|d| d.format("%b %d").to_string())
+                    .unwrap_or_else(|| "-".into())
+            };
+
+            let num = template
+                .num_id
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "?".into());
+
+            let title_style = if is_paused {
+                Style::default().fg(FG_OVERLAY)
+            } else {
+                Style::default().fg(FG_TEXT)
+            };
+
+            let meta = build_compact_meta(template, chrono::Local::now().date_naive());
+
+            let line1 = Line::from(vec![
+                Span::styled(format!(" {:>3} ", num), Style::default().fg(FG_SUBTEXT)),
+                Span::styled(format!("{} ", icon), icon_style),
+                Span::styled(
+                    format!("{:<8} ", recurrence),
+                    Style::default().fg(ACCENT_PEACH),
+                ),
+                Span::styled(template.title.clone(), title_style),
+            ]);
+
+            let mut line2_spans = vec![Span::raw("                ")];
+            line2_spans.push(Span::styled(
+                format!("last:{}", last_str),
+                Style::default().fg(FG_SUBTEXT),
+            ));
+            line2_spans.push(Span::raw("  "));
+            let next_style = if is_paused {
+                Style::default().fg(ACCENT_YELLOW)
+            } else {
+                Style::default().fg(ACCENT_TEAL)
+            };
+            line2_spans.push(Span::styled(format!("next:{}", next_str), next_style));
+            if !meta.is_empty() {
+                line2_spans.push(Span::raw("  "));
+                line2_spans.extend(meta);
+            }
+            let line2 = Line::from(line2_spans);
+
+            let item = ListItem::new(vec![line1, line2]);
+            if is_selected {
+                item.style(Style::default().bg(Color::Rgb(65, 75, 120)))
+            } else {
+                item
+            }
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_symbol("\u{258C} ");
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.template_selected));
+    f.render_stateful_widget(list, inner, &mut list_state);
+}
+
+fn draw_rec_add_bar(f: &mut Frame, app: &App) {
+    let area = f.area();
+    // Bottom bar
+    let bar_area = Rect::new(0, area.height.saturating_sub(3), area.width, 3);
+    f.render_widget(Clear, bar_area);
+
+    let block = Block::bordered()
+        .title(Span::styled(
+            " Add Recurring (title *pattern +proj ~est) ",
+            Style::default().fg(ACCENT_BLUE),
+        ))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_BLUE));
+
+    let inner = block.inner(bar_area);
+    f.render_widget(block, bar_area);
+
+    let input_text = format!("{}\u{2588}", app.rec_add_input);
+    f.render_widget(
+        Paragraph::new(input_text).style(Style::default().fg(FG_TEXT)),
+        inner,
+    );
+}
+
+fn draw_rec_delete_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(40, 20, f.area());
+    f.render_widget(Clear, area);
+
+    let title = app
+        .templates
+        .get(app.template_selected)
+        .map(|t| t.title.as_str())
+        .unwrap_or("?");
+
+    let block = Block::bordered()
+        .title(Span::styled(
+            " Delete Recurring ",
+            Style::default()
+                .fg(ACCENT_RED)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_RED));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("Delete '{}'?", title),
+            Style::default().fg(FG_TEXT),
+        )),
+        Line::from(Span::styled(
+            "Active instance will also be deleted.",
+            Style::default().fg(FG_SUBTEXT),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(" y ", Style::default().fg(FG_TEXT).bg(ACCENT_RED)),
+            Span::styled(" confirm  ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled(" n ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+            Span::styled(" cancel", Style::default().fg(FG_SUBTEXT)),
+        ]),
+    ];
+    f.render_widget(
+        Paragraph::new(text).alignment(Alignment::Center),
+        inner,
+    );
 }
 
 fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
@@ -1600,11 +2329,31 @@ fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
 
 // ── Pane Drawing ─────────────────────────────────────────────────────
 
-/// Apply neon sign sweep effect: a glow spot travels left→right→left.
+/// Pastel rainbow hue from 0.0–1.0, returns soft RGB.
+fn pastel_from_hue(hue: f64) -> Color {
+    let h = ((hue % 1.0) + 1.0) % 1.0;
+    let (r, g, b) = match (h * 6.0) as u8 {
+        0 => (1.0, h * 6.0, 0.0),
+        1 => (2.0 - h * 6.0, 1.0, 0.0),
+        2 => (0.0, 1.0, h * 6.0 - 2.0),
+        3 => (0.0, 4.0 - h * 6.0, 1.0),
+        4 => (h * 6.0 - 4.0, 0.0, 1.0),
+        _ => (1.0, 0.0, 6.0 - h * 6.0),
+    };
+    // Blend toward white for pastel: base ~140, range ~115
+    Color::Rgb(
+        (140.0 + r * 115.0) as u8,
+        (140.0 + g * 115.0) as u8,
+        (140.0 + b * 115.0) as u8,
+    )
+}
+
+/// Apply pastel rainbow sweep effect: a glow spot moves continuously left→right.
 fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> Line<'static> {
-    let t = (frame_count as f64 * 0.025).sin() * 0.5 + 0.5;
-    let wave_center = t * width as f64;
     let sigma = width as f64 * 0.25;
+    let period = width as f64 + sigma * 4.0;
+    let wave_center = (frame_count as f64 * 0.8) % period - sigma * 2.0;
+    let hue_offset = frame_count as f64 * 0.008;
 
     let mut result: Vec<Span<'static>> = Vec::new();
     let mut x: f64 = 0.0;
@@ -1614,10 +2363,12 @@ fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> Line<'static
         for ch in span.content.chars() {
             let d = x - wave_center;
             let intensity = (-0.5 * (d / sigma).powi(2)).exp();
+            let hue = hue_offset + x / width as f64;
+            let Color::Rgb(pr, pg, pb) = pastel_from_hue(hue) else { unreachable!() };
             let bg = Color::Rgb(
-                (20.0 + intensity * 80.0) as u8,
-                (15.0 + intensity * 65.0) as u8,
-                (40.0 + intensity * 215.0) as u8,
+                (30.0 + intensity * (pr as f64 - 30.0)) as u8,
+                (30.0 + intensity * (pg as f64 - 30.0)) as u8,
+                (35.0 + intensity * (pb as f64 - 35.0)) as u8,
             );
             result.push(Span::styled(ch.to_string(), base_style.bg(bg)));
             x += 1.0;
@@ -1628,16 +2379,185 @@ fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> Line<'static
     while (x as u16) < width.saturating_sub(2) {
         let d = x - wave_center;
         let intensity = (-0.5 * (d / sigma).powi(2)).exp();
+        let hue = hue_offset + x / width as f64;
+        let Color::Rgb(pr, pg, pb) = pastel_from_hue(hue) else { unreachable!() };
         let bg = Color::Rgb(
-            (20.0 + intensity * 80.0) as u8,
-            (15.0 + intensity * 65.0) as u8,
-            (40.0 + intensity * 215.0) as u8,
+            (30.0 + intensity * (pr as f64 - 30.0)) as u8,
+            (30.0 + intensity * (pg as f64 - 30.0)) as u8,
+            (35.0 + intensity * (pb as f64 - 35.0)) as u8,
         );
         result.push(Span::styled(" ", Style::default().bg(bg)));
         x += 1.0;
     }
 
     Line::from(result)
+}
+
+fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(FG_OVERLAY))
+        .title(Span::styled(
+            " Backup ",
+            Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
+        ))
+        .padding(Padding::horizontal(1));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if !app.backup_config.is_ready() {
+        let mut msg = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "Backup not configured",
+                Style::default().fg(ACCENT_YELLOW).add_modifier(Modifier::BOLD),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Add a [backup] section to ~/.config/dodo/config.toml:",
+                Style::default().fg(FG_SUBTEXT),
+            )),
+            Line::from(""),
+            Line::from(Span::styled("  [backup]", Style::default().fg(FG_TEXT))),
+            Line::from(Span::styled("  enabled = true", Style::default().fg(FG_TEXT))),
+            Line::from(Span::styled(
+                "  endpoint = \"https://s3.example.com\"",
+                Style::default().fg(FG_TEXT),
+            )),
+            Line::from(Span::styled(
+                "  bucket = \"my-bucket\"",
+                Style::default().fg(FG_TEXT),
+            )),
+            Line::from(Span::styled(
+                "  access_key = \"...\"",
+                Style::default().fg(FG_TEXT),
+            )),
+            Line::from(Span::styled(
+                "  secret_key = \"...\"",
+                Style::default().fg(FG_TEXT),
+            )),
+            Line::from(""),
+        ];
+        // Sync status in unconfigured backup view
+        if app.sync_config.is_ready() {
+            let url = app.sync_config.turso_url.as_deref().unwrap_or("");
+            msg.push(Line::from(vec![
+                Span::styled("Turso sync: ", Style::default().fg(FG_SUBTEXT)),
+                Span::styled("\u{25CF} ", Style::default().fg(ACCENT_GREEN)),
+                Span::styled("enabled  ", Style::default().fg(ACCENT_GREEN)),
+                Span::styled(url, Style::default().fg(ACCENT_TEAL)),
+            ]));
+        } else {
+            msg.push(Line::from(vec![
+                Span::styled("Turso sync: ", Style::default().fg(FG_SUBTEXT)),
+                Span::styled("\u{25CB} not configured", Style::default().fg(FG_OVERLAY)),
+            ]));
+            msg.push(Line::from(Span::styled(
+                "Add a [sync] section to enable:",
+                Style::default().fg(FG_SUBTEXT),
+            )));
+            msg.push(Line::from(""));
+            msg.push(Line::from(Span::styled("  [sync]", Style::default().fg(FG_TEXT))));
+            msg.push(Line::from(Span::styled("  enabled = true", Style::default().fg(FG_TEXT))));
+            msg.push(Line::from(Span::styled(
+                "  turso_url = \"libsql://mydb.turso.io\"",
+                Style::default().fg(FG_TEXT),
+            )));
+            msg.push(Line::from(Span::styled(
+                "  turso_token = \"your-token\"",
+                Style::default().fg(FG_TEXT),
+            )));
+        }
+        f.render_widget(Paragraph::new(msg), inner);
+        return;
+    }
+
+    // Split into sync status + status message + list area
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Sync status
+            Constraint::Length(2), // Status message
+            Constraint::Min(0),   // Backup list
+        ])
+        .split(inner);
+
+    // Sync status line
+    let sync_line = if app.sync_config.is_ready() {
+        let url = app.sync_config.turso_url.as_deref().unwrap_or("");
+        Line::from(vec![
+            Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled("\u{25CF} ", Style::default().fg(ACCENT_GREEN)),
+            Span::styled("enabled  ", Style::default().fg(ACCENT_GREEN)),
+            Span::styled(url, Style::default().fg(ACCENT_TEAL)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled("\u{25CB} not configured", Style::default().fg(FG_OVERLAY)),
+        ])
+    };
+    f.render_widget(Paragraph::new(sync_line), chunks[0]);
+
+    // Status message
+    if let Some(ref msg) = app.backup_status_msg {
+        let color = if msg.starts_with("Error") || msg.contains("failed") {
+            ACCENT_RED
+        } else {
+            ACCENT_GREEN
+        };
+        f.render_widget(
+            Paragraph::new(Span::styled(msg.as_str(), Style::default().fg(color))),
+            chunks[1],
+        );
+    }
+
+    // Backup list
+    if app.backup_entries.is_empty() {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "No backups found. Press 'u' to create one.",
+                Style::default().fg(FG_SUBTEXT),
+            )),
+            chunks[2],
+        );
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .backup_entries
+        .iter()
+        .enumerate()
+        .map(|(i, entry)| {
+            let age = dodo::backup::format_age(&entry.timestamp);
+            let size = dodo::backup::format_size(entry.size);
+            let is_selected = i == app.backup_selected;
+
+            let style = if is_selected {
+                Style::default().fg(FG_TEXT).bg(BG_SURFACE)
+            } else {
+                Style::default().fg(FG_SUBTEXT)
+            };
+
+            let line = Line::from(vec![
+                Span::styled(
+                    if is_selected { " > " } else { "   " },
+                    Style::default().fg(ACCENT_BLUE),
+                ),
+                Span::styled(&entry.display_name, style.add_modifier(Modifier::BOLD)),
+                Span::styled("  ", style),
+                Span::styled(age, Style::default().fg(ACCENT_TEAL)),
+                Span::styled("  ", style),
+                Span::styled(size, Style::default().fg(FG_OVERLAY)),
+            ]);
+
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items);
+    f.render_widget(list, chunks[2]);
 }
 
 fn draw_pane(
@@ -1683,7 +2603,9 @@ fn draw_pane(
     let stats_text = build_pane_stats(elapsed, estimate, done, total);
     let left_text = format!(" {}", stats_text);
     let right_text = format!("{} ", sort_label_str);
-    let pad = (chunks[0].width as usize).saturating_sub(left_text.len() + right_text.len());
+    let left_width = left_text.chars().count();
+    let right_width = right_text.chars().count();
+    let pad = (chunks[0].width as usize).saturating_sub(left_width + right_width);
     let stats_line = Line::from(vec![
         Span::styled(left_text, Style::default().fg(FG_SUBTEXT)),
         Span::raw(" ".repeat(pad)),
@@ -1745,6 +2667,7 @@ fn draw_pane(
                 Some(n) if !n.is_empty() => " *",
                 _ => "",
             };
+            let recur_mark = if task.template_id.is_some() { " \u{21BB}" } else { "" };
 
             let (num_style, title_style) = if is_running {
                 (
@@ -1784,7 +2707,7 @@ fn draw_pane(
             let line1 = Line::from(vec![
                 Span::styled(format!(" {:>3} ", num), num_style),
                 Span::styled(format!("{} ", status_icon), status_style),
-                Span::styled(format!("{}{}", task.title, notes_mark), title_style),
+                Span::styled(format!("{}{}{}", task.title, recur_mark, notes_mark), title_style),
             ]);
 
             let meta_spans = build_compact_meta(task, today);
