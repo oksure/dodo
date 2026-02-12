@@ -151,6 +151,8 @@ enum AppMode {
     Search,
     RecAddTemplate,
     RecConfirmDelete,
+    EditConfig,
+    EditConfigField,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -241,6 +243,44 @@ const EDIT_FIELD_LABELS: [&str; 9] = [
     "Title", "Project", "Context", "Tags", "Estimate", "Deadline", "Scheduled", "Priority", "Notes",
 ];
 
+#[derive(Clone, Copy, PartialEq)]
+enum ConfigFieldType {
+    Boolean,
+    String,
+    Sensitive,
+    Number,
+}
+
+const CONFIG_FIELD_COUNT: usize = 12;
+
+const CONFIG_FIELD_LABELS: [&str; CONFIG_FIELD_COUNT] = [
+    "Sync Enabled", "Turso URL", "Turso Token",
+    "Backup Enabled", "Endpoint", "Bucket", "Prefix",
+    "Access Key", "Secret Key", "Region", "Schedule Days", "Max Backups",
+];
+
+const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
+    "Toggle sync on/off",
+    "libsql://mydb.turso.io",
+    "Your Turso auth token",
+    "Toggle backup on/off",
+    "https://s3.example.com",
+    "my-bucket",
+    "dodo/",
+    "S3 access key",
+    "S3 secret key",
+    "us-east-1",
+    "Days between backups (default: 7)",
+    "Max backups to keep (default: 10)",
+];
+
+const CONFIG_FIELD_TYPES: [ConfigFieldType; CONFIG_FIELD_COUNT] = [
+    ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::Sensitive,
+    ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::String, ConfigFieldType::String,
+    ConfigFieldType::Sensitive, ConfigFieldType::Sensitive, ConfigFieldType::String,
+    ConfigFieldType::Number, ConfigFieldType::Number,
+];
+
 struct App<'a> {
     panes: [PaneState; 4],
     active_pane: usize,
@@ -286,6 +326,10 @@ struct App<'a> {
     backup_config: dodo::config::BackupConfig,
     sync_config: dodo::config::SyncConfig,
     backup_status_msg: Option<String>,
+    // Config editor
+    config_field_index: usize,
+    config_field_values: [String; CONFIG_FIELD_COUNT],
+    config_field_input: String,
 }
 
 impl<'a> App<'a> {
@@ -334,6 +378,9 @@ impl<'a> App<'a> {
             backup_config: config.backup,
             sync_config: config.sync,
             backup_status_msg: None,
+            config_field_index: 0,
+            config_field_values: Default::default(),
+            config_field_input: String::new(),
         }
     }
 
@@ -907,6 +954,81 @@ impl<'a> App<'a> {
         }
         Ok(())
     }
+
+    fn start_edit_config(&mut self) {
+        self.config_field_index = 0;
+        self.config_field_values = [
+            // Sync fields (0-2)
+            if self.sync_config.enabled { "true".to_string() } else { "false".to_string() },
+            self.sync_config.turso_url.clone().unwrap_or_default(),
+            self.sync_config.turso_token.clone().unwrap_or_default(),
+            // Backup fields (3-11)
+            if self.backup_config.enabled { "true".to_string() } else { "false".to_string() },
+            self.backup_config.endpoint.clone().unwrap_or_default(),
+            self.backup_config.bucket.clone().unwrap_or_default(),
+            self.backup_config.prefix.clone(),
+            self.backup_config.access_key.clone().unwrap_or_default(),
+            self.backup_config.secret_key.clone().unwrap_or_default(),
+            self.backup_config.region.clone().unwrap_or_default(),
+            self.backup_config.schedule_days.to_string(),
+            self.backup_config.max_backups.to_string(),
+        ];
+        self.mode = AppMode::EditConfig;
+    }
+
+    fn enter_config_field(&mut self) {
+        if CONFIG_FIELD_TYPES[self.config_field_index] == ConfigFieldType::Boolean {
+            // Toggle boolean immediately
+            let new_val = self.config_field_values[self.config_field_index] != "true";
+            self.config_field_values[self.config_field_index] =
+                if new_val { "true".to_string() } else { "false".to_string() };
+            self.apply_config_field(self.config_field_index);
+            let _ = self.save_config();
+        } else {
+            self.config_field_input = self.config_field_values[self.config_field_index].clone();
+            self.mode = AppMode::EditConfigField;
+        }
+    }
+
+    fn save_config_field(&mut self) {
+        let idx = self.config_field_index;
+        self.config_field_values[idx] = self.config_field_input.clone();
+        self.apply_config_field(idx);
+        let _ = self.save_config();
+        self.mode = AppMode::EditConfig;
+    }
+
+    fn apply_config_field(&mut self, idx: usize) {
+        let val = &self.config_field_values[idx];
+        let opt = if val.is_empty() { None } else { Some(val.clone()) };
+        match idx {
+            0 => self.sync_config.enabled = val == "true",
+            1 => self.sync_config.turso_url = opt,
+            2 => self.sync_config.turso_token = opt,
+            3 => self.backup_config.enabled = val == "true",
+            4 => self.backup_config.endpoint = opt,
+            5 => self.backup_config.bucket = opt,
+            6 => self.backup_config.prefix = if val.is_empty() { "dodo/".to_string() } else { val.clone() },
+            7 => self.backup_config.access_key = opt,
+            8 => self.backup_config.secret_key = opt,
+            9 => self.backup_config.region = opt,
+            10 => self.backup_config.schedule_days = val.parse().unwrap_or(7),
+            11 => self.backup_config.max_backups = val.parse().unwrap_or(10),
+            _ => {}
+        }
+    }
+
+    fn save_config(&mut self) -> Result<()> {
+        let config = dodo::config::Config {
+            sync: self.sync_config.clone(),
+            backup: self.backup_config.clone(),
+        };
+        config.save()?;
+        if self.backup_config.is_ready() {
+            self.refresh_backups();
+        }
+        Ok(())
+    }
 }
 
 // ── Search helpers ───────────────────────────────────────────────────
@@ -1313,6 +1435,40 @@ where
                             }
                         }
                     }
+                    AppMode::EditConfig => match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            app.mode = AppMode::Normal;
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            app.config_field_index = (app.config_field_index + 1) % CONFIG_FIELD_COUNT;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            app.config_field_index = if app.config_field_index == 0 {
+                                CONFIG_FIELD_COUNT - 1
+                            } else {
+                                app.config_field_index - 1
+                            };
+                        }
+                        KeyCode::Enter => {
+                            app.enter_config_field();
+                        }
+                        _ => {}
+                    },
+                    AppMode::EditConfigField => match key.code {
+                        KeyCode::Esc => {
+                            app.mode = AppMode::EditConfig;
+                        }
+                        KeyCode::Enter => {
+                            app.save_config_field();
+                        }
+                        KeyCode::Backspace => {
+                            app.config_field_input.pop();
+                        }
+                        KeyCode::Char(c) => {
+                            app.config_field_input.push(c);
+                        }
+                        _ => {}
+                    },
                 }
             }
         }
@@ -1514,6 +1670,9 @@ fn handle_backup_key(app: &mut App, code: KeyCode) {
                 }
             }
         }
+        KeyCode::Char('e') => {
+            app.start_edit_config();
+        }
         _ => {}
     }
 }
@@ -1602,6 +1761,7 @@ fn draw_ui(f: &mut Frame, app: &App) {
         AppMode::AddTask => draw_add_bar(f, app),
         AppMode::RecAddTemplate => draw_rec_add_bar(f, app),
         AppMode::MoveTask => draw_move_bar(f, app),
+        AppMode::EditConfig | AppMode::EditConfigField => draw_config_modal(f, app),
         AppMode::Normal | AppMode::Search => {}
     }
 }
@@ -1756,13 +1916,25 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("h/l", "range"),
             ("q", "quit"),
         ],
-        TuiTab::Backup => vec![
-            ("j/k", "navigate"),
-            ("u", "upload"),
-            ("r", "restore"),
-            ("d", "delete"),
-            ("q", "quit"),
-        ],
+        TuiTab::Backup => match app.mode {
+            AppMode::EditConfig => vec![
+                ("j/k", "navigate"),
+                ("\u{21B5}", "edit"),
+                ("Esc", "close"),
+            ],
+            AppMode::EditConfigField => vec![
+                ("\u{21B5}", "save"),
+                ("Esc", "cancel"),
+            ],
+            _ => vec![
+                ("j/k", "navigate"),
+                ("u", "upload"),
+                ("r", "restore"),
+                ("d", "delete"),
+                ("e", "config"),
+                ("q", "quit"),
+            ],
+        },
     };
 
     let mut spans: Vec<Span> = vec![Span::styled(" ", Style::default())];
@@ -3229,6 +3401,169 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
                 .block(notes_block);
             f.render_widget(notes_widget, chunks[1]);
         }
+    }
+}
+
+fn format_config_display_value(value: &str, field_type: ConfigFieldType) -> (String, Style) {
+    match field_type {
+        ConfigFieldType::Boolean => {
+            if value == "true" {
+                ("\u{2611} enabled".to_string(), Style::default().fg(ACCENT_GREEN))
+            } else {
+                ("\u{2610} disabled".to_string(), Style::default().fg(FG_OVERLAY))
+            }
+        }
+        ConfigFieldType::Sensitive => {
+            if value.is_empty() {
+                ("(not set)".to_string(), Style::default().fg(FG_OVERLAY))
+            } else {
+                ("\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}".to_string(), Style::default().fg(FG_SUBTEXT))
+            }
+        }
+        ConfigFieldType::String | ConfigFieldType::Number => {
+            if value.is_empty() {
+                ("(not set)".to_string(), Style::default().fg(FG_OVERLAY))
+            } else {
+                (value.to_string(), Style::default().fg(FG_TEXT))
+            }
+        }
+    }
+}
+
+fn draw_config_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(60, 75, f.area());
+    draw_shadow(f, area);
+    f.render_widget(Clear, area);
+
+    let title_text = if app.mode == AppMode::EditConfigField {
+        format!(" Edit: {} ", CONFIG_FIELD_LABELS[app.config_field_index])
+    } else {
+        " Configuration ".to_string()
+    };
+
+    let help_text = if app.mode == AppMode::EditConfigField {
+        " Enter:save  Esc:cancel "
+    } else {
+        " j/k:navigate  Enter:edit  Esc:close "
+    };
+
+    let block = Block::bordered()
+        .title(Span::styled(
+            title_text,
+            Style::default()
+                .fg(ACCENT_MAUVE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Span::styled(help_text, Style::default().fg(FG_OVERLAY)))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_MAUVE))
+        .padding(Padding::horizontal(1));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.mode == AppMode::EditConfigField {
+        // Show all fields dimmed above, input area at bottom
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(4)])
+            .split(inner);
+
+        let mut lines: Vec<Line> = vec![];
+        lines.push(Line::from(Span::styled(
+            "\u{2500}\u{2500} Sync \u{2500}\u{2500}",
+            Style::default().fg(FG_OVERLAY),
+        )));
+        for i in 0..CONFIG_FIELD_COUNT {
+            if i == 3 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "\u{2500}\u{2500} Backup \u{2500}\u{2500}",
+                    Style::default().fg(FG_OVERLAY),
+                )));
+            }
+            let (display, _) = format_config_display_value(
+                &app.config_field_values[i],
+                CONFIG_FIELD_TYPES[i],
+            );
+            let style = if i == app.config_field_index {
+                Style::default().fg(ACCENT_MAUVE).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG_OVERLAY)
+            };
+            let indicator = if i == app.config_field_index { "\u{25B6} " } else { "  " };
+            lines.push(Line::from(vec![
+                Span::styled(indicator, Style::default().fg(ACCENT_MAUVE)),
+                Span::styled(format!("{:<16}", CONFIG_FIELD_LABELS[i]), style),
+                Span::styled(display, Style::default().fg(FG_OVERLAY)),
+            ]));
+        }
+        f.render_widget(Paragraph::new(lines), chunks[0]);
+
+        let input_block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(ACCENT_MAUVE))
+            .border_type(BorderType::Rounded);
+        let hint = CONFIG_FIELD_HINTS[app.config_field_index];
+        let input_lines = vec![
+            Line::from(Span::styled(
+                format!("  {}", hint),
+                Style::default().fg(FG_OVERLAY),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("\u{276F} {}\u{2588}", app.config_field_input),
+                Style::default().fg(FG_TEXT),
+            )),
+        ];
+        let input_widget = Paragraph::new(input_lines).block(input_block);
+        f.render_widget(input_widget, chunks[1]);
+    } else {
+        // Field navigation view
+        let mut lines: Vec<Line> = vec![];
+        lines.push(Line::from(Span::styled(
+            "\u{2500}\u{2500} Sync \u{2500}\u{2500}",
+            Style::default().fg(FG_OVERLAY),
+        )));
+        for i in 0..CONFIG_FIELD_COUNT {
+            if i == 3 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "\u{2500}\u{2500} Backup \u{2500}\u{2500}",
+                    Style::default().fg(FG_OVERLAY),
+                )));
+            }
+            let is_selected = i == app.config_field_index;
+            let (display, display_style) = format_config_display_value(
+                &app.config_field_values[i],
+                CONFIG_FIELD_TYPES[i],
+            );
+            let label_style = if is_selected {
+                Style::default().fg(ACCENT_MAUVE).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG_SUBTEXT)
+            };
+            let val_style = if is_selected {
+                display_style.add_modifier(Modifier::BOLD)
+            } else {
+                display_style
+            };
+            let indicator = if is_selected { "\u{25B6} " } else { "  " };
+            lines.push(Line::from(vec![
+                Span::styled(indicator, Style::default().fg(ACCENT_MAUVE)),
+                Span::styled(format!("{:<16}", CONFIG_FIELD_LABELS[i]), label_style),
+                Span::styled(display, val_style),
+            ]));
+            if is_selected {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", CONFIG_FIELD_HINTS[i]),
+                    Style::default().fg(FG_OVERLAY),
+                )));
+            } else {
+                lines.push(Line::from(""));
+            }
+        }
+        f.render_widget(Paragraph::new(lines), inner);
     }
 }
 

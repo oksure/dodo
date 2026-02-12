@@ -10,7 +10,7 @@ pub struct Config {
     pub backup: BackupConfig,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -18,7 +18,7 @@ pub struct SyncConfig {
     pub turso_token: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupConfig {
     #[serde(default)]
     pub enabled: bool,
