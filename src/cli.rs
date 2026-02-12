@@ -4,13 +4,18 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(name = "dodo")]
 #[command(about = "Keyboard-first todo + time tracker CLI")]
 #[command(version = "0.1.0")]
+#[command(disable_help_subcommand = true)]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 pub enum Commands {
+    /// Show help information
+    #[command(visible_alias = "h")]
+    Help,
+
     /// Add a new task
     #[command(visible_alias = "a")]
     Add(AddArgs),

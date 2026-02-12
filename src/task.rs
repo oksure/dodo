@@ -70,9 +70,8 @@ impl Task {
         }
     }
 
-    /// Compute area from dates. Done tasks → Completed.
-    /// Tasks with dates → computed from earliest of (scheduled, deadline).
-    /// No dates → Today (default).
+    /// Compute area from scheduled date only. Done tasks → Completed.
+    /// No scheduled date → Today (default).
     pub fn effective_area(&self) -> Area {
         if self.status == TaskStatus::Done {
             return Area::Completed;
@@ -81,19 +80,11 @@ impl Task {
         let today = Local::now().date_naive();
         let seven_days = today + chrono::Duration::days(7);
 
-        // Use earliest of scheduled/deadline
-        let earliest = match (self.scheduled, self.deadline) {
-            (Some(s), Some(d)) => Some(s.min(d)),
-            (Some(s), None) => Some(s),
-            (None, Some(d)) => Some(d),
-            (None, None) => None,
-        };
-
-        match earliest {
+        match self.scheduled {
             Some(date) if date <= today => Area::Today,
             Some(date) if date <= seven_days => Area::ThisWeek,
             Some(_) => Area::LongTerm,
-            None => Area::Today, // No dates = defaults to today
+            None => Area::Today,
         }
     }
 

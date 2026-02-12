@@ -18,7 +18,15 @@ fn main() -> Result<()> {
     let db = Database::new()?;
 
     match cli.command {
-        Commands::Add(args) => {
+        None => {
+            tui::run_tui(&db)?;
+        }
+        Some(Commands::Help) => {
+            use clap::CommandFactory;
+            Cli::command().print_help()?;
+            println!();
+        }
+        Some(Commands::Add(args)) => {
             let raw_input = args.title.join(" ");
             let parsed = parse_notation(&raw_input);
 
@@ -61,7 +69,7 @@ fn main() -> Result<()> {
             )?;
             println!("Added: {} [#{}]", title, num_id);
         }
-        Commands::List(args) => {
+        Some(Commands::List(args)) => {
             // Parse positional args for filters
             let mut filter_area: Option<CliArea> = None;
             let mut filter_project: Option<String> = args.project.clone();
@@ -164,7 +172,7 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Start(args) => {
+        Some(Commands::Start(args)) => {
             if args.task.is_empty() {
                 db.pause_timer()?;
                 println!("Timer paused.");
@@ -174,14 +182,14 @@ fn main() -> Result<()> {
                 println!("Started: {} [#{}]", title, num_id);
             }
         }
-        Commands::Done => {
+        Some(Commands::Done) => {
             if let Some((task, duration)) = db.complete_task()? {
                 println!("Completed: {} ({})", task, format_duration(duration));
             } else {
                 println!("No running task to complete.");
             }
         }
-        Commands::Status => {
+        Some(Commands::Status) => {
             if let Some((task, elapsed)) = db.get_running_task()? {
                 println!(
                     "{} {} ({})",
@@ -193,12 +201,12 @@ fn main() -> Result<()> {
                 println!("No task running.");
             }
         }
-        Commands::Remove(args) => {
+        Some(Commands::Remove(args)) => {
             let query = args.task.join(" ");
             let (title, num_id) = db.delete_task(&query)?;
             println!("Deleted: {} [#{}]", title, num_id);
         }
-        Commands::Edit(args) => {
+        Some(Commands::Edit(args)) => {
             let raw_input = args.args.join(" ");
             let parsed = parse_notation(&raw_input);
 
@@ -215,7 +223,7 @@ fn main() -> Result<()> {
             let title = db.update_task_fields(&task_query, &parsed, args.area)?;
             println!("Updated: {}", title);
         }
-        Commands::Note(args) => {
+        Some(Commands::Note(args)) => {
             let query = args.task.join(" ");
 
             if args.clear {
@@ -246,7 +254,7 @@ fn main() -> Result<()> {
                 }
             }
         }
-        Commands::Tui => {
+        Some(Commands::Tui) => {
             tui::run_tui(&db)?;
         }
     }
