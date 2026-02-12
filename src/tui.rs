@@ -1081,6 +1081,10 @@ fn sort_label(sort: SortBy) -> &'static str {
 
 // ── Event Loop ───────────────────────────────────────────────────────
 
+// Note: `let _ =` is used intentionally throughout the TUI event handlers for
+// fire-and-forget DB operations. There is no user-visible error display mechanism
+// in the TUI event loop, and these operations are best-effort (e.g., refreshing
+// data, toggling timers). Failures are non-fatal and the TUI continues operating.
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()>
 where
     B::Error: Send + Sync + 'static,

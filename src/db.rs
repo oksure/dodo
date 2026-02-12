@@ -58,7 +58,7 @@ fn val_bool(row: &libsql::Row, idx: i32) -> Result<bool> {
 impl Database {
     pub fn new() -> Result<Self> {
         let db_path = Self::db_path()?;
-        std::fs::create_dir_all(db_path.parent().unwrap())?;
+        std::fs::create_dir_all(db_path.parent().context("Database path has no parent directory")?)?;
         Self::open(&db_path)
     }
 
@@ -95,7 +95,7 @@ impl Database {
 
     pub fn new_with_sync(url: &str, token: &str) -> Result<Self> {
         let db_path = Self::db_path()?;
-        std::fs::create_dir_all(db_path.parent().unwrap())?;
+        std::fs::create_dir_all(db_path.parent().context("Database path has no parent directory")?)?;
         let path_str = db_path.to_str().context("Invalid database path")?.to_string();
         let url = url.to_string();
         let token = token.to_string();
@@ -114,7 +114,9 @@ impl Database {
             .context("Failed to connect to synced database")?;
         let database = Self { db, conn, rt };
         database.migrate()?;
-        let _ = database.sync(); // initial pull
+        if let Err(e) = database.sync() {
+            eprintln!("Warning: initial sync failed: {e}");
+        }
         Ok(database)
     }
 
@@ -428,10 +430,11 @@ impl Database {
             if let Some(task_id) = running_id {
                 if let Some(mut session) = get_active_session(&tx, &task_id).await? {
                     session.stop();
+                    let ended = session.ended.context("Session ended timestamp missing after stop()")?;
                     tx.execute(
                         "UPDATE sessions SET ended = ?1, duration = ?2 WHERE id = ?3",
                         params![
-                            session.ended.unwrap().to_rfc3339(),
+                            ended.to_rfc3339(),
                             session.duration,
                             session.id,
                         ],
@@ -471,10 +474,11 @@ impl Database {
                 if let Some(mut session) = get_active_session(&tx, &task_id).await? {
                     if session.is_running() {
                         session.stop();
+                        let ended = session.ended.context("Session ended timestamp missing after stop()")?;
                         tx.execute(
                             "UPDATE sessions SET ended = ?1, duration = ?2 WHERE id = ?3",
                             params![
-                                session.ended.unwrap().to_rfc3339(),
+                                ended.to_rfc3339(),
                                 session.duration,
                                 session.id,
                             ],
@@ -510,7 +514,9 @@ impl Database {
 
         if let Some((task_id, title, total_duration)) = result {
             // Auto-generate next recurring instance
-            let _ = self.complete_recurring_instance(&task_id);
+            if let Err(e) = self.complete_recurring_instance(&task_id) {
+                eprintln!("Warning: failed to generate next recurring instance: {e}");
+            }
             Ok(Some((title, total_duration)))
         } else {
             Ok(None)
@@ -840,10 +846,11 @@ impl Database {
             if let Some(mut session) = get_active_session(&tx, task_id).await? {
                 if session.is_running() {
                     session.stop();
+                    let ended = session.ended.context("Session ended timestamp missing after stop()")?;
                     tx.execute(
                         "UPDATE sessions SET ended = ?1, duration = ?2 WHERE id = ?3",
                         params![
-                            session.ended.unwrap().to_rfc3339(),
+                            ended.to_rfc3339(),
                             session.duration,
                             session.id,
                         ],
@@ -862,7 +869,9 @@ impl Database {
         })?;
 
         // Auto-generate next recurring instance
-        let _ = self.complete_recurring_instance(task_id);
+        if let Err(e) = self.complete_recurring_instance(task_id) {
+            eprintln!("Warning: failed to generate next recurring instance: {e}");
+        }
 
         Ok(())
     }

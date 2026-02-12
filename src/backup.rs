@@ -64,7 +64,9 @@ pub fn create_backup(config: &BackupConfig) -> Result<String> {
 
     // Auto-prune
     if config.max_backups > 0 {
-        let _ = prune_backups(config, config.max_backups as usize);
+        if let Err(e) = prune_backups(config, config.max_backups as usize) {
+            eprintln!("Warning: failed to prune old backups: {e}");
+        }
     }
 
     Ok(key)

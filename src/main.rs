@@ -21,6 +21,7 @@ fn main() -> Result<()> {
 
     // Initialize database (with Turso sync if configured)
     let db = if config.sync.is_ready() {
+        // Safety: is_ready() guarantees turso_url and turso_token are Some
         Database::new_with_sync(
             config.sync.turso_url.as_deref().unwrap(),
             config.sync.turso_token.as_deref().unwrap(),
