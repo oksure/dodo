@@ -6,7 +6,7 @@ use crossterm::{
 };
 use ratatui::{
     backend::{Backend, CrosstermBackend},
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
@@ -68,6 +68,7 @@ pub fn run_tui(db: &Database) -> Result<()> {
 struct PaneState {
     tasks: Vec<Task>,
     list_state: ListState,
+    sort_index: usize,
 }
 
 impl PaneState {
@@ -77,6 +78,7 @@ impl PaneState {
         Self {
             tasks: Vec::new(),
             list_state,
+            sort_index: 0,
         }
     }
 
@@ -138,13 +140,12 @@ impl PaneState {
 #[derive(PartialEq)]
 enum AppMode {
     Normal,
-    NoteView,
-    NoteEdit,
     AddTask,
     MoveTask,
     ConfirmDelete,
     EditTask,
     EditTaskField,
+    NoteView,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -229,27 +230,22 @@ struct ReportData {
     done_tasks: Vec<(String, i64)>,
 }
 
-const EDIT_FIELD_LABELS: [&str; 8] = [
-    "Title", "Project", "Context", "Tags", "Estimate", "Deadline", "Scheduled", "Priority",
+const EDIT_FIELD_LABELS: [&str; 9] = [
+    "Title", "Project", "Context", "Tags", "Estimate", "Deadline", "Scheduled", "Priority", "Notes",
 ];
 
 struct App<'a> {
     panes: [PaneState; 4],
     active_pane: usize,
-    sort_index: usize,
     running_task: Option<String>,
     db: &'a Database,
     mode: AppMode,
-    // Note modal
-    note_task_id: Option<String>,
-    note_task_title: String,
-    note_content: String,
-    note_input: String,
     // Tabs & report
     tab: TuiTab,
     report_range: ReportRange,
     report: Option<ReportData>,
     tick_count: u64,
+    frame_count: u64,
     // Add task
     add_input: String,
     // Move task
@@ -262,8 +258,12 @@ struct App<'a> {
     // Edit task
     edit_task_id: Option<String>,
     edit_field_index: usize,
-    edit_field_values: [String; 8],
+    edit_field_values: [String; 9],
     edit_field_input: String,
+    // Note view
+    note_lines: Vec<String>,
+    note_selected: usize,
+    note_editing: bool,
     // Vim count prefix & g key
     count_prefix: Option<usize>,
     pending_g: bool,
@@ -279,18 +279,14 @@ impl<'a> App<'a> {
                 PaneState::new(),
             ],
             active_pane: 2,
-            sort_index: 0,
             running_task: None,
             db,
             mode: AppMode::Normal,
-            note_task_id: None,
-            note_task_title: String::new(),
-            note_content: String::new(),
-            note_input: String::new(),
             tab: TuiTab::Tasks,
             report_range: ReportRange::Day,
             report: None,
             tick_count: 0,
+            frame_count: 0,
             add_input: String::new(),
             move_task_id: None,
             move_source: 0,
@@ -301,23 +297,24 @@ impl<'a> App<'a> {
             edit_field_index: 0,
             edit_field_values: Default::default(),
             edit_field_input: String::new(),
+            note_lines: Vec::new(),
+            note_selected: 0,
+            note_editing: false,
             count_prefix: None,
             pending_g: false,
         }
     }
 
-    fn current_sort(&self) -> SortBy {
-        SORT_MODES[self.sort_index]
-    }
-
     fn cycle_sort(&mut self) {
-        self.sort_index = (self.sort_index + 1) % SORT_MODES.len();
-        let _ = self.refresh_all();
+        let pane = &mut self.panes[self.active_pane];
+        pane.sort_index = (pane.sort_index + 1) % SORT_MODES.len();
+        let sort = SORT_MODES[pane.sort_index];
+        let is_done = self.active_pane == 3;
+        pane.tasks.sort_by(|a, b| sort_tasks(a, b, sort, is_done));
     }
 
     fn refresh_all(&mut self) -> Result<()> {
-        let sort = self.current_sort();
-        let all_tasks = self.db.list_all_tasks(sort)?;
+        let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
 
         let mut groups: [Vec<Task>; 4] = [vec![], vec![], vec![], vec![]];
         for task in all_tasks {
@@ -333,6 +330,9 @@ impl<'a> App<'a> {
 
         for (i, group) in groups.into_iter().enumerate() {
             self.panes[i].tasks = group;
+            let sort = SORT_MODES[self.panes[i].sort_index];
+            let is_done = i == 3;
+            self.panes[i].tasks.sort_by(|a, b| sort_tasks(a, b, sort, is_done));
             let len = self.panes[i].tasks.len();
             if len == 0 {
                 self.panes[i].list_state.select(None);
@@ -409,33 +409,23 @@ impl<'a> App<'a> {
         Ok(())
     }
 
-    fn open_note_view(&mut self) {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            self.note_task_id = Some(task.id.clone());
-            self.note_task_title = task.title.clone();
-            self.note_content = task.notes.clone().unwrap_or_default();
-            self.note_input.clear();
-            self.mode = AppMode::NoteView;
-        }
-    }
-
-    fn enter_note_edit(&mut self) {
-        self.note_input.clear();
-        self.mode = AppMode::NoteEdit;
-    }
-
-    fn save_note(&mut self) -> Result<()> {
-        if let Some(ref task_id) = self.note_task_id {
-            if !self.note_input.is_empty() {
-                self.db.append_note_by_id(task_id, &self.note_input)?;
-                let notes = self.db.get_task_notes_by_id(task_id)?;
-                self.note_content = notes.unwrap_or_default();
-                self.note_input.clear();
-                self.refresh_all()?;
+    fn open_note_quick(&mut self) {
+        self.start_edit_task();
+        if self.mode == AppMode::EditTask {
+            self.edit_field_index = 8;
+            self.edit_field_input.clear();
+            let notes = &self.edit_field_values[8];
+            if notes.is_empty() {
+                // No notes — go straight to append input
+                self.mode = AppMode::EditTaskField;
+            } else {
+                // Has notes — enter NoteView for browsing/editing
+                self.note_lines = notes.lines().map(|l| l.to_string()).collect();
+                self.note_selected = 0;
+                self.note_editing = false;
+                self.mode = AppMode::NoteView;
             }
         }
-        self.mode = AppMode::NoteView;
-        Ok(())
     }
 
     fn start_add_task(&mut self) {
@@ -527,6 +517,35 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    fn move_task_quick(&mut self, direction: i32) -> Result<()> {
+        if self.active_pane == 3 {
+            return Ok(());
+        }
+        let target = (self.active_pane as i32 + direction).clamp(0, 2) as usize;
+        if target == self.active_pane {
+            return Ok(());
+        }
+        if let Some(task) = self.panes[self.active_pane].selected_task() {
+            if task.status == TaskStatus::Done {
+                return Ok(());
+            }
+            let task_id = task.id.clone();
+            let today = chrono::Local::now().date_naive();
+            let date = match target {
+                0 => today + chrono::Duration::days(8),
+                1 => today + chrono::Duration::days(1),
+                _ => today,
+            };
+            self.db.update_task_scheduled(&task_id, date)?;
+            self.refresh_all()?;
+            self.active_pane = target;
+            if let Some(pos) = self.panes[target].tasks.iter().position(|t| t.id == task_id) {
+                self.panes[target].list_state.select(Some(pos));
+            }
+        }
+        Ok(())
+    }
+
     fn start_delete(&mut self) {
         if let Some(task) = self.panes[self.active_pane].selected_task() {
             self.delete_task_id = Some(task.id.clone());
@@ -565,6 +584,7 @@ impl<'a> App<'a> {
                 task.priority
                     .map(|p| "!".repeat(p.clamp(1, 4) as usize))
                     .unwrap_or_default(),
+                task.notes.clone().unwrap_or_default(),
             ];
             self.edit_field_input.clear();
             self.mode = AppMode::EditTask;
@@ -572,8 +592,33 @@ impl<'a> App<'a> {
     }
 
     fn enter_edit_field(&mut self) {
-        self.edit_field_input = self.edit_field_values[self.edit_field_index].clone();
-        self.mode = AppMode::EditTaskField;
+        if self.edit_field_index == 8 {
+            let notes = &self.edit_field_values[8];
+            if notes.is_empty() {
+                // No notes — go straight to append input
+                self.edit_field_input.clear();
+                self.mode = AppMode::EditTaskField;
+            } else {
+                // Has notes — enter NoteView
+                self.note_lines = notes.lines().map(|l| l.to_string()).collect();
+                self.note_selected = 0;
+                self.note_editing = false;
+                self.mode = AppMode::NoteView;
+            }
+        } else {
+            self.edit_field_input = self.edit_field_values[self.edit_field_index].clone();
+            self.mode = AppMode::EditTaskField;
+        }
+    }
+
+    fn save_notes(&mut self) -> Result<()> {
+        if let Some(ref task_id) = self.edit_task_id {
+            let full = self.note_lines.join("\n");
+            self.db.update_notes_by_id(task_id, &full)?;
+            self.edit_field_values[8] = full;
+            self.refresh_all()?;
+        }
+        Ok(())
     }
 
     fn save_edit_field(&mut self) -> Result<()> {
@@ -663,12 +708,56 @@ impl<'a> App<'a> {
                             .update_task_fields_by_id(task_id, &parsed, None)?;
                     }
                 }
+                8 => {
+                    // Notes (append)
+                    if !self.edit_field_input.is_empty() {
+                        self.db
+                            .append_note_by_id(task_id, &self.edit_field_input)?;
+                        let notes = self.db.get_task_notes_by_id(task_id)?;
+                        self.edit_field_values[8] = notes.unwrap_or_default();
+                    }
+                }
                 _ => {}
             }
             self.refresh_all()?;
         }
-        self.mode = AppMode::EditTask;
+        // After appending a note, return to NoteView so the user sees the updated list
+        if idx == 8 && !self.edit_field_values[8].is_empty() {
+            self.note_lines = self.edit_field_values[8]
+                .lines()
+                .map(|l| l.to_string())
+                .collect();
+            self.note_selected = self.note_lines.len().saturating_sub(1);
+            self.note_editing = false;
+            self.mode = AppMode::NoteView;
+        } else {
+            self.mode = AppMode::EditTask;
+        }
         Ok(())
+    }
+}
+
+// ── Sorting ──────────────────────────────────────────────────────────
+
+fn sort_tasks(a: &Task, b: &Task, sort: SortBy, is_done: bool) -> std::cmp::Ordering {
+    let ord = match sort {
+        SortBy::Created | SortBy::Area => a.created.cmp(&b.created),
+        SortBy::Modified => {
+            let a_mod = a.modified_at.unwrap_or(a.created);
+            let b_mod = b.modified_at.unwrap_or(b.created);
+            a_mod.cmp(&b_mod)
+        }
+        SortBy::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+    };
+    if is_done { ord.reverse() } else { ord }
+}
+
+fn sort_label(sort: SortBy) -> &'static str {
+    match sort {
+        SortBy::Created => "created",
+        SortBy::Modified => "modified",
+        SortBy::Title => "title",
+        SortBy::Area => "area",
     }
 }
 
@@ -683,6 +772,7 @@ where
     let data_refresh_rate = std::time::Duration::from_secs(1);
 
     loop {
+        app.frame_count = app.frame_count.wrapping_add(1);
         terminal.draw(|f| draw_ui(f, app))?;
 
         if crossterm::event::poll(poll_rate)? {
@@ -762,30 +852,6 @@ where
                             }
                         }
                     },
-                    AppMode::NoteView => match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => {
-                            app.mode = AppMode::Normal;
-                        }
-                        KeyCode::Char('e') => {
-                            app.enter_note_edit();
-                        }
-                        _ => {}
-                    },
-                    AppMode::NoteEdit => match key.code {
-                        KeyCode::Esc => {
-                            app.mode = AppMode::NoteView;
-                        }
-                        KeyCode::Enter => {
-                            let _ = app.save_note();
-                        }
-                        KeyCode::Backspace => {
-                            app.note_input.pop();
-                        }
-                        KeyCode::Char(c) => {
-                            app.note_input.push(c);
-                        }
-                        _ => {}
-                    },
                     AppMode::AddTask => match key.code {
                         KeyCode::Esc => {
                             app.mode = AppMode::Normal;
@@ -830,7 +896,7 @@ where
                             app.mode = AppMode::Normal;
                         }
                         KeyCode::Char('j') | KeyCode::Down => {
-                            if app.edit_field_index < 7 {
+                            if app.edit_field_index < 8 {
                                 app.edit_field_index += 1;
                             }
                         }
@@ -849,7 +915,13 @@ where
                             app.mode = AppMode::EditTask;
                         }
                         KeyCode::Enter => {
-                            let _ = app.save_edit_field();
+                            if app.edit_field_index == 8
+                                && key.modifiers.contains(event::KeyModifiers::ALT)
+                            {
+                                app.edit_field_input.push('\n');
+                            } else {
+                                let _ = app.save_edit_field();
+                            }
                         }
                         KeyCode::Backspace => {
                             app.edit_field_input.pop();
@@ -859,6 +931,81 @@ where
                         }
                         _ => {}
                     },
+                    AppMode::NoteView => {
+                        if app.note_editing {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.note_editing = false;
+                                }
+                                KeyCode::Enter => {
+                                    if key.modifiers.contains(event::KeyModifiers::ALT) {
+                                        app.edit_field_input.push('\n');
+                                    } else {
+                                        // Save edited line back
+                                        if app.note_selected < app.note_lines.len() {
+                                            app.note_lines[app.note_selected] =
+                                                app.edit_field_input.clone();
+                                            let _ = app.save_notes();
+                                        }
+                                        app.note_editing = false;
+                                    }
+                                }
+                                KeyCode::Backspace => {
+                                    app.edit_field_input.pop();
+                                }
+                                KeyCode::Char(c) => {
+                                    app.edit_field_input.push(c);
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Esc => {
+                                    app.mode = AppMode::EditTask;
+                                }
+                                KeyCode::Char('j') | KeyCode::Down => {
+                                    if !app.note_lines.is_empty()
+                                        && app.note_selected < app.note_lines.len() - 1
+                                    {
+                                        app.note_selected += 1;
+                                    }
+                                }
+                                KeyCode::Char('k') | KeyCode::Up => {
+                                    if app.note_selected > 0 {
+                                        app.note_selected -= 1;
+                                    }
+                                }
+                                KeyCode::Enter | KeyCode::Char('e') => {
+                                    if app.note_selected < app.note_lines.len() {
+                                        app.edit_field_input =
+                                            app.note_lines[app.note_selected].clone();
+                                        app.note_editing = true;
+                                    }
+                                }
+                                KeyCode::Char('a') => {
+                                    // Append new note — switch to EditTaskField for notes
+                                    app.edit_field_index = 8;
+                                    app.edit_field_input.clear();
+                                    app.mode = AppMode::EditTaskField;
+                                }
+                                KeyCode::Char('d') | KeyCode::Delete => {
+                                    if app.note_selected < app.note_lines.len() {
+                                        app.note_lines.remove(app.note_selected);
+                                        if app.note_selected >= app.note_lines.len()
+                                            && app.note_selected > 0
+                                        {
+                                            app.note_selected -= 1;
+                                        }
+                                        let _ = app.save_notes();
+                                        if app.note_lines.is_empty() {
+                                            app.mode = AppMode::EditTask;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -906,13 +1053,19 @@ fn handle_tasks_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('o') => app.cycle_sort(),
         KeyCode::Char('n') => {
-            app.open_note_view();
+            app.open_note_quick();
         }
         KeyCode::Char('a') => {
             app.start_add_task();
         }
         KeyCode::Char('m') => {
             app.start_move_task();
+        }
+        KeyCode::Char('<') => {
+            let _ = app.move_task_quick(-1);
+        }
+        KeyCode::Char('>') => {
+            let _ = app.move_task_quick(1);
         }
         KeyCode::Enter => {
             app.start_edit_task();
@@ -941,14 +1094,15 @@ fn draw_ui(f: &mut Frame, app: &App) {
     draw_header(f, app, outer[0]);
 
     // Tab bar
-    let tab_titles: Vec<Line> = vec![Line::from(" Tasks "), Line::from(" Report ")];
+    let tab_titles: Vec<Line> = vec![Line::from(" Tasks (t) "), Line::from(" Report (r) ")];
     let tab_index = if app.tab == TuiTab::Tasks { 0 } else { 1 };
     let tabs = Tabs::new(tab_titles)
         .select(tab_index)
         .style(Style::default().fg(FG_OVERLAY))
         .highlight_style(
             Style::default()
-                .fg(ACCENT_BLUE)
+                .fg(Color::Rgb(30, 30, 46))
+                .bg(FG_TEXT)
                 .add_modifier(Modifier::BOLD),
         )
         .divider(Span::styled(" | ", Style::default().fg(FG_OVERLAY)));
@@ -965,9 +1119,9 @@ fn draw_ui(f: &mut Frame, app: &App) {
 
     // Modal overlays
     match app.mode {
-        AppMode::NoteView | AppMode::NoteEdit => draw_note_modal(f, app),
         AppMode::ConfirmDelete => draw_delete_modal(f, app),
         AppMode::EditTask | AppMode::EditTaskField => draw_edit_modal(f, app),
+        AppMode::NoteView => draw_note_view_modal(f, app),
         AppMode::AddTask => draw_add_bar(f, app),
         AppMode::MoveTask => draw_move_bar(f, app),
         _ => {}
@@ -998,14 +1152,39 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Style::default()
     };
 
-    let sort_label = match app.current_sort() {
-        SortBy::Created => "created",
-        SortBy::Modified => "modified",
-        SortBy::Title => "title",
-        SortBy::Area => "area",
-    };
+    let header_block = Block::default()
+        .borders(Borders::BOTTOM)
+        .border_style(Style::default().fg(FG_OVERLAY))
+        .border_type(BorderType::Rounded);
+    let inner = header_block.inner(area);
+    f.render_widget(header_block, area);
 
-    let text = Line::from(vec![
+    let muted = Style::default().fg(FG_OVERLAY);
+    let legend = Line::from(vec![
+        Span::styled("\u{25CB}", muted),
+        Span::styled("pend ", muted),
+        Span::styled("\u{25B6}", Style::default().fg(ACCENT_GREEN)),
+        Span::styled("run ", muted),
+        Span::styled("\u{23F8}", Style::default().fg(ACCENT_YELLOW)),
+        Span::styled("pause ", muted),
+        Span::styled("\u{2713}", Style::default().fg(ACCENT_TEAL)),
+        Span::styled("done ", muted),
+        Span::styled("+proj ", Style::default().fg(ACCENT_MAUVE)),
+        Span::styled("@ctx ", Style::default().fg(ACCENT_TEAL)),
+        Span::styled("~est ", muted),
+        Span::styled("^dead ", Style::default().fg(ACCENT_PEACH)),
+        Span::styled("=sched ", Style::default().fg(ACCENT_TEAL)),
+        Span::styled("!pri ", Style::default().fg(ACCENT_RED)),
+    ]);
+
+    let legend_width: u16 = legend.spans.iter().map(|s| s.content.len() as u16).sum();
+
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(legend_width)])
+        .split(inner);
+
+    let left = Line::from(vec![
         Span::styled(
             " DODO ",
             Style::default()
@@ -1013,19 +1192,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(running_info, running_style),
-        Span::styled(
-            format!("  sort:{}", sort_label),
-            Style::default().fg(FG_OVERLAY),
-        ),
     ]);
-
-    let header = Paragraph::new(text).block(
-        Block::default()
-            .borders(Borders::BOTTOM)
-            .border_style(Style::default().fg(FG_OVERLAY))
-            .border_type(BorderType::Rounded),
-    );
-    f.render_widget(header, area);
+    f.render_widget(Paragraph::new(left), cols[0]);
+    f.render_widget(Paragraph::new(legend).alignment(Alignment::Right), cols[1]);
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -1042,8 +1211,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ],
             _ => vec![
                 ("a", "add"),
-                ("m", "move"),
-                ("\u{21B5}", "edit"),
+                ("</>", "move"),
+                ("\u{21B5}", "detail"),
                 ("\u{232B}", "del"),
                 ("s", "start"),
                 ("d", "done"),
@@ -1104,7 +1273,8 @@ fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
 
     for i in 0..4 {
         let is_active = i == app.active_pane;
-        draw_pane(f, &app.panes[i], &headers[i], is_active, app.tick_count, pane_chunks[i]);
+        let sl = sort_label(SORT_MODES[app.panes[i].sort_index]);
+        draw_pane(f, &app.panes[i], &headers[i], is_active, app.frame_count, sl, pane_chunks[i]);
     }
 }
 
@@ -1430,23 +1600,53 @@ fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
 
 // ── Pane Drawing ─────────────────────────────────────────────────────
 
-const RUNNING_BG_PHASES: [Color; 6] = [
-    Color::Rgb(30, 50, 30),
-    Color::Rgb(35, 60, 35),
-    Color::Rgb(30, 55, 40),
-    Color::Rgb(25, 50, 45),
-    Color::Rgb(30, 55, 40),
-    Color::Rgb(35, 60, 35),
-];
+/// Apply neon sign sweep effect: a glow spot travels left→right→left.
+fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> Line<'static> {
+    let t = (frame_count as f64 * 0.025).sin() * 0.5 + 0.5;
+    let wave_center = t * width as f64;
+    let sigma = width as f64 * 0.25;
 
-const HIGHLIGHT_BG: Color = Color::Rgb(59, 66, 97);
+    let mut result: Vec<Span<'static>> = Vec::new();
+    let mut x: f64 = 0.0;
+
+    for span in line.spans {
+        let base_style = span.style;
+        for ch in span.content.chars() {
+            let d = x - wave_center;
+            let intensity = (-0.5 * (d / sigma).powi(2)).exp();
+            let bg = Color::Rgb(
+                (20.0 + intensity * 80.0) as u8,
+                (15.0 + intensity * 65.0) as u8,
+                (40.0 + intensity * 215.0) as u8,
+            );
+            result.push(Span::styled(ch.to_string(), base_style.bg(bg)));
+            x += 1.0;
+        }
+    }
+
+    // Fill remaining row width with the glow
+    while (x as u16) < width.saturating_sub(2) {
+        let d = x - wave_center;
+        let intensity = (-0.5 * (d / sigma).powi(2)).exp();
+        let bg = Color::Rgb(
+            (20.0 + intensity * 80.0) as u8,
+            (15.0 + intensity * 65.0) as u8,
+            (40.0 + intensity * 215.0) as u8,
+        );
+        result.push(Span::styled(" ", Style::default().bg(bg)));
+        x += 1.0;
+    }
+
+    Line::from(result)
+}
 
 fn draw_pane(
     f: &mut Frame,
     pane: &PaneState,
     label: &str,
     is_active: bool,
-    tick_count: u64,
+    frame_count: u64,
+    sort_label_str: &str,
     area: Rect,
 ) {
     let border_color = if is_active { ACCENT_BLUE } else { FG_OVERLAY };
@@ -1478,11 +1678,16 @@ fn draw_pane(
         .constraints([Constraint::Length(2), Constraint::Min(0)])
         .split(inner);
 
-    // Stats sub-header
+    // Stats sub-header with right-aligned sort label
     let (elapsed, estimate, done, total) = pane.stats();
     let stats_text = build_pane_stats(elapsed, estimate, done, total);
+    let left_text = format!(" {}", stats_text);
+    let right_text = format!("{} ", sort_label_str);
+    let pad = (chunks[0].width as usize).saturating_sub(left_text.len() + right_text.len());
     let stats_line = Line::from(vec![
-        Span::styled(format!(" {}", stats_text), Style::default().fg(FG_SUBTEXT)),
+        Span::styled(left_text, Style::default().fg(FG_SUBTEXT)),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(right_text, Style::default().fg(FG_OVERLAY)),
     ]);
     let stats_area = Rect::new(chunks[0].x, chunks[0].y, chunks[0].width, 1);
     f.render_widget(Paragraph::new(stats_line), stats_area);
@@ -1510,19 +1715,21 @@ fn draw_pane(
     // Task list area
     let list_area = chunks[1];
     let today = chrono::Local::now().date_naive();
+
     let selected_idx = pane.list_state.selected();
+    let neon_width = list_area.width;
 
     let items: Vec<ListItem> = pane
         .tasks
         .iter()
         .enumerate()
         .map(|(idx, task)| {
+            let is_selected = is_active && selected_idx == Some(idx);
             let is_running = task.status == TaskStatus::Running;
+            let is_neon = is_running;
             let is_overdue = !is_running
                 && task.status != TaskStatus::Done
                 && is_task_overdue(task, today);
-            let is_selected = selected_idx == Some(idx);
-
             let status_icon = match task.status {
                 TaskStatus::Pending => "\u{25CB}", // ○
                 TaskStatus::Running => "\u{25B6}", // ▶
@@ -1581,42 +1788,50 @@ fn draw_pane(
             ]);
 
             let meta_spans = build_compact_meta(task, today);
-            let item = if meta_spans.is_empty() {
-                ListItem::new(vec![line1])
-            } else {
-                let mut line2_spans = vec![Span::raw("       ")];
-                line2_spans.extend(meta_spans);
-                let line2 = Line::from(line2_spans);
-                ListItem::new(vec![line1, line2])
-            };
 
-            // Running task: animated gradient background
-            if is_running {
-                let phase = (tick_count % 6) as usize;
-                let bg = RUNNING_BG_PHASES[phase];
-                if is_active && is_selected {
-                    // Running + focused: animated bg with underline
-                    item.style(Style::default().bg(bg).add_modifier(Modifier::UNDERLINED))
+            if is_neon {
+                // Neon sign sweep for running task
+                let neon_line1 = apply_neon(line1, frame_count, neon_width);
+                if meta_spans.is_empty() {
+                    ListItem::new(vec![neon_line1])
                 } else {
-                    item.style(Style::default().bg(bg))
+                    let mut line2_spans = vec![Span::raw("       ")];
+                    line2_spans.extend(meta_spans);
+                    let line2 = Line::from(line2_spans);
+                    let neon_line2 = apply_neon(line2, frame_count, neon_width);
+                    ListItem::new(vec![neon_line1, neon_line2])
                 }
+            } else if is_selected {
+                // Selected cursor: static highlight background
+                let bg = Color::Rgb(65, 75, 120);
+                let item = if meta_spans.is_empty() {
+                    ListItem::new(vec![line1])
+                } else {
+                    let mut line2_spans = vec![Span::raw("       ")];
+                    line2_spans.extend(meta_spans);
+                    let line2 = Line::from(line2_spans);
+                    ListItem::new(vec![line1, line2])
+                };
+                item.style(Style::default().bg(bg))
             } else {
-                item
+                if meta_spans.is_empty() {
+                    ListItem::new(vec![line1])
+                } else {
+                    let mut line2_spans = vec![Span::raw("       ")];
+                    line2_spans.extend(meta_spans);
+                    let line2 = Line::from(line2_spans);
+                    ListItem::new(vec![line1, line2])
+                }
             }
         })
         .collect();
 
     let list = List::new(items);
     let list = if is_active {
-        list.highlight_style(
-            Style::default()
-                .bg(HIGHLIGHT_BG)
-                .fg(FG_TEXT)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("\u{258E} ")
+        list.highlight_style(Style::default().add_modifier(Modifier::BOLD))
+            .highlight_symbol("\u{258C} ")
     } else {
-        list
+        list.highlight_symbol("  ")
     };
 
     f.render_stateful_widget(list, list_area, &mut pane.list_state.clone());
@@ -1776,7 +1991,10 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
             spans.push(Span::styled(" ", muted));
         }
         let sc_style = if task.status != TaskStatus::Done && *sc < today {
-            Style::default().fg(ACCENT_RED)
+            Style::default()
+                .bg(ACCENT_RED)
+                .fg(Color::Rgb(30, 30, 46))
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(ACCENT_TEAL)
         };
@@ -1788,9 +2006,10 @@ fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static
         if !spans.is_empty() {
             spans.push(Span::styled(" ", muted));
         }
-        let dl_style = if *dl < today {
+        let dl_style = if task.status != TaskStatus::Done && *dl < today {
             Style::default()
-                .fg(ACCENT_RED)
+                .bg(ACCENT_RED)
+                .fg(Color::Rgb(30, 30, 46))
                 .add_modifier(Modifier::BOLD)
         } else if *dl <= seven_days {
             Style::default().fg(ACCENT_PEACH)
@@ -1830,71 +2049,6 @@ fn draw_shadow(f: &mut Frame, area: Rect) {
         let shadow = Rect::new(area.x + 1, area.y + 1, area.width, area.height);
         let shadow_block = Block::default().style(Style::default().bg(Color::Rgb(20, 20, 30)));
         f.render_widget(shadow_block, shadow);
-    }
-}
-
-fn draw_note_modal(f: &mut Frame, app: &App) {
-    let area = centered_rect(60, 60, f.area());
-    draw_shadow(f, area);
-    f.render_widget(Clear, area);
-
-    let title = format!(" Notes: {} ", app.note_task_title);
-    let help_text = if app.mode == AppMode::NoteEdit {
-        " Enter:save  Esc:cancel "
-    } else {
-        " e:edit  Esc/q:close "
-    };
-
-    let block = Block::bordered()
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(ACCENT_YELLOW)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .title_bottom(Span::styled(help_text, Style::default().fg(FG_OVERLAY)))
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT_YELLOW))
-        .padding(Padding::horizontal(1));
-
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    if app.mode == AppMode::NoteEdit {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(3)])
-            .split(inner);
-
-        let content = if app.note_content.is_empty() {
-            "(no notes yet)".to_string()
-        } else {
-            app.note_content.clone()
-        };
-        let notes_widget = Paragraph::new(content)
-            .style(Style::default().fg(FG_SUBTEXT))
-            .wrap(Wrap { trim: false });
-        f.render_widget(notes_widget, chunks[0]);
-
-        let input_block = Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(FG_OVERLAY))
-            .border_type(BorderType::Rounded);
-        let input_text = format!("\u{276F} {}\u{2588}", app.note_input);
-        let input_widget = Paragraph::new(input_text)
-            .style(Style::default().fg(FG_TEXT))
-            .block(input_block);
-        f.render_widget(input_widget, chunks[1]);
-    } else {
-        let content = if app.note_content.is_empty() {
-            "(no notes)".to_string()
-        } else {
-            app.note_content.clone()
-        };
-        let notes_widget = Paragraph::new(content)
-            .style(Style::default().fg(FG_SUBTEXT))
-            .wrap(Wrap { trim: false });
-        f.render_widget(notes_widget, inner);
     }
 }
 
@@ -1948,7 +2102,7 @@ fn draw_delete_modal(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(text), inner);
 }
 
-const EDIT_FIELD_HINTS: [&str; 8] = [
+const EDIT_FIELD_HINTS: [&str; 9] = [
     "Task name (plain text)",
     "Project name (no + prefix needed)",
     "Comma-separated, e.g.: work, laptop",
@@ -1957,6 +2111,7 @@ const EDIT_FIELD_HINTS: [&str; 8] = [
     "Date, e.g.: today, tmr, fri, 0215, 2025-05-02",
     "Date, e.g.: today, tmr, 3d, mon",
     "! to !!!! (1-4 levels)",
+    "Type to append. Alt+Enter for newline",
 ];
 
 fn draw_edit_modal(f: &mut Frame, app: &App) {
@@ -1967,7 +2122,7 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
     let title_text = if app.mode == AppMode::EditTaskField {
         format!(" Edit: {} ", EDIT_FIELD_LABELS[app.edit_field_index])
     } else {
-        " Edit Task ".to_string()
+        " Task Detail ".to_string()
     };
 
     let help_text = if app.mode == AppMode::EditTaskField {
@@ -1991,54 +2146,102 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    let notes_content = &app.edit_field_values[8];
+    let on_notes_field = app.edit_field_index == 8;
+
     if app.mode == AppMode::EditTaskField {
-        // Show the field being edited with input + hint
+        if on_notes_field {
+            // Editing Notes: show existing notes above, input below
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(4)])
+                .split(inner);
+
+            let content = if notes_content.is_empty() {
+                "(no notes yet)".to_string()
+            } else {
+                notes_content.clone()
+            };
+            let notes_widget = Paragraph::new(content)
+                .style(Style::default().fg(FG_SUBTEXT))
+                .wrap(Wrap { trim: false });
+            f.render_widget(notes_widget, chunks[0]);
+
+            let input_block = Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(ACCENT_YELLOW))
+                .border_type(BorderType::Rounded);
+            let input_lines = vec![
+                Line::from(Span::styled(
+                    format!("  {}", EDIT_FIELD_HINTS[8]),
+                    Style::default().fg(FG_OVERLAY),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("\u{276F} {}\u{2588}", app.edit_field_input),
+                    Style::default().fg(FG_TEXT),
+                )),
+            ];
+            let input_widget = Paragraph::new(input_lines).block(input_block);
+            f.render_widget(input_widget, chunks[1]);
+        } else {
+            // Editing a regular field: fields above, input below
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Min(1), Constraint::Length(4)])
+                .split(inner);
+
+            let mut lines: Vec<Line> = vec![];
+            for (i, label) in EDIT_FIELD_LABELS[..8].iter().enumerate() {
+                let style = if i == app.edit_field_index {
+                    Style::default()
+                        .fg(ACCENT_BLUE)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(FG_OVERLAY)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {:<12}", label), style),
+                    Span::styled(
+                        app.edit_field_values[i].clone(),
+                        Style::default().fg(FG_OVERLAY),
+                    ),
+                ]));
+            }
+            f.render_widget(Paragraph::new(lines), chunks[0]);
+
+            let input_block = Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(ACCENT_BLUE))
+                .border_type(BorderType::Rounded);
+            let hint = EDIT_FIELD_HINTS[app.edit_field_index];
+            let input_lines = vec![
+                Line::from(Span::styled(
+                    format!("  {}", hint),
+                    Style::default().fg(FG_OVERLAY),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("\u{276F} {}\u{2588}", app.edit_field_input),
+                    Style::default().fg(FG_TEXT),
+                )),
+            ];
+            let input_widget = Paragraph::new(input_lines).block(input_block);
+            f.render_widget(input_widget, chunks[1]);
+        }
+    } else {
+        // Field list view — split into fields + notes section
+        let show_notes = on_notes_field && !notes_content.is_empty();
+        let constraints = if show_notes {
+            vec![Constraint::Length(18), Constraint::Min(1)]
+        } else {
+            vec![Constraint::Min(1)]
+        };
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(4)])
+            .constraints(constraints)
             .split(inner);
 
-        // Show all fields above for context (dimmed)
-        let mut lines: Vec<Line> = vec![];
-        for (i, label) in EDIT_FIELD_LABELS.iter().enumerate() {
-            let style = if i == app.edit_field_index {
-                Style::default()
-                    .fg(ACCENT_BLUE)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(FG_OVERLAY)
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {:<12}", label), style),
-                Span::styled(
-                    app.edit_field_values[i].clone(),
-                    Style::default().fg(FG_OVERLAY),
-                ),
-            ]));
-        }
-        f.render_widget(Paragraph::new(lines), chunks[0]);
-
-        // Input area with hint
-        let input_block = Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(ACCENT_BLUE))
-            .border_type(BorderType::Rounded);
-        let hint = EDIT_FIELD_HINTS[app.edit_field_index];
-        let input_lines = vec![
-            Line::from(Span::styled(
-                format!("  {}", hint),
-                Style::default().fg(FG_OVERLAY),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("\u{276F} {}\u{2588}", app.edit_field_input),
-                Style::default().fg(FG_TEXT),
-            )),
-        ];
-        let input_widget = Paragraph::new(input_lines).block(input_block);
-        f.render_widget(input_widget, chunks[1]);
-    } else {
-        // Show field list with selection highlight and hints
         let mut lines: Vec<Line> = vec![];
         for (i, label) in EDIT_FIELD_LABELS.iter().enumerate() {
             let is_selected = i == app.edit_field_index;
@@ -2056,12 +2259,25 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
                 )
             };
             let indicator = if is_selected { "\u{25B6} " } else { "  " };
-            let value = &app.edit_field_values[i];
-            let display_value = if value.is_empty() {
-                "(empty)".to_string()
+
+            // For Notes field, show line count preview instead of full content
+            let display_value = if i == 8 {
+                let v = &app.edit_field_values[8];
+                if v.is_empty() {
+                    "(no notes)".to_string()
+                } else {
+                    let line_count = v.lines().count();
+                    format!("({} line{})", line_count, if line_count == 1 { "" } else { "s" })
+                }
             } else {
-                value.clone()
+                let v = &app.edit_field_values[i];
+                if v.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    v.clone()
+                }
             };
+
             lines.push(Line::from(vec![
                 Span::styled(indicator, Style::default().fg(ACCENT_BLUE)),
                 Span::styled(format!("{:<12}", label), label_style),
@@ -2076,7 +2292,110 @@ fn draw_edit_modal(f: &mut Frame, app: &App) {
                 lines.push(Line::from(""));
             }
         }
-        f.render_widget(Paragraph::new(lines), inner);
+        f.render_widget(Paragraph::new(lines), chunks[0]);
+
+        // Show notes content below fields when Notes is selected
+        if show_notes {
+            let notes_block = Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(FG_OVERLAY))
+                .border_type(BorderType::Rounded);
+            let notes_widget = Paragraph::new(notes_content.clone())
+                .style(Style::default().fg(FG_SUBTEXT))
+                .wrap(Wrap { trim: false })
+                .block(notes_block);
+            f.render_widget(notes_widget, chunks[1]);
+        }
+    }
+}
+
+fn draw_note_view_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(50, 70, f.area());
+    draw_shadow(f, area);
+    f.render_widget(Clear, area);
+
+    let help_text = if app.note_editing {
+        " Enter:save  Alt+Enter:newline  Esc:cancel "
+    } else {
+        " j/k:navigate  e:edit  a:add  d:delete  Esc:back "
+    };
+
+    let block = Block::bordered()
+        .title(Span::styled(
+            " Notes ",
+            Style::default()
+                .fg(ACCENT_YELLOW)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Span::styled(help_text, Style::default().fg(FG_OVERLAY)))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_YELLOW))
+        .padding(Padding::horizontal(1));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.note_lines.is_empty() {
+        f.render_widget(
+            Paragraph::new("(no notes)")
+                .style(Style::default().fg(FG_OVERLAY))
+                .alignment(Alignment::Center),
+            inner,
+        );
+        return;
+    }
+
+    if app.note_editing {
+        // Notes above, input below
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(4)])
+            .split(inner);
+
+        let mut lines: Vec<Line> = Vec::new();
+        for (i, line) in app.note_lines.iter().enumerate() {
+            let style = if i == app.note_selected {
+                Style::default()
+                    .fg(FG_TEXT)
+                    .bg(ACCENT_BLUE)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG_SUBTEXT)
+            };
+            lines.push(Line::from(Span::styled(format!("  {}", line), style)));
+        }
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[0]);
+
+        let input_block = Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(ACCENT_YELLOW))
+            .border_type(BorderType::Rounded);
+        let input_lines = vec![
+            Line::from(Span::styled(
+                "  Editing note. Alt+Enter for newline",
+                Style::default().fg(FG_OVERLAY),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("\u{276F} {}\u{2588}", app.edit_field_input),
+                Style::default().fg(FG_TEXT),
+            )),
+        ];
+        f.render_widget(Paragraph::new(input_lines).block(input_block), chunks[1]);
+    } else {
+        // List of note lines with selection highlight
+        let mut lines: Vec<Line> = Vec::new();
+        for (i, line) in app.note_lines.iter().enumerate() {
+            let style = if i == app.note_selected {
+                Style::default()
+                    .fg(FG_TEXT)
+                    .bg(Color::Rgb(65, 75, 120))
+            } else {
+                Style::default().fg(FG_SUBTEXT)
+            };
+            lines.push(Line::from(Span::styled(format!("  {}", line), style)));
+        }
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
 }
 

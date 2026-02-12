@@ -687,6 +687,15 @@ impl Database {
         Ok(notes)
     }
 
+    pub fn update_notes_by_id(&self, task_id: &str, text: &str) -> Result<()> {
+        let notes_val: Option<&str> = if text.is_empty() { None } else { Some(text) };
+        self.conn.execute(
+            "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
+            params![notes_val, task_id, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
     pub fn update_task_scheduled(&self, task_id: &str, date: NaiveDate) -> Result<()> {
         self.conn.execute(
             "UPDATE tasks SET scheduled = ?1, modified_at = ?3 WHERE id = ?2",
