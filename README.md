@@ -13,11 +13,13 @@ A keyboard-first todo + time tracker CLI written in Rust.
 - **Estimates & deadlines** — `~2h` estimates, `^friday` deadlines, `=wed` scheduling
 - **Priority** — `!` to `!!!!` urgency levels (4 = most urgent)
 - **Notes** — timestamped notes on any task, per-note editing/deletion in TUI
-- **TUI mode** — four-pane task layout + report tab with productivity stats
-- **TUI search** — live-filtering search bar with `+project`, `@context`, and fuzzy text
+- **Recurring tasks** — template-based recurring tasks (`*daily`, `*weekly`, `*mon,wed,fri`, etc.)
+- **TUI mode** — four-tab layout: Tasks (four panes), Recurring, Report, Backup
+- **TUI search** — live-filtering search bar with `+project`, `@context`, priority (`!!`), date ranges (`^<3d`, `=<1w`)
 - **TUI colors** — pastel rainbow sweep on running tasks, color-coded priority/deadlines/progress
 - **Sorting** — per-pane sort cycling (`o` key): created/modified/title with ↑asc/↓desc
-- **Cloud sync** — R2/Dropbox support (optional)
+- **Cloud sync** — Turso embedded replica with 60s auto-sync (optional)
+- **S3 backup** — compressed backups to any S3-compatible storage with auto-prune
 
 ## Quick Start
 
@@ -74,6 +76,7 @@ Add metadata directly in task text — no flags needed:
 | `^date` | Deadline | `^friday` `^tmr` `^0115` | Named, relative, MMDD, ISO |
 | `=date` | Scheduled | `=wed` `=2w` | Same formats as deadline |
 | `!`–`!!!!` | Priority | `!!!` | 1–4 (4 = most urgent) |
+| `*pattern` | Recurrence | `*daily` `*2w` `*mon,fri` | For recurring templates |
 
 Notation tokens are extracted and the remaining text becomes the title. Flags (`--project`, `--context`, etc.) still work; inline notation takes precedence.
 
@@ -89,13 +92,16 @@ Notation tokens are extracted and the remaining text becomes the title. Flags (`
 | `edit` | `e` | Edit task metadata via notation |
 | `note` | `n` | Add/view/clear notes on a task |
 | `remove` | `rm` | Delete task (by ID or fuzzy match) |
+| `recurring` | `rec` | Manage recurring tasks (add/edit/delete/pause/resume/generate/history) |
+| `sync` | | Manage Turso sync (status/enable/disable) |
+| `backup` | | Manage S3 backups (create/list/restore/delete) |
 | `help` | `h` | Show CLI help |
 
 Running `dodo` with no command launches the TUI.
 
 ## TUI Keys
 
-The TUI has two tabs: **Tasks** (four-pane layout) and **Report** (productivity stats).
+The TUI has four tabs: **Tasks** (`t`), **Recurring** (`c`), **Report** (`r`), and **Backup** (`b`).
 
 ### Tasks Tab
 
@@ -112,8 +118,20 @@ The TUI has two tabs: **Tasks** (four-pane layout) and **Report** (productivity 
 | `<`/`>` | Quick-move task between panes |
 | `Enter` | Open task detail/edit modal |
 | `Backspace` | Delete task (with confirmation) |
-| `t`/`r`/`Tab` | Switch tabs |
+| `m` | Move task to another pane |
+| `t`/`c`/`r`/`b`/`Tab` | Switch tabs |
 | `q`/`Esc` | Quit |
+
+### Recurring Tab
+
+| Key | Action |
+|-----|--------|
+| `j`/`k` | Navigate templates |
+| `a` | Add new recurring template |
+| `p` | Pause/resume template |
+| `g` | Generate instances |
+| `Enter` | Edit template |
+| `Backspace` | Delete template |
 
 ### Search Bar
 
@@ -123,15 +141,24 @@ The TUI has two tabs: **Tasks** (four-pane layout) and **Report** (productivity 
 | type | Live-filter tasks across all panes |
 | `Enter`/`Esc` | Exit search (filter stays active) |
 
-Filter syntax: `+backend` (project), `@john` (context), `fix bug` (title substring). All terms are AND-ed.
+Filter syntax: `+backend` (project), `@john` (context), `!!` (priority >= 2), `^<3d` (deadline within 3 days), `=<1w` (scheduled within 1 week), `fix bug` (title substring). All terms are AND-ed.
 
 ### Report Tab
 
 | Key | Action |
 |-----|--------|
 | `h`/`l` | Change time range (Day/Week/Month/Year/All) |
-| `t`/`r`/`Tab` | Switch tabs |
 | `q`/`Esc` | Quit |
+
+### Backup Tab
+
+| Key | Action |
+|-----|--------|
+| `j`/`k` | Navigate backups |
+| `u` | Upload new backup |
+| `r` | Restore selected backup |
+| `d` | Delete selected backup |
+| `e` | Edit sync/backup config |
 
 ## Installation
 
@@ -145,13 +172,14 @@ cargo install --path .
 cargo test
 ```
 
-79 tests cover notation parsing, fuzzy scoring, and the full task lifecycle including estimates, elapsed time, notes, priority, and editing. See [USAGE.md](USAGE.md) for the scenarios these tests exercise.
+159 tests cover notation parsing (61), fuzzy scoring (8), config parsing (22), backup formatting (25), and full workflow integration (43) including recurring tasks, estimates, elapsed time, notes, priority, and editing. See [USAGE.md](USAGE.md) for the scenarios these tests exercise.
 
 ## Config
 
 Data stored in:
 - Database: `~/.local/share/dodo/dodo.db`
-- Config: `~/.config/dodo/config.toml`
+- Config: `~/.config/dodo/config.toml` (with `[sync]` and `[backup]` sections)
+- Env var fallbacks: `DODO_TURSO_TOKEN`, `DODO_S3_ACCESS_KEY`, `DODO_S3_SECRET_KEY`
 
 ## License
 

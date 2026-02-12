@@ -13,16 +13,22 @@ cargo test
 ## Project Structure
 
 - `src/lib.rs` — library crate root, re-exports all modules
-- `src/main.rs` — binary entry point, command dispatch, output formatting
-- `src/cli.rs` — clap command/argument definitions
+- `src/main.rs` — binary entry point with `cmd_*` handler functions per command, output formatting
+- `src/cli.rs` — clap command/argument definitions; re-exports `Area` from `task.rs`
 - `src/db.rs` — SQLite database (libsql), migrations, all queries, session lifecycle
-- `src/task.rs` — `Task` struct, `Area`/`TaskStatus` enums, `Display` impl
+- `src/task.rs` — `Task` struct, `Area` enum (single source of truth, with `ValueEnum`), `TaskStatus` enum, `Display` impl
 - `src/session.rs` — `Session` struct with `elapsed_seconds()`, `stop()`, `is_running()`
 - `src/fuzzy.rs` — fuzzy matching with scored ranking (`score()`, `find_best_match()`, `rank_matches()`)
 - `src/notation.rs` — inline notation parser (`parse_notation()`, `parse_duration()`, `parse_date()`)
 - `src/config.rs` — config file parsing (`~/.config/dodo/config.toml`) for sync and backup settings
 - `src/backup.rs` — S3-compatible backup operations (create, list, restore, delete, prune, age check)
-- `src/tui.rs` — ratatui terminal UI with four-pane layout, report tab, and backup tab (binary-only, not in lib)
+- `src/tui/` — ratatui terminal UI (binary-only, not in lib), split into modules:
+  - `mod.rs` — `run_tui()` entry point, terminal setup/teardown
+  - `constants.rs` — color palette, sort modes, field labels/hints/types
+  - `format.rs` — `format_dur()`, `format_est()`, `sort_tasks()`, `sort_label()`, `parse_filter_days()`
+  - `state.rs` — `PaneState`, `AppMode`, `TuiTab`, `ReportRange`, `App` struct + all impl methods
+  - `event.rs` — `run_app()` event loop, `handle_tasks_key()`, `handle_recurring_key()`, `handle_backup_key()`
+  - `draw.rs` — all `draw_*` rendering functions, styling helpers, animation
 - `tests/fuzzy_test.rs` — 8 unit tests for fuzzy scoring logic
 - `tests/notation_test.rs` — 61 unit tests for notation/duration/date/priority/recurrence parsing
 - `tests/config_test.rs` — 22 unit tests for config parsing, defaults, is_ready checks, serialization roundtrip
@@ -31,13 +37,17 @@ cargo test
 
 ## Key Patterns
 
-- **Lib/bin split**: `src/lib.rs` exposes `backup`, `cli`, `config`, `db`, `fuzzy`, `notation`, `session`, `task` as public modules. `src/main.rs` is the binary that also owns `tui` (since it depends on ratatui/crossterm). Integration tests import via `dodo::`.
+- **Lib/bin split**: `src/lib.rs` exposes `backup`, `cli`, `config`, `db`, `fuzzy`, `notation`, `session`, `task` as public modules. `src/main.rs` is the binary that also owns `tui/` (since it depends on ratatui/crossterm). Integration tests import via `dodo::`.
+- **main.rs command dispatch**: `main()` is a clean dispatch table calling `cmd_add()`, `cmd_list()`, `cmd_start()`, `cmd_done()`, `cmd_status()`, `cmd_remove()`, `cmd_edit()`, `cmd_note()`, `cmd_recurring()`, `cmd_sync()`, `cmd_backup()`. The `DONE_DISPLAY_LIMIT` constant controls how many done tasks `cmd_list` shows.
+- **Area enum**: Single definition in `task.rs` with `#[derive(ValueEnum)]` for clap integration. `cli.rs` re-exports it via `pub use crate::task::Area`. No more duplicate enum or `CliArea` alias.
+- **TUI module structure**: `src/tui/` uses `pub(super)` visibility for all internal items. Only `run_tui()` in `mod.rs` is `pub`. Dependency graph (no cycles): `mod.rs → state, event`; `event → state, draw`; `draw → state, constants, format`; `state → constants, format`.
 - **Inline notation**: `notation.rs::parse_notation()` extracts 7 token types from input: `+project`, `@context` (multiple), `#tag` (multiple), `~duration`, `^deadline`, `=scheduled`, `!`–`!!!!` priority. Remaining text becomes the title. Single-value tokens use last-wins; multi-value tokens collect all. Tokens must be preceded by whitespace (e.g., `email@test` is not parsed).
 - **Duration parsing**: `~30m`, `~1h`, `~1h30m`, `~1d` (480m = 8h workday), `~1w` (2400m = 5×8h). Units are composable: `~2d4h`.
 - **Date parsing**: Named (`today`/`tdy`, `tomorrow`/`tmr`, `yesterday`/`ytd`), day names (`mon`–`sun` → next occurrence), relative (`3d`, `2w`, `1m`, `-3d`), MMDD (`0115`), YYYYMMDD (`20250502`), ISO (`2025-05-02`).
 - **Numeric task IDs**: Tasks have an auto-incrementing `num_id` (integer) in addition to a ULID string `id`. Commands like `start`, `remove`, `edit`, `note` accept either a numeric ID or a fuzzy text query. Resolution logic is in `db.rs::resolve_task()`.
 - **Fuzzy matching**: `fuzzy.rs::score()` ranks matches: exact (100) > prefix (75) > word-start (60) > substring (50) > word-contains (40). `find_best_match()` picks the top result; `rank_matches()` sorts all results by relevance. `find_tasks()` loads all non-done tasks and returns them ranked.
 - **Task resolution**: `resolve_task(query)` tries `parse::<i64>()` first for numeric ID lookup, then falls back to fuzzy-ranked search via `find_tasks()` + `find_best_match()`.
+- **update_task_fields delegation**: `update_task_fields(query, ...)` resolves the query then delegates to `update_task_fields_by_id(id, ...)`, which is the single implementation for all 9 field updates.
 - **Session lifecycle**: `Session` methods (`elapsed_seconds`, `stop`, `is_running`) are used by `pause_timer`, `complete_task`, and `get_running_task` in `db.rs`. Sessions are loaded from DB via `row_to_session()` / `get_active_session()`.
 - **Elapsed time**: `list_tasks()` and `find_tasks()` use a LEFT JOIN on sessions to compute total elapsed seconds per task, including live running sessions via `julianday('now')`.
 - **Default command**: Running `dodo` with no subcommand launches the TUI. `dodo help` / `dodo h` shows CLI help.
@@ -53,8 +63,9 @@ cargo test
 - **TUI done/undone follows cursor**: Pressing `d` to mark done/undone moves the cursor to the task's new pane (e.g., TODAY→DONE or DONE→TODAY).
 - **TUI pane layout**: Tasks tab has four vertical panes (LONG TERM, THIS WEEK, TODAY, DONE) with `h`/`l` pane navigation, `j`/`k` task navigation. Pane headers show elapsed/estimate/percentage/done stats. Report tab has DAY/WEEK/MONTH/YEAR/ALL range selector. Switch tabs with `t`/`c`/`r`/`Tab`.
 - **TUI colors**: Running tasks animate with pastel rainbow sweep (continuous left→right). Priority colored by level (Red for !!!!). Projects in Magenta. Elapsed colored by estimate progress (Green→Yellow→Red). Deadlines Red if overdue, Yellow if upcoming.
-- **TUI note modal**: `n` key opens NoteView if task has notes (j/k navigate, `e` edit, `d` delete, `a` append), or goes straight to append input if no notes. `Alt+Enter` inserts newlines within a note entry. `AppMode` enum: Normal, AddTask, MoveTask, ConfirmDelete, EditTask, EditTaskField, NoteView, Search. NoteView supports inline editing with `note_editing` flag.
-- **TUI responsiveness**: Event loop polls at 16ms (~60fps) for instant key response, data refresh on 1-second timer. Tick counter drives running task animation.
+- **TUI note modal**: `n` key opens NoteView if task has notes (j/k navigate, `e` edit, `d` delete, `a` append), or goes straight to append input if no notes. `Alt+Enter` inserts newlines within a note entry. `AppMode` enum (in `state.rs`): Normal, AddTask, MoveTask, ConfirmDelete, EditTask, EditTaskField, NoteView, Search, RecAddTemplate, RecConfirmDelete, EditConfig, EditConfigField. NoteView supports inline editing with `note_editing` flag.
+- **TUI responsiveness**: Event loop (in `event.rs`) polls at 16ms (~60fps) for instant key response, data refresh on 1-second timer. Tick counter drives running task animation.
+- **TUI fire-and-forget pattern**: `let _ =` is used intentionally in TUI event handlers for best-effort DB operations. No error display mechanism exists in the event loop; failures are non-fatal.
 - **Report queries**: `db.rs` has 7 report methods: `report_tasks_done`, `report_total_seconds`, `report_by_hour`, `report_by_weekday`, `report_by_project`, `report_done_tasks`, `report_active_days`. All take date range strings.
 - **DB migrations**: Schema changes use check-then-alter pattern in `db.rs::migrate()`. New columns are added with `ALTER TABLE` guarded by a `SELECT` probe.
 - **Complete prefers running**: `complete_task()` uses `ORDER BY` to prefer Running tasks over Paused ones when multiple are active.
@@ -66,7 +77,7 @@ cargo test
 - **Instance indicator**: Recurring instances show `↻` after the title in task panes.
 - **Database engine**: Uses `libsql` (SQLite-compatible fork supporting Turso embedded replicas). `Database` struct stores `libsql::Database` handle + `Connection` + `tokio::runtime::Runtime`. Local-only via `Database::new()` / `Builder::new_local()`. Turso sync via `Database::new_with_sync(url, token)` / `Builder::new_remote_replica()` with 60s auto-sync interval and `read_your_writes(true)`. `db.sync()` triggers on-demand sync. All DB methods use an async bridge: each method wraps async libsql calls in `self.rt.block_on()`. Row value extraction uses helper functions (`val_string`, `val_i64`, `val_bool`, `val_opt_string`, `val_opt_i64`, `val_opt_bool`) since libsql uses a `Value` enum for nullable fields.
 - **Config file**: `~/.config/dodo/config.toml` with `[sync]` and `[backup]` sections. Parsed via `config.rs` with serde. Env var fallbacks: `DODO_TURSO_TOKEN`, `DODO_S3_ACCESS_KEY`, `DODO_S3_SECRET_KEY` (only used when config field is `None`). `SyncConfig::is_ready()` and `BackupConfig::is_ready()` check all required fields are present and enabled.
-- **S3 backup**: `backup.rs` provides `create_backup` (gzip compress + upload), `list_backups` (newest first), `restore_backup` (download + decompress + safety `.pre-restore` copy), `delete_backup`, `check_backup_age` (startup overdue warning). Auto-prunes old backups beyond `max_backups` limit. CLI: `dodo backup` (create), `dodo backup list`, `dodo backup restore [latest]`, `dodo backup delete <name>`.
+- **S3 backup**: `backup.rs` provides `create_backup` (gzip compress + upload), `list_backups` (newest first), `restore_backup` (download + decompress + safety `.pre-restore` copy), `delete_backup`, `check_backup_age` (startup overdue warning). Auto-prunes old backups beyond `max_backups` limit. Uses `new_runtime()` helper to deduplicate tokio runtime creation. CLI: `dodo backup` (create), `dodo backup list`, `dodo backup restore [latest]`, `dodo backup delete <name>`.
 - **Turso sync**: Wired up via `Database::new_with_sync()` when `SyncConfig::is_ready()`. Uses `Builder::new_remote_replica()` with 60s auto-sync interval. `main.rs` loads config before DB init and branches on sync readiness. `dodo sync status/enable/disable` commands. Sync config stored in `[sync]` section of config file. Enable flow is interactive (prompts for URL/token).
 - **TUI Backup tab**: Shows config instructions when not configured, or backup list with name/age/size. Sync status indicator at top: `● enabled` (green) with Turso URL, or `○ not configured` (dim). When backup is unconfigured, also shows sync config instructions. Keys: `j/k` navigate, `u` upload, `r` restore, `d` delete. Status messages shown for operation results.
 - **Startup backup check**: On every CLI invocation, if backup is configured and overdue (>= `schedule_days` since last backup), prints a reminder to stderr.
@@ -89,7 +100,8 @@ cargo test
 
 ## Conventions
 
-- No `unwrap()` in production paths — use `anyhow::Result` and `?`
+- No `unwrap()` in production paths — use `anyhow::Result`, `?`, and `.context()`. Exception: `is_ready()`-guarded config field access (commented with safety invariant) and known-valid date constructions in TUI
+- No silent `let _ =` in library code — use `if let Err(e) = ... { eprintln!("Warning: ...") }`. Exception: TUI event handlers (fire-and-forget, documented)
 - Keep CLI output minimal and scannable
 - Prefer editing existing files over creating new ones
 - Every function should be actively used — no dead code kept for "future use"
