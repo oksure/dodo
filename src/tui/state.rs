@@ -1,8 +1,11 @@
 use anyhow::Result;
+use chrono::{Datelike, NaiveDate};
 use ratatui::widgets::ListState;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::mpsc;
 
 use dodo::cli::SortBy;
+use dodo::config::{PreferencesConfig, WeekStart};
 use dodo::db::Database;
 use dodo::notation::{parse_date, parse_duration, parse_filter_days, prepare_task};
 use dodo::task::{Area, Task, TaskStatus};
@@ -17,6 +20,58 @@ pub(super) enum SyncStatus {
     Syncing,                         // sync in progress
     Synced(std::time::Instant),      // last successful sync timestamp
     Error(String),                   // last sync failed
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum TasksView {
+    Panes,
+    Daily,
+    Weekly,
+    Calendar,
+}
+
+impl TasksView {
+    pub(super) fn next(self) -> Self {
+        match self {
+            TasksView::Panes => TasksView::Daily,
+            TasksView::Daily => TasksView::Weekly,
+            TasksView::Weekly => TasksView::Calendar,
+            TasksView::Calendar => TasksView::Panes,
+        }
+    }
+
+    pub(super) fn prev(self) -> Self {
+        match self {
+            TasksView::Panes => TasksView::Calendar,
+            TasksView::Daily => TasksView::Panes,
+            TasksView::Weekly => TasksView::Daily,
+            TasksView::Calendar => TasksView::Weekly,
+        }
+    }
+
+    pub(super) fn label(self) -> &'static str {
+        match self {
+            TasksView::Panes => "Panes",
+            TasksView::Daily => "Daily",
+            TasksView::Weekly => "Weekly",
+            TasksView::Calendar => "Calendar",
+        }
+    }
+}
+
+pub(super) enum DailyEntry {
+    Header {
+        date: NaiveDate,
+        task_count: usize,
+        is_today: bool,
+    },
+    Task(Task),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum CalendarFocus {
+    Grid,
+    TaskList,
 }
 
 pub(super) struct PaneState {
@@ -114,7 +169,7 @@ pub(super) enum TuiTab {
     Tasks,
     Recurring,
     Report,
-    Backup,
+    Settings,
 }
 
 // ReportRange imported from dodo::cli, re-exported for draw.rs
@@ -186,6 +241,25 @@ pub(super) struct App<'a> {
     pub(super) config_field_input: String,
     // Help modal
     pub(super) help_scroll: usize,
+    // Tasks view mode
+    pub(super) tasks_view: TasksView,
+    // Daily view
+    pub(super) daily_entries: Vec<DailyEntry>,
+    pub(super) daily_cursor: usize,
+    // Weekly view
+    pub(super) weekly_panes: [PaneState; 8],
+    pub(super) weekly_active: usize,
+    pub(super) week_start_date: NaiveDate,
+    // Calendar view
+    pub(super) calendar_year: i32,
+    pub(super) calendar_month: u32,
+    pub(super) calendar_selected: NaiveDate,
+    pub(super) calendar_focus: CalendarFocus,
+    pub(super) calendar_tasks: Vec<Task>,
+    pub(super) calendar_task_selected: usize,
+    pub(super) calendar_task_counts: HashMap<NaiveDate, usize>,
+    // Preferences
+    pub(super) preferences: PreferencesConfig,
 }
 
 impl<'a> App<'a> {
@@ -199,6 +273,7 @@ impl<'a> App<'a> {
         panes[3].sort_index = 1; // DONE pane defaults to modified
         panes[3].sort_ascending = false; // descending (newest done first)
         let config = dodo::config::Config::load().unwrap_or_default();
+        let today = chrono::Local::now().date_naive();
         Self {
             panes,
             active_pane: 2,
@@ -243,6 +318,23 @@ impl<'a> App<'a> {
             config_field_values: Default::default(),
             config_field_input: String::new(),
             help_scroll: 0,
+            tasks_view: TasksView::Panes,
+            daily_entries: Vec::new(),
+            daily_cursor: 0,
+            weekly_panes: [
+                PaneState::new(), PaneState::new(), PaneState::new(), PaneState::new(),
+                PaneState::new(), PaneState::new(), PaneState::new(), PaneState::new(),
+            ],
+            weekly_active: 0,
+            week_start_date: today,
+            calendar_year: today.year(),
+            calendar_month: today.month(),
+            calendar_selected: today,
+            calendar_focus: CalendarFocus::Grid,
+            calendar_tasks: Vec::new(),
+            calendar_task_selected: 0,
+            calendar_task_counts: HashMap::new(),
+            preferences: config.preferences,
         }
     }
 
@@ -303,6 +395,25 @@ impl<'a> App<'a> {
         let sort = SORT_MODES[pane.sort_index];
         let ascending = pane.sort_ascending;
         pane.tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
+    }
+
+    pub(super) fn current_selected_task(&self) -> Option<&Task> {
+        match self.tasks_view {
+            TasksView::Panes => self.panes[self.active_pane].selected_task(),
+            TasksView::Daily => {
+                self.daily_entries.get(self.daily_cursor).and_then(|e| {
+                    if let DailyEntry::Task(ref t) = e { Some(t) } else { None }
+                })
+            }
+            TasksView::Weekly => self.weekly_panes[self.weekly_active].selected_task(),
+            TasksView::Calendar => {
+                if self.calendar_focus == CalendarFocus::TaskList {
+                    self.calendar_tasks.get(self.calendar_task_selected)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
     pub(super) fn matches_search(&self, task: &Task) -> bool {
@@ -478,6 +589,185 @@ impl<'a> App<'a> {
         }
     }
 
+    pub(super) fn refresh_daily(&mut self) -> Result<()> {
+        let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
+        let today = chrono::Local::now().date_naive();
+
+        // Group tasks by scheduled date (None → today)
+        let mut by_date: BTreeMap<NaiveDate, Vec<Task>> = BTreeMap::new();
+        for task in all_tasks {
+            if !self.matches_search(&task) {
+                continue;
+            }
+            let date = task.scheduled.unwrap_or(today);
+            by_date.entry(date).or_default().push(task);
+        }
+
+        // Ensure ±7 days around today have entries even if empty
+        for offset in -7..=7 {
+            let d = today + chrono::Duration::days(offset);
+            by_date.entry(d).or_default();
+        }
+
+        // Sort tasks within each date by status priority then created
+        for tasks in by_date.values_mut() {
+            tasks.sort_by(|a, b| {
+                let status_order = |s: &TaskStatus| match s {
+                    TaskStatus::Running => 0,
+                    TaskStatus::Paused => 1,
+                    TaskStatus::Pending => 2,
+                    TaskStatus::Done => 3,
+                };
+                status_order(&a.status).cmp(&status_order(&b.status))
+                    .then(a.created.cmp(&b.created))
+            });
+        }
+
+        // Build flat Vec<DailyEntry>
+        let mut entries = Vec::new();
+        for (date, tasks) in &by_date {
+            entries.push(DailyEntry::Header {
+                date: *date,
+                task_count: tasks.len(),
+                is_today: *date == today,
+            });
+            for task in tasks {
+                entries.push(DailyEntry::Task(task.clone()));
+            }
+        }
+
+        self.daily_entries = entries;
+        // Clamp cursor
+        if self.daily_entries.is_empty() {
+            self.daily_cursor = 0;
+        } else if self.daily_cursor >= self.daily_entries.len() {
+            self.daily_cursor = self.daily_entries.len() - 1;
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn refresh_weekly(&mut self) -> Result<()> {
+        let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
+        let today = chrono::Local::now().date_naive();
+
+        // Distribute tasks into 8 panes by date
+        let dates: Vec<NaiveDate> = (0..8)
+            .map(|i| self.week_start_date + chrono::Duration::days(i))
+            .collect();
+
+        for pane in &mut self.weekly_panes {
+            pane.tasks.clear();
+        }
+
+        for task in all_tasks {
+            if !self.matches_search(&task) {
+                continue;
+            }
+            let task_date = task.scheduled.unwrap_or(today);
+            for (i, date) in dates.iter().enumerate() {
+                if task_date == *date {
+                    self.weekly_panes[i].tasks.push(task.clone());
+                    break;
+                }
+            }
+        }
+
+        // Sort each pane
+        for pane in &mut self.weekly_panes {
+            let sort = SORT_MODES[pane.sort_index];
+            let ascending = pane.sort_ascending;
+            pane.tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
+            let len = pane.tasks.len();
+            if len == 0 {
+                pane.list_state.select(None);
+            } else if let Some(sel) = pane.list_state.selected() {
+                if sel >= len {
+                    pane.list_state.select(Some(len - 1));
+                }
+            } else {
+                pane.list_state.select(Some(0));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn refresh_calendar(&mut self) -> Result<()> {
+        let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
+        let today = chrono::Local::now().date_naive();
+
+        // Compute task counts per date for the displayed month
+        self.calendar_task_counts.clear();
+        let mut selected_tasks = Vec::new();
+
+        for task in all_tasks {
+            if !self.matches_search(&task) {
+                continue;
+            }
+            let task_date = task.scheduled.unwrap_or(today);
+            *self.calendar_task_counts.entry(task_date).or_insert(0) += 1;
+            if task_date == self.calendar_selected {
+                selected_tasks.push(task);
+            }
+        }
+
+        // Sort selected tasks by status then created
+        selected_tasks.sort_by(|a, b| {
+            let status_order = |s: &TaskStatus| match s {
+                TaskStatus::Running => 0,
+                TaskStatus::Paused => 1,
+                TaskStatus::Pending => 2,
+                TaskStatus::Done => 3,
+            };
+            status_order(&a.status).cmp(&status_order(&b.status))
+                .then(a.created.cmp(&b.created))
+        });
+
+        self.calendar_tasks = selected_tasks;
+        if self.calendar_tasks.is_empty() {
+            self.calendar_task_selected = 0;
+        } else if self.calendar_task_selected >= self.calendar_tasks.len() {
+            self.calendar_task_selected = self.calendar_tasks.len() - 1;
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn refresh_current_view(&mut self) -> Result<()> {
+        match self.tasks_view {
+            TasksView::Panes => self.refresh_all(),
+            TasksView::Daily => self.refresh_daily(),
+            TasksView::Weekly => self.refresh_weekly(),
+            TasksView::Calendar => self.refresh_calendar(),
+        }
+    }
+
+    pub(super) fn daily_jump_to_today(&mut self) {
+        let today = chrono::Local::now().date_naive();
+        // Find the first Task entry on today's date (skip the header)
+        for (i, entry) in self.daily_entries.iter().enumerate() {
+            if let DailyEntry::Task(ref t) = entry {
+                if t.scheduled.unwrap_or(today) == today {
+                    self.daily_cursor = i;
+                    return;
+                }
+            }
+        }
+        // Fallback: find the today header
+        for (i, entry) in self.daily_entries.iter().enumerate() {
+            if let DailyEntry::Header { is_today: true, .. } = entry {
+                // Try to select the next task entry after the header
+                if i + 1 < self.daily_entries.len() {
+                    self.daily_cursor = i + 1;
+                } else {
+                    self.daily_cursor = i;
+                }
+                return;
+            }
+        }
+    }
+
     pub(super) fn move_pane_left(&mut self) {
         if self.active_pane > 0 {
             self.active_pane -= 1;
@@ -491,45 +781,43 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn toggle_selected(&mut self) -> Result<()> {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            if task.status == TaskStatus::Running {
+        let task_info = self.current_selected_task().map(|t| (t.id.clone(), t.status.clone(), t.num_id));
+        if let Some((id, status, num_id)) = task_info {
+            if status == TaskStatus::Running {
                 self.db.pause_timer()?;
             } else {
-                let num_id = task.num_id.map(|n| n.to_string()).unwrap_or_default();
-                if !num_id.is_empty() {
+                let num_str = num_id.map(|n| n.to_string()).unwrap_or_default();
+                if !num_str.is_empty() {
                     let today = chrono::Local::now().date_naive();
-                    self.db.update_task_scheduled(&task.id, today)?;
-                    let _ = self.db.start_timer(&num_id);
+                    self.db.update_task_scheduled(&id, today)?;
+                    let _ = self.db.start_timer(&num_str);
                 }
             }
-            self.refresh_all()?;
+            self.refresh_current_view()?;
         }
         Ok(())
     }
 
     pub(super) fn done(&mut self) -> Result<()> {
-        let task_id = self.panes[self.active_pane]
-            .selected_task()
-            .map(|t| t.id.clone());
-        if let Some(ref id) = task_id {
-            let was_done = self.panes[self.active_pane]
-                .selected_task()
-                .map(|t| t.status == TaskStatus::Done)
-                .unwrap_or(false);
+        let task_info = self.current_selected_task()
+            .map(|t| (t.id.clone(), t.status == TaskStatus::Done));
+        if let Some((ref id, was_done)) = task_info {
             if was_done {
                 self.db.uncomplete_task_by_id(id)?;
             } else {
                 self.db.complete_task_by_id(id)?;
             }
         }
-        self.refresh_all()?;
-        // Follow the task to its new pane
-        if let Some(ref id) = task_id {
-            for pane_idx in 0..4 {
-                if let Some(pos) = self.panes[pane_idx].tasks.iter().position(|t| t.id == *id) {
-                    self.active_pane = pane_idx;
-                    self.panes[pane_idx].list_state.select(Some(pos));
-                    break;
+        self.refresh_current_view()?;
+        // Follow the task to its new pane (Panes view only)
+        if self.tasks_view == TasksView::Panes {
+            if let Some((ref id, _)) = task_info {
+                for pane_idx in 0..4 {
+                    if let Some(pos) = self.panes[pane_idx].tasks.iter().position(|t| t.id == *id) {
+                        self.active_pane = pane_idx;
+                        self.panes[pane_idx].list_state.select(Some(pos));
+                        break;
+                    }
                 }
             }
         }
@@ -574,14 +862,14 @@ impl<'a> App<'a> {
                 prep.tags,
                 prep.priority,
             )?;
-            self.refresh_all()?;
+            self.refresh_current_view()?;
         }
         self.mode = AppMode::Normal;
         Ok(())
     }
 
     pub(super) fn start_move_task(&mut self) {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
+        if let Some(task) = self.current_selected_task() {
             if task.status == TaskStatus::Done {
                 return; // Can't move done tasks
             }
@@ -617,7 +905,7 @@ impl<'a> App<'a> {
                 _ => Area::Today,
             };
             self.db.update_task_scheduled(task_id, area.to_scheduled_date())?;
-            self.refresh_all()?;
+            self.refresh_current_view()?;
         }
         self.mode = AppMode::Normal;
         Ok(())
@@ -642,7 +930,7 @@ impl<'a> App<'a> {
                 _ => Area::Today,
             };
             self.db.update_task_scheduled(&task_id, area.to_scheduled_date())?;
-            self.refresh_all()?;
+            self.refresh_current_view()?;
             self.active_pane = target;
             if let Some(pos) = self.panes[target].tasks.iter().position(|t| t.id == task_id) {
                 self.panes[target].list_state.select(Some(pos));
@@ -652,9 +940,10 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn start_delete(&mut self) {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
-            self.delete_task_id = Some(task.id.clone());
-            self.delete_task_title = task.title.clone();
+        let info = self.current_selected_task().map(|t| (t.id.clone(), t.title.clone()));
+        if let Some((id, title)) = info {
+            self.delete_task_id = Some(id);
+            self.delete_task_title = title;
             self.mode = AppMode::ConfirmDelete;
         }
     }
@@ -662,14 +951,14 @@ impl<'a> App<'a> {
     pub(super) fn confirm_delete(&mut self) -> Result<()> {
         if let Some(ref task_id) = self.delete_task_id {
             self.db.delete_task_by_id(task_id)?;
-            self.refresh_all()?;
+            self.refresh_current_view()?;
         }
         self.mode = AppMode::Normal;
         Ok(())
     }
 
     pub(super) fn start_edit_task(&mut self) {
-        if let Some(task) = self.panes[self.active_pane].selected_task() {
+        if let Some(task) = self.current_selected_task().cloned() {
             self.edit_task_id = Some(task.id.clone());
             self.edit_field_index = 0;
             self.edit_field_values = [
@@ -721,7 +1010,7 @@ impl<'a> App<'a> {
             let full = self.note_lines.join("\n");
             self.db.update_notes_by_id(task_id, &full)?;
             self.edit_field_values[8] = full;
-            self.refresh_all()?;
+            self.refresh_current_view()?;
         }
         Ok(())
     }
@@ -824,7 +1113,7 @@ impl<'a> App<'a> {
                 }
                 _ => {}
             }
-            self.refresh_all()?;
+            self.refresh_current_view()?;
         }
         // After appending a note, return to NoteView so the user sees the updated list
         if idx == 8 && !self.edit_field_values[8].is_empty() {
@@ -859,6 +1148,11 @@ impl<'a> App<'a> {
             self.backup_config.region.clone().unwrap_or_default(),
             self.backup_config.schedule_days.to_string(),
             self.backup_config.max_backups.to_string(),
+            // Preferences fields (13)
+            match self.preferences.week_start {
+                WeekStart::Sunday => "sunday".to_string(),
+                WeekStart::Monday => "monday".to_string(),
+            },
         ];
         self.mode = AppMode::EditConfig;
     }
@@ -902,6 +1196,13 @@ impl<'a> App<'a> {
             10 => self.backup_config.region = opt,
             11 => self.backup_config.schedule_days = val.parse().unwrap_or(7),
             12 => self.backup_config.max_backups = val.parse().unwrap_or(10),
+            13 => {
+                self.preferences.week_start = if val.to_lowercase() == "monday" {
+                    WeekStart::Monday
+                } else {
+                    WeekStart::Sunday
+                };
+            }
             _ => {}
         }
     }
@@ -910,6 +1211,7 @@ impl<'a> App<'a> {
         let config = dodo::config::Config {
             sync: self.sync_config.clone(),
             backup: self.backup_config.clone(),
+            preferences: self.preferences.clone(),
         };
         config.save()?;
         if self.backup_config.is_ready() {

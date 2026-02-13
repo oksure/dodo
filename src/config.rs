@@ -2,12 +2,33 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WeekStart {
+    Sunday,
+    Monday,
+}
+
+impl Default for WeekStart {
+    fn default() -> Self {
+        WeekStart::Sunday
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PreferencesConfig {
+    #[serde(default)]
+    pub week_start: WeekStart,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub sync: SyncConfig,
     #[serde(default)]
     pub backup: BackupConfig,
+    #[serde(default)]
+    pub preferences: PreferencesConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

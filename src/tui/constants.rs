@@ -31,12 +31,13 @@ pub(super) enum ConfigFieldType {
     Number,
 }
 
-pub(super) const CONFIG_FIELD_COUNT: usize = 13;
+pub(super) const CONFIG_FIELD_COUNT: usize = 14;
 
 pub(super) const CONFIG_FIELD_LABELS: [&str; CONFIG_FIELD_COUNT] = [
     "Sync Enabled", "Turso URL", "Turso Token", "Sync Interval",
     "Backup Enabled", "Endpoint", "Bucket", "Prefix",
     "Access Key", "Secret Key", "Region", "Schedule Days", "Max Backups",
+    "Week Start",
 ];
 
 pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
@@ -53,6 +54,7 @@ pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
     "us-east-1 (optional, not needed for R2/MinIO)",
     "Days between backups (default: 7)",
     "Max backups to keep (default: 10)",
+    "sunday or monday (default: sunday)",
 ];
 
 pub(super) const TOAST_DURATION_SECS: u64 = 5;
@@ -63,4 +65,5 @@ pub(super) const CONFIG_FIELD_TYPES: [ConfigFieldType; CONFIG_FIELD_COUNT] = [
     ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::String, ConfigFieldType::String,
     ConfigFieldType::Sensitive, ConfigFieldType::Sensitive, ConfigFieldType::String,
     ConfigFieldType::Number, ConfigFieldType::Number,
+    ConfigFieldType::String,
 ];

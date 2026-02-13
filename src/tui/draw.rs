@@ -9,6 +9,7 @@ use ratatui::{
     Frame,
 };
 
+use chrono::Datelike;
 use dodo::task::{Task, TaskStatus};
 
 use super::constants::*;
@@ -17,14 +18,16 @@ use super::state::*;
 
 pub(super) fn draw_ui(f: &mut Frame, app: &App) {
     let search_height = if app.tab == TuiTab::Tasks { 3 } else { 0 };
+    let view_selector_height = if app.tab == TuiTab::Tasks { 1 } else { 0 };
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),            // Header [0]
-            Constraint::Length(1),            // Tab bar [1]
-            Constraint::Length(search_height), // Search bar [2]
-            Constraint::Min(0),              // Content [3]
-            Constraint::Length(1),            // Footer [4]
+            Constraint::Length(2),                  // Header [0]
+            Constraint::Length(1),                  // Tab bar [1]
+            Constraint::Length(search_height),       // Search bar [2]
+            Constraint::Length(view_selector_height), // View selector [3]
+            Constraint::Min(0),                     // Content [4]
+            Constraint::Length(1),                   // Footer [5]
         ])
         .split(f.area());
 
@@ -36,10 +39,10 @@ pub(super) fn draw_ui(f: &mut Frame, app: &App) {
         TuiTab::Tasks => 0,
         TuiTab::Recurring => 1,
         TuiTab::Report => 2,
-        TuiTab::Backup => 3,
+        TuiTab::Settings => 3,
     };
-    let tab_names = [" Tasks ", " Recurring ", " Report ", " Backup "];
-    let tab_keys = [" t ", " c ", " r ", " b "];
+    let tab_names = [" Tasks ", " Recurring ", " Report ", " Settings "];
+    let tab_keys = [" t ", " c ", " r ", " , "];
     let tab_titles: Vec<Line> = (0..4)
         .map(|i| {
             if i == tab_index {
@@ -77,18 +80,24 @@ pub(super) fn draw_ui(f: &mut Frame, app: &App) {
     // Search bar (Tasks tab only)
     if app.tab == TuiTab::Tasks {
         draw_search_bar(f, app, outer[2]);
+        draw_view_selector(f, app, outer[3]);
     }
 
     // Content
     match app.tab {
-        TuiTab::Tasks => draw_tasks_tab(f, app, outer[3]),
-        TuiTab::Recurring => draw_recurring_tab(f, app, outer[3]),
-        TuiTab::Report => draw_report_tab(f, app, outer[3]),
-        TuiTab::Backup => draw_backup_tab(f, app, outer[3]),
+        TuiTab::Tasks => match app.tasks_view {
+            TasksView::Panes => draw_tasks_panes(f, app, outer[4]),
+            TasksView::Daily => draw_tasks_daily(f, app, outer[4]),
+            TasksView::Weekly => draw_tasks_weekly(f, app, outer[4]),
+            TasksView::Calendar => draw_tasks_calendar(f, app, outer[4]),
+        },
+        TuiTab::Recurring => draw_recurring_tab(f, app, outer[4]),
+        TuiTab::Report => draw_report_tab(f, app, outer[4]),
+        TuiTab::Settings => draw_backup_tab(f, app, outer[4]),
     }
 
     // Footer
-    draw_footer(f, app, outer[4]);
+    draw_footer(f, app, outer[5]);
 
     // Modal overlays
     match app.mode {
@@ -248,19 +257,66 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("type", "filter"),
                 ("Enter/Esc", "done"),
             ],
-            _ => vec![
-                ("a", "add"),
-                ("</>", "move"),
-                ("\u{21B5}", "detail"),
-                ("\u{232B}", "del"),
-                ("s", "start"),
-                ("d", "done"),
-                ("n", "note"),
-                ("o", "sort"),
-                ("/", "search"),
-                ("?", "help"),
-                ("q", "quit"),
-            ],
+            _ => match app.tasks_view {
+                TasksView::Panes => vec![
+                    ("a", "add"),
+                    ("</>", "move"),
+                    ("\u{21B5}", "detail"),
+                    ("\u{232B}", "del"),
+                    ("s", "start"),
+                    ("d", "done"),
+                    ("n", "note"),
+                    ("o", "sort"),
+                    ("v", "view"),
+                    ("/", "search"),
+                    ("?", "help"),
+                    ("q", "quit"),
+                ],
+                TasksView::Daily => vec![
+                    ("a", "add"),
+                    ("s", "start"),
+                    ("d", "done"),
+                    ("n", "note"),
+                    ("t", "today"),
+                    ("v", "view"),
+                    ("/", "search"),
+                    ("?", "help"),
+                    ("q", "quit"),
+                ],
+                TasksView::Weekly => vec![
+                    ("a", "add"),
+                    ("s", "start"),
+                    ("d", "done"),
+                    ("h/l", "tile"),
+                    ("[/]", "week"),
+                    ("t", "today"),
+                    ("v", "view"),
+                    ("/", "search"),
+                    ("?", "help"),
+                    ("q", "quit"),
+                ],
+                TasksView::Calendar => match app.calendar_focus {
+                    CalendarFocus::Grid => vec![
+                        ("hjkl", "navigate"),
+                        ("[/]", "month"),
+                        ("t", "today"),
+                        ("Tab", "tasks"),
+                        ("v", "view"),
+                        ("?", "help"),
+                        ("q", "quit"),
+                    ],
+                    CalendarFocus::TaskList => vec![
+                        ("j/k", "tasks"),
+                        ("s", "start"),
+                        ("d", "done"),
+                        ("n", "note"),
+                        ("Esc/Tab", "grid"),
+                        ("v", "view"),
+                        ("?", "help"),
+                        ("q", "quit"),
+                    ],
+                },
+            },
         },
         TuiTab::Recurring => match app.mode {
             AppMode::RecAddTemplate => vec![
@@ -282,7 +338,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("?", "help"),
             ("q", "quit"),
         ],
-        TuiTab::Backup => match app.mode {
+        TuiTab::Settings => match app.mode {
             AppMode::EditConfig => vec![
                 ("j/k \u{2193}\u{2191}", "navigate"),
                 ("\u{21B5}", "edit"),
@@ -324,7 +380,33 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-pub(super) fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_view_selector(f: &mut Frame, app: &App, area: Rect) {
+    let views = [TasksView::Panes, TasksView::Daily, TasksView::Weekly, TasksView::Calendar];
+    let mut left_spans: Vec<Span> = vec![Span::styled("  ", Style::default())];
+    for view in &views {
+        if *view == app.tasks_view {
+            left_spans.push(Span::styled(
+                format!("\u{25CF} {} ", view.label()),
+                Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            left_spans.push(Span::styled(
+                format!("  {} ", view.label()),
+                Style::default().fg(FG_OVERLAY),
+            ));
+        }
+    }
+
+    let right = "v:next  V:prev ";
+    let left_width: usize = left_spans.iter().map(|s| s.content.len()).sum();
+    let pad = (area.width as usize).saturating_sub(left_width + right.len());
+    left_spans.push(Span::raw(" ".repeat(pad)));
+    left_spans.push(Span::styled(right, Style::default().fg(FG_OVERLAY)));
+
+    f.render_widget(Paragraph::new(Line::from(left_spans)), area);
+}
+
+pub(super) fn draw_tasks_panes(f: &mut Frame, app: &App, area: Rect) {
     let now = chrono::Local::now();
     let today = now.date_naive();
     let tomorrow = today + chrono::Duration::days(1);
@@ -353,6 +435,498 @@ pub(super) fn draw_tasks_tab(f: &mut Frame, app: &App, area: Rect) {
         let arrow = if app.panes[i].sort_ascending { "\u{2191}" } else { "\u{2193}" };
         let sort_display = format!("{}{}", sl, arrow);
         draw_pane(f, &app.panes[i], &headers[i], is_active, app.frame_count, &sort_display, pane_chunks[i]);
+    }
+}
+
+pub(super) fn build_task_list_item(
+    task: &Task,
+    is_selected: bool,
+    is_active: bool,
+    frame_count: u64,
+    width: u16,
+    today: chrono::NaiveDate,
+) -> ListItem<'static> {
+    let is_running = task.status == TaskStatus::Running;
+    let is_neon = is_running;
+    let is_overdue = !is_running
+        && task.status != TaskStatus::Done
+        && is_task_overdue(task, today);
+    let status_icon = match task.status {
+        TaskStatus::Pending => "\u{25CB}",
+        TaskStatus::Running => "\u{25B6}",
+        TaskStatus::Paused => "\u{23F8}",
+        TaskStatus::Done => "\u{2713}",
+    };
+
+    let num = task
+        .num_id
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| "?".into());
+    let notes_mark = match &task.notes {
+        Some(n) if !n.is_empty() => " *",
+        _ => "",
+    };
+    let recur_mark = if task.template_id.is_some() { " \u{21BB}" } else { "" };
+
+    let (num_style, title_style) = if is_running {
+        (
+            Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD),
+        )
+    } else if is_overdue {
+        (
+            Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
+        )
+    } else {
+        (task_num_style(task), task_title_style(task))
+    };
+
+    let status_style = match task.status {
+        TaskStatus::Running => Style::default().fg(ACCENT_GREEN),
+        TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
+        TaskStatus::Done => Style::default().fg(ACCENT_TEAL),
+        TaskStatus::Pending => {
+            if is_overdue {
+                Style::default().fg(ACCENT_RED)
+            } else {
+                Style::default().fg(FG_OVERLAY)
+            }
+        }
+    };
+
+    let line1 = Line::from(vec![
+        Span::styled(format!(" {:>3} ", num), num_style),
+        Span::styled(format!("{} ", status_icon), status_style),
+        Span::styled(format!("{}{}{}", task.title, recur_mark, notes_mark), title_style),
+    ]);
+
+    let meta_spans = build_compact_meta(task, today);
+
+    if is_neon {
+        let neon_line1 = apply_neon(line1, frame_count, width);
+        if meta_spans.is_empty() {
+            ListItem::new(vec![neon_line1])
+        } else {
+            let mut line2_spans = vec![Span::raw("       ")];
+            line2_spans.extend(meta_spans);
+            let line2 = Line::from(line2_spans);
+            let neon_line2 = apply_neon(line2, frame_count, width);
+            ListItem::new(vec![neon_line1, neon_line2])
+        }
+    } else if is_selected && is_active {
+        let bg = Color::Rgb(65, 75, 120);
+        let item = if meta_spans.is_empty() {
+            ListItem::new(vec![line1])
+        } else {
+            let mut line2_spans = vec![Span::raw("       ")];
+            line2_spans.extend(meta_spans);
+            let line2 = Line::from(line2_spans);
+            ListItem::new(vec![line1, line2])
+        };
+        item.style(Style::default().bg(bg))
+    } else {
+        if meta_spans.is_empty() {
+            ListItem::new(vec![line1])
+        } else {
+            let mut line2_spans = vec![Span::raw("       ")];
+            line2_spans.extend(meta_spans);
+            let line2 = Line::from(line2_spans);
+            ListItem::new(vec![line1, line2])
+        }
+    }
+}
+
+// ── Daily View ──────────────────────────────────────────────────────
+
+pub(super) fn draw_tasks_daily(f: &mut Frame, app: &App, area: Rect) {
+    let today = chrono::Local::now().date_naive();
+
+    let items: Vec<ListItem> = app
+        .daily_entries
+        .iter()
+        .enumerate()
+        .map(|(idx, entry)| {
+            match entry {
+                DailyEntry::Header { date, task_count, is_today } => {
+                    let day_name = DAY_NAMES[date.weekday().num_days_from_sunday() as usize];
+                    let relative = if *is_today {
+                        "Today"
+                    } else if *date == today + chrono::Duration::days(1) {
+                        "Tomorrow"
+                    } else if *date == today - chrono::Duration::days(1) {
+                        "Yesterday"
+                    } else {
+                        ""
+                    };
+
+                    let date_str = date.format("%b %d").to_string();
+                    let label = if relative.is_empty() {
+                        format!("{} \u{00B7} {}", date_str, day_name)
+                    } else {
+                        format!("{} \u{00B7} {} \u{00B7} {}", date_str, relative, day_name)
+                    };
+                    let count_str = format!("  ({})", task_count);
+
+                    let style = if *is_today {
+                        Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)
+                    } else if *date < today {
+                        Style::default().fg(FG_OVERLAY)
+                    } else {
+                        Style::default().fg(FG_SUBTEXT)
+                    };
+
+                    ListItem::new(Line::from(vec![
+                        Span::styled(label, style),
+                        Span::styled(count_str, Style::default().fg(FG_OVERLAY)),
+                    ]))
+                }
+                DailyEntry::Task(task) => {
+                    let is_selected = idx == app.daily_cursor;
+                    build_task_list_item(task, is_selected, true, app.frame_count, area.width, today)
+                }
+            }
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_symbol("\u{258C} ");
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.daily_cursor));
+    f.render_stateful_widget(list, area, &mut list_state);
+
+    // Scrollbar
+    let visible = area.height as usize;
+    if app.daily_entries.len() > visible {
+        let mut scrollbar_state = ScrollbarState::new(app.daily_entries.len())
+            .position(app.daily_cursor);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(FG_OVERLAY));
+        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
+}
+
+// ── Weekly View ─────────────────────────────────────────────────────
+
+pub(super) fn draw_tasks_weekly(f: &mut Frame, app: &App, area: Rect) {
+    let today = chrono::Local::now().date_naive();
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    let top_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(25); 4])
+        .split(rows[0]);
+    let bot_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(25); 4])
+        .split(rows[1]);
+
+    let tiles: Vec<Rect> = top_cols.iter().chain(bot_cols.iter()).copied().collect();
+
+    for i in 0..8 {
+        let tile_date = app.week_start_date + chrono::Duration::days(i as i64);
+        let is_today = tile_date == today;
+        let is_active = i == app.weekly_active;
+        draw_day_tile(f, &app.weekly_panes[i], tile_date, is_today, is_active, app.frame_count, tiles[i]);
+    }
+}
+
+fn draw_day_tile(
+    f: &mut Frame,
+    pane: &PaneState,
+    date: chrono::NaiveDate,
+    is_today: bool,
+    is_active: bool,
+    frame_count: u64,
+    area: Rect,
+) {
+    let day_name = DAY_NAMES[date.weekday().num_days_from_sunday() as usize];
+    let header = format!("{} {}", day_name, date.day());
+
+    let border_color = if is_active {
+        ACCENT_BLUE
+    } else if is_today {
+        ACCENT_GREEN
+    } else {
+        FG_OVERLAY
+    };
+
+    let title_style = if is_active {
+        Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)
+    } else if is_today {
+        Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(FG_SUBTEXT)
+    };
+
+    let block = Block::bordered()
+        .title(Span::styled(format!(" {} ", header), title_style))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border_color));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if pane.tasks.is_empty() {
+        return;
+    }
+
+    let today_date = chrono::Local::now().date_naive();
+    let selected_idx = pane.list_state.selected();
+
+    let items: Vec<ListItem> = pane
+        .tasks
+        .iter()
+        .enumerate()
+        .map(|(idx, task)| {
+            let is_selected = is_active && selected_idx == Some(idx);
+            build_task_list_item(task, is_selected, is_active, frame_count, inner.width, today_date)
+        })
+        .collect();
+
+    let list = List::new(items);
+    let list = if is_active {
+        list.highlight_style(Style::default().add_modifier(Modifier::BOLD))
+            .highlight_symbol("\u{258C} ")
+    } else {
+        list.highlight_symbol("  ")
+    };
+
+    f.render_stateful_widget(list, inner, &mut pane.list_state.clone());
+
+    // Scrollbar
+    let visible = inner.height as usize / 2;
+    if pane.tasks.len() > visible && inner.height > 0 {
+        let mut scrollbar_state = ScrollbarState::new(pane.tasks.len())
+            .position(pane.list_state.selected().unwrap_or(0));
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(FG_OVERLAY));
+        f.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
+    }
+}
+
+// ── Calendar View ───────────────────────────────────────────────────
+
+pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
+    let today = chrono::Local::now().date_naive();
+
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Month/Year title
+            Constraint::Length(1), // Day-of-week headers
+            Constraint::Min(0),   // Grid
+        ])
+        .split(area);
+
+    // Title line
+    let month_names = [
+        "", "January", "February", "March", "April", "May", "June",
+        "July", "August", "September", "October", "November", "December",
+    ];
+    let month_name = month_names[app.calendar_month as usize];
+    let title = format!("  \u{25C4} {} {} \u{25BA}", month_name, app.calendar_year);
+    let hints = "[/]:month  t:today ";
+    let title_width = title.len();
+    let pad = (layout[0].width as usize).saturating_sub(title_width + hints.len());
+    let title_line = Line::from(vec![
+        Span::styled(title, Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)),
+        Span::raw(" ".repeat(pad)),
+        Span::styled(hints, Style::default().fg(FG_OVERLAY)),
+    ]);
+    f.render_widget(Paragraph::new(title_line), layout[0]);
+
+    // Day-of-week headers
+    let dow_labels = ["  Sun  ", "  Mon  ", "  Tue  ", "  Wed  ", "  Thu  ", "  Fri  ", "  Sat  "];
+    let dow_spans: Vec<Span> = dow_labels.iter().map(|d| {
+        Span::styled(*d, Style::default().fg(FG_SUBTEXT).add_modifier(Modifier::BOLD))
+    }).collect();
+    // Pad to fill width
+    let dow_line = Line::from(dow_spans);
+    f.render_widget(Paragraph::new(dow_line), layout[1]);
+
+    // Compute calendar grid
+    let first_of_month = chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, 1)
+        .unwrap_or(today);
+    let start_weekday = first_of_month.weekday().num_days_from_sunday(); // 0=Sun
+    let days_in = days_in_month_cal(app.calendar_year, app.calendar_month);
+
+    // Total cells: start_weekday + days_in, rounded up to multiple of 7
+    let total_cells = start_weekday + days_in;
+    let num_rows = (total_cells + 6) / 7;
+
+    let grid_area = layout[2];
+    if grid_area.height == 0 || num_rows == 0 {
+        return;
+    }
+
+    let row_constraints: Vec<Constraint> = (0..num_rows)
+        .map(|_| Constraint::Ratio(1, num_rows as u32))
+        .collect();
+    let grid_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(row_constraints)
+        .split(grid_area);
+
+    let col_constraints = [Constraint::Ratio(1, 7); 7];
+
+    for row in 0..num_rows as usize {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(col_constraints)
+            .split(grid_rows[row]);
+
+        for col in 0..7 {
+            let cell_idx = row * 7 + col;
+            let day_num = cell_idx as u32 - start_weekday + 1;
+
+            if cell_idx < start_weekday as usize || day_num > days_in {
+                // Empty cell (outside month)
+                let block = Block::bordered()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Color::Rgb(40, 42, 54)));
+                f.render_widget(block, cols[col]);
+                continue;
+            }
+
+            let cell_date = chrono::NaiveDate::from_ymd_opt(
+                app.calendar_year, app.calendar_month, day_num
+            ).unwrap_or(today);
+
+            let is_cell_today = cell_date == today;
+            let is_selected = cell_date == app.calendar_selected;
+            let task_count = app.calendar_task_counts.get(&cell_date).copied().unwrap_or(0);
+
+            let border_color = if is_selected && app.calendar_focus == CalendarFocus::TaskList {
+                ACCENT_MAUVE
+            } else if is_selected {
+                ACCENT_BLUE
+            } else if is_cell_today {
+                ACCENT_GREEN
+            } else {
+                Color::Rgb(60, 62, 78)
+            };
+
+            let block = Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color));
+
+            let inner = block.inner(cols[col]);
+            f.render_widget(block, cols[col]);
+
+            if inner.height == 0 || inner.width < 2 {
+                continue;
+            }
+
+            // Line 1: date number
+            let date_style = if is_cell_today {
+                Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+            } else if is_selected {
+                Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(FG_SUBTEXT)
+            };
+            let date_str = format!("{}", day_num);
+            let count_str = if task_count > 0 {
+                format!(" ({})", task_count)
+            } else {
+                String::new()
+            };
+            let date_line = Line::from(vec![
+                Span::styled(date_str, date_style),
+                Span::styled(count_str, Style::default().fg(FG_OVERLAY)),
+            ]);
+            let date_area = Rect::new(inner.x, inner.y, inner.width, 1);
+            f.render_widget(Paragraph::new(date_line), date_area);
+
+            // Lines 2+: compact task entries
+            if is_selected && !app.calendar_tasks.is_empty() {
+                let max_tasks = (inner.height as usize).saturating_sub(1);
+                let show_count = app.calendar_tasks.len().min(max_tasks);
+                let has_more = app.calendar_tasks.len() > max_tasks;
+
+                for (ti, task) in app.calendar_tasks.iter().take(if has_more { max_tasks.saturating_sub(1) } else { max_tasks }).enumerate() {
+                    let y_offset = 1 + ti as u16;
+                    if y_offset >= inner.height {
+                        break;
+                    }
+
+                    let icon = match task.status {
+                        TaskStatus::Running => "\u{25B6}",
+                        TaskStatus::Paused => "\u{23F8}",
+                        TaskStatus::Done => "\u{2713}",
+                        TaskStatus::Pending => "\u{25CB}",
+                    };
+
+                    let max_title_len = (inner.width as usize).saturating_sub(2);
+                    let title: String = task.title.chars().take(max_title_len).collect();
+
+                    let is_task_selected = app.calendar_focus == CalendarFocus::TaskList
+                        && ti == app.calendar_task_selected;
+
+                    let style = if task.status == TaskStatus::Running {
+                        Style::default().fg(ACCENT_GREEN)
+                    } else if is_task_selected {
+                        Style::default().fg(FG_TEXT).bg(Color::Rgb(65, 75, 120))
+                    } else {
+                        Style::default().fg(FG_SUBTEXT)
+                    };
+
+                    let task_line = Line::from(Span::styled(
+                        format!("{}{}", icon, title),
+                        style,
+                    ));
+                    let task_area = Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
+                    f.render_widget(Paragraph::new(task_line), task_area);
+                }
+
+                if has_more && show_count > 0 {
+                    let remaining = app.calendar_tasks.len() - (max_tasks - 1);
+                    let more_y = inner.y + max_tasks as u16;
+                    if more_y < inner.y + inner.height {
+                        let more_line = Line::from(Span::styled(
+                            format!("+{} more", remaining),
+                            Style::default().fg(FG_OVERLAY),
+                        ));
+                        let more_area = Rect::new(inner.x, more_y, inner.width, 1);
+                        f.render_widget(Paragraph::new(more_line), more_area);
+                    }
+                }
+            } else {
+                // Non-selected cell: show compact task icons
+                let max_tasks = (inner.height as usize).saturating_sub(1);
+                if task_count > 0 && max_tasks > 0 {
+                    let dots = if task_count <= max_tasks {
+                        "\u{25CF}".repeat(task_count)
+                    } else {
+                        format!("{}\u{25CF}+{}", "\u{25CF}".repeat(max_tasks.saturating_sub(1)), task_count - max_tasks + 1)
+                    };
+                    if inner.height > 1 {
+                        let dots_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
+                        f.render_widget(
+                            Paragraph::new(Span::styled(dots, Style::default().fg(FG_OVERLAY))),
+                            dots_area,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn days_in_month_cal(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 29 } else { 28 }
+        }
+        _ => 30,
     }
 }
 
@@ -981,7 +1555,7 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(FG_OVERLAY))
         .title(Span::styled(
-            " Backup ",
+            " Settings ",
             Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
         ))
         .padding(Padding::horizontal(1));
@@ -1985,6 +2559,13 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                     Style::default().fg(FG_OVERLAY),
                 )));
             }
+            if i == 13 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "\u{2500}\u{2500} Preferences \u{2500}\u{2500}",
+                    Style::default().fg(FG_OVERLAY),
+                )));
+            }
             let (display, _) = format_config_display_value(
                 &app.config_field_values[i],
                 CONFIG_FIELD_TYPES[i],
@@ -2044,6 +2625,13 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "\u{2500}\u{2500} Backup \u{2500}\u{2500}",
+                    Style::default().fg(FG_OVERLAY),
+                )));
+            }
+            if i == 13 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "\u{2500}\u{2500} Preferences \u{2500}\u{2500}",
                     Style::default().fg(FG_OVERLAY),
                 )));
             }
@@ -2237,7 +2825,7 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
         help_key("t", "Tasks tab"),
         help_key("c", "Recurring tab"),
         help_key("r", "Report tab"),
-        help_key("b", "Backup tab"),
+        help_key(",", "Settings tab"),
         help_key("y", "Sync now (when sync enabled)"),
         help_key("?", "Toggle this help"),
         help_key("q / Esc", "Quit"),
@@ -2273,6 +2861,8 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
             lines.push(help_key("< / >", "Quick-move task between panes"));
             lines.push(help_key("m", "Move task (pick target)"));
             lines.push(help_key("o", "Cycle sort mode"));
+            lines.push(help_key("v / V", "Next/prev view (Panes/Daily/Weekly/Calendar)"));
+            lines.push(help_key("t", "Jump to today (Daily/Weekly/Calendar)"));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled("Search", desc_style)));
             lines.push(help_key("/", "Open search bar"));
@@ -2304,8 +2894,8 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
                 desc_style,
             )));
         }
-        TuiTab::Backup => {
-            lines.push(Line::from(Span::styled("BACKUP", section_style)));
+        TuiTab::Settings => {
+            lines.push(Line::from(Span::styled("SETTINGS", section_style)));
             lines.push(Line::from(""));
             lines.push(help_key("j/k \u{2193}\u{2191}", "Navigate backups"));
             lines.push(help_key("u", "Upload new backup"));

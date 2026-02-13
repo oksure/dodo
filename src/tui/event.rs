@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::backend::Backend;
 use ratatui::Terminal;
@@ -33,7 +34,27 @@ where
                     AppMode::Normal => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
                         KeyCode::Char('t') => {
-                            app.tab = TuiTab::Tasks;
+                            if app.tab == TuiTab::Tasks {
+                                // Already on Tasks tab: jump to today
+                                match app.tasks_view {
+                                    TasksView::Daily => app.daily_jump_to_today(),
+                                    TasksView::Weekly => {
+                                        app.week_start_date = chrono::Local::now().date_naive();
+                                        app.weekly_active = 0;
+                                        let _ = app.refresh_weekly();
+                                    }
+                                    TasksView::Calendar => {
+                                        let today = chrono::Local::now().date_naive();
+                                        app.calendar_selected = today;
+                                        app.calendar_year = today.year();
+                                        app.calendar_month = today.month();
+                                        let _ = app.refresh_calendar();
+                                    }
+                                    TasksView::Panes => {} // no-op
+                                }
+                            } else {
+                                app.tab = TuiTab::Tasks;
+                            }
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
@@ -49,8 +70,8 @@ where
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
-                        KeyCode::Char('b') => {
-                            app.tab = TuiTab::Backup;
+                        KeyCode::Char(',') => {
+                            app.tab = TuiTab::Settings;
                             app.refresh_backups();
                             app.count_prefix = None;
                             app.pending_g = false;
@@ -66,10 +87,10 @@ where
                                     let _ = app.refresh_report();
                                 }
                                 TuiTab::Report => {
-                                    app.tab = TuiTab::Backup;
+                                    app.tab = TuiTab::Settings;
                                     app.refresh_backups();
                                 }
-                                TuiTab::Backup => {
+                                TuiTab::Settings => {
                                     app.tab = TuiTab::Tasks;
                                 }
                             }
@@ -79,7 +100,7 @@ where
                         KeyCode::BackTab => {
                             match app.tab {
                                 TuiTab::Tasks => {
-                                    app.tab = TuiTab::Backup;
+                                    app.tab = TuiTab::Settings;
                                     app.refresh_backups();
                                 }
                                 TuiTab::Recurring => {
@@ -89,7 +110,7 @@ where
                                     app.tab = TuiTab::Recurring;
                                     let _ = app.refresh_templates();
                                 }
-                                TuiTab::Backup => {
+                                TuiTab::Settings => {
                                     app.tab = TuiTab::Report;
                                     let _ = app.refresh_report();
                                 }
@@ -112,7 +133,20 @@ where
                                 if app.pending_g {
                                     app.pending_g = false;
                                     if key.code == KeyCode::Char('g') {
-                                        app.panes[app.active_pane].jump_to_first();
+                                        match app.tasks_view {
+                                            TasksView::Panes => app.panes[app.active_pane].jump_to_first(),
+                                            TasksView::Daily => {
+                                                // Jump to first Task entry
+                                                for (i, entry) in app.daily_entries.iter().enumerate() {
+                                                    if matches!(entry, DailyEntry::Task(_)) {
+                                                        app.daily_cursor = i;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            TasksView::Weekly => app.weekly_panes[app.weekly_active].jump_to_first(),
+                                            TasksView::Calendar => {} // no-op for calendar
+                                        }
                                         app.count_prefix = None;
                                         // Skip further processing
                                     } else {
@@ -144,7 +178,7 @@ where
                                 }
                             } else if app.tab == TuiTab::Recurring {
                                 handle_recurring_key(app, key.code);
-                            } else if app.tab == TuiTab::Backup {
+                            } else if app.tab == TuiTab::Settings {
                                 handle_backup_key(app, key.code);
                             } else {
                                 match key.code {
@@ -508,10 +542,10 @@ where
             }
 
             match app.tab {
-                TuiTab::Tasks => { let _ = app.refresh_all(); }
+                TuiTab::Tasks => { let _ = app.refresh_current_view(); }
                 TuiTab::Recurring => { let _ = app.refresh_templates(); }
                 TuiTab::Report => { let _ = app.refresh_report(); }
-                TuiTab::Backup => { app.refresh_backups(); }
+                TuiTab::Settings => { app.refresh_backups(); }
             }
             last_data_refresh = std::time::Instant::now();
         }
@@ -520,6 +554,60 @@ where
 
 pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
     let count = app.count_prefix.take().unwrap_or(1);
+
+    // Common keys across all views
+    match code {
+        KeyCode::Char('v') => {
+            app.tasks_view = app.tasks_view.next();
+            let _ = app.refresh_current_view();
+            return;
+        }
+        KeyCode::Char('V') => {
+            app.tasks_view = app.tasks_view.prev();
+            let _ = app.refresh_current_view();
+            return;
+        }
+        KeyCode::Char('s') => {
+            let _ = app.toggle_selected();
+            return;
+        }
+        KeyCode::Char('d') => {
+            let _ = app.done();
+            return;
+        }
+        KeyCode::Char('/') => {
+            app.mode = AppMode::Search;
+            return;
+        }
+        KeyCode::Char('n') => {
+            app.open_note_quick();
+            return;
+        }
+        KeyCode::Char('a') => {
+            app.start_add_task();
+            return;
+        }
+        KeyCode::Enter => {
+            app.start_edit_task();
+            return;
+        }
+        KeyCode::Backspace | KeyCode::Delete => {
+            app.start_delete();
+            return;
+        }
+        _ => {}
+    }
+
+    // View-specific navigation
+    match app.tasks_view {
+        TasksView::Panes => handle_panes_nav(app, code, count),
+        TasksView::Daily => handle_daily_nav(app, code, count),
+        TasksView::Weekly => handle_weekly_nav(app, code, count),
+        TasksView::Calendar => handle_calendar_nav(app, code, count),
+    }
+}
+
+fn handle_panes_nav(app: &mut App, code: KeyCode, count: usize) {
     match code {
         KeyCode::Char('j') | KeyCode::Down => {
             app.panes[app.active_pane].jump(count);
@@ -546,22 +634,7 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('g') => {
             app.pending_g = true;
         }
-        KeyCode::Char('s') => {
-            let _ = app.toggle_selected();
-        }
-        KeyCode::Char('d') => {
-            let _ = app.done();
-        }
         KeyCode::Char('o') => app.cycle_sort(),
-        KeyCode::Char('/') => {
-            app.mode = AppMode::Search;
-        }
-        KeyCode::Char('n') => {
-            app.open_note_quick();
-        }
-        KeyCode::Char('a') => {
-            app.start_add_task();
-        }
         KeyCode::Char('m') => {
             app.start_move_task();
         }
@@ -571,13 +644,310 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('>') => {
             let _ = app.move_task_quick(1);
         }
-        KeyCode::Enter => {
-            app.start_edit_task();
+        _ => {}
+    }
+}
+
+fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            // Skip headers, move to next Task entry
+            for _ in 0..count {
+                let mut next = app.daily_cursor + 1;
+                while next < app.daily_entries.len() {
+                    if matches!(app.daily_entries[next], DailyEntry::Task(_)) {
+                        break;
+                    }
+                    next += 1;
+                }
+                if next < app.daily_entries.len() {
+                    app.daily_cursor = next;
+                }
+            }
         }
-        KeyCode::Backspace | KeyCode::Delete => {
-            app.start_delete();
+        KeyCode::Char('k') | KeyCode::Up => {
+            for _ in 0..count {
+                if app.daily_cursor == 0 {
+                    app.mode = AppMode::Search;
+                    return;
+                }
+                let mut prev = app.daily_cursor.saturating_sub(1);
+                while prev > 0 {
+                    if matches!(app.daily_entries[prev], DailyEntry::Task(_)) {
+                        break;
+                    }
+                    prev -= 1;
+                }
+                if matches!(app.daily_entries.get(prev), Some(DailyEntry::Task(_))) {
+                    app.daily_cursor = prev;
+                } else {
+                    app.mode = AppMode::Search;
+                    return;
+                }
+            }
+        }
+        KeyCode::Char('G') => {
+            // Jump to last Task entry
+            for i in (0..app.daily_entries.len()).rev() {
+                if matches!(app.daily_entries[i], DailyEntry::Task(_)) {
+                    app.daily_cursor = i;
+                    break;
+                }
+            }
+        }
+        KeyCode::Char('g') => {
+            app.pending_g = true;
+        }
+        KeyCode::PageDown => {
+            for _ in 0..10 {
+                let mut next = app.daily_cursor + 1;
+                while next < app.daily_entries.len() {
+                    if matches!(app.daily_entries[next], DailyEntry::Task(_)) {
+                        break;
+                    }
+                    next += 1;
+                }
+                if next < app.daily_entries.len() {
+                    app.daily_cursor = next;
+                }
+            }
+        }
+        KeyCode::PageUp => {
+            for _ in 0..10 {
+                if app.daily_cursor == 0 {
+                    break;
+                }
+                let mut prev = app.daily_cursor.saturating_sub(1);
+                while prev > 0 {
+                    if matches!(app.daily_entries[prev], DailyEntry::Task(_)) {
+                        break;
+                    }
+                    prev -= 1;
+                }
+                if matches!(app.daily_entries.get(prev), Some(DailyEntry::Task(_))) {
+                    app.daily_cursor = prev;
+                }
+            }
+        }
+        KeyCode::Char('o') => app.cycle_sort(),
+        KeyCode::Char('<') => {
+            // Quick-move: change scheduled -1 day
+            if let Some(DailyEntry::Task(ref t)) = app.daily_entries.get(app.daily_cursor) {
+                let today = chrono::Local::now().date_naive();
+                let current = t.scheduled.unwrap_or(today);
+                let new_date = current - chrono::Duration::days(1);
+                let _ = app.db.update_task_scheduled(&t.id, new_date);
+                let _ = app.refresh_daily();
+            }
+        }
+        KeyCode::Char('>') => {
+            // Quick-move: change scheduled +1 day
+            if let Some(DailyEntry::Task(ref t)) = app.daily_entries.get(app.daily_cursor) {
+                let today = chrono::Local::now().date_naive();
+                let current = t.scheduled.unwrap_or(today);
+                let new_date = current + chrono::Duration::days(1);
+                let _ = app.db.update_task_scheduled(&t.id, new_date);
+                let _ = app.refresh_daily();
+            }
+        }
+        KeyCode::Char('m') => {
+            app.start_move_task();
         }
         _ => {}
+    }
+}
+
+fn handle_weekly_nav(app: &mut App, code: KeyCode, count: usize) {
+    match code {
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.weekly_panes[app.weekly_active].jump(count);
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            let sel = app.weekly_panes[app.weekly_active].list_state.selected().unwrap_or(0);
+            if sel == 0 {
+                app.mode = AppMode::Search;
+            } else {
+                app.weekly_panes[app.weekly_active].jump_back(count);
+            }
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            if app.weekly_active > 0 {
+                app.weekly_active -= 1;
+            }
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            if app.weekly_active < 7 {
+                app.weekly_active += 1;
+            }
+        }
+        KeyCode::Char('[') => {
+            // Previous week
+            let week_start_day = match app.preferences.week_start {
+                dodo::config::WeekStart::Sunday => chrono::Weekday::Sun,
+                dodo::config::WeekStart::Monday => chrono::Weekday::Mon,
+            };
+            app.week_start_date = app.week_start_date - chrono::Duration::days(7);
+            // Align to week start day
+            while app.week_start_date.weekday() != week_start_day {
+                app.week_start_date = app.week_start_date - chrono::Duration::days(1);
+            }
+            let _ = app.refresh_weekly();
+        }
+        KeyCode::Char(']') => {
+            // Next week
+            let week_start_day = match app.preferences.week_start {
+                dodo::config::WeekStart::Sunday => chrono::Weekday::Sun,
+                dodo::config::WeekStart::Monday => chrono::Weekday::Mon,
+            };
+            app.week_start_date = app.week_start_date + chrono::Duration::days(7);
+            // Align to week start day
+            while app.week_start_date.weekday() != week_start_day {
+                app.week_start_date = app.week_start_date - chrono::Duration::days(1);
+            }
+            let _ = app.refresh_weekly();
+        }
+        KeyCode::Char('o') => {
+            let pane = &mut app.weekly_panes[app.weekly_active];
+            if pane.sort_ascending {
+                pane.sort_ascending = false;
+            } else {
+                pane.sort_index = (pane.sort_index + 1) % SORT_MODES.len();
+                pane.sort_ascending = true;
+            }
+            let sort = SORT_MODES[pane.sort_index];
+            let ascending = pane.sort_ascending;
+            pane.tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
+        }
+        KeyCode::Char('<') => {
+            // Quick-move task to previous day
+            if let Some(task) = app.weekly_panes[app.weekly_active].selected_task() {
+                let today = chrono::Local::now().date_naive();
+                let current = task.scheduled.unwrap_or(today);
+                let new_date = current - chrono::Duration::days(1);
+                let _ = app.db.update_task_scheduled(&task.id, new_date);
+                let _ = app.refresh_weekly();
+            }
+        }
+        KeyCode::Char('>') => {
+            // Quick-move task to next day
+            if let Some(task) = app.weekly_panes[app.weekly_active].selected_task() {
+                let today = chrono::Local::now().date_naive();
+                let current = task.scheduled.unwrap_or(today);
+                let new_date = current + chrono::Duration::days(1);
+                let _ = app.db.update_task_scheduled(&task.id, new_date);
+                let _ = app.refresh_weekly();
+            }
+        }
+        KeyCode::Char('m') => {
+            app.start_move_task();
+        }
+        KeyCode::Char('G') => {
+            app.weekly_panes[app.weekly_active].jump_to_last();
+        }
+        KeyCode::Char('g') => {
+            app.pending_g = true;
+        }
+        _ => {}
+    }
+}
+
+fn handle_calendar_nav(app: &mut App, code: KeyCode, _count: usize) {
+    match app.calendar_focus {
+        CalendarFocus::Grid => match code {
+            KeyCode::Char('h') | KeyCode::Left => {
+                app.calendar_selected = app.calendar_selected - chrono::Duration::days(1);
+                app.calendar_year = app.calendar_selected.year();
+                app.calendar_month = app.calendar_selected.month();
+                let _ = app.refresh_calendar();
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                app.calendar_selected = app.calendar_selected + chrono::Duration::days(1);
+                app.calendar_year = app.calendar_selected.year();
+                app.calendar_month = app.calendar_selected.month();
+                let _ = app.refresh_calendar();
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.calendar_selected = app.calendar_selected + chrono::Duration::days(7);
+                app.calendar_year = app.calendar_selected.year();
+                app.calendar_month = app.calendar_selected.month();
+                let _ = app.refresh_calendar();
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.calendar_selected = app.calendar_selected - chrono::Duration::days(7);
+                app.calendar_year = app.calendar_selected.year();
+                app.calendar_month = app.calendar_selected.month();
+                let _ = app.refresh_calendar();
+            }
+            KeyCode::Char('[') => {
+                // Previous month
+                if app.calendar_month == 1 {
+                    app.calendar_month = 12;
+                    app.calendar_year -= 1;
+                } else {
+                    app.calendar_month -= 1;
+                }
+                // Clamp selected day
+                let max_day = days_in_month(app.calendar_year, app.calendar_month);
+                let day = app.calendar_selected.day().min(max_day);
+                if let Some(d) = chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, day) {
+                    app.calendar_selected = d;
+                }
+                let _ = app.refresh_calendar();
+            }
+            KeyCode::Char(']') => {
+                // Next month
+                if app.calendar_month == 12 {
+                    app.calendar_month = 1;
+                    app.calendar_year += 1;
+                } else {
+                    app.calendar_month += 1;
+                }
+                let max_day = days_in_month(app.calendar_year, app.calendar_month);
+                let day = app.calendar_selected.day().min(max_day);
+                if let Some(d) = chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, day) {
+                    app.calendar_selected = d;
+                }
+                let _ = app.refresh_calendar();
+            }
+            KeyCode::Tab => {
+                if !app.calendar_tasks.is_empty() {
+                    app.calendar_focus = CalendarFocus::TaskList;
+                    app.calendar_task_selected = 0;
+                }
+            }
+            _ => {}
+        },
+        CalendarFocus::TaskList => match code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                if !app.calendar_tasks.is_empty() && app.calendar_task_selected < app.calendar_tasks.len() - 1 {
+                    app.calendar_task_selected += 1;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                if app.calendar_task_selected > 0 {
+                    app.calendar_task_selected -= 1;
+                }
+            }
+            KeyCode::Tab | KeyCode::Esc => {
+                app.calendar_focus = CalendarFocus::Grid;
+            }
+            _ => {}
+        },
+    }
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
     }
 }
 

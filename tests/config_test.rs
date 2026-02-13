@@ -1,4 +1,4 @@
-use dodo::config::{BackupConfig, Config, SyncConfig};
+use dodo::config::{BackupConfig, Config, PreferencesConfig, SyncConfig, WeekStart};
 
 // ── Default values ──────────────────────────────────────────────────
 
@@ -291,6 +291,7 @@ fn config_serialize_deserialize_roundtrip() {
             schedule_days: 14,
             max_backups: 20,
         },
+        preferences: PreferencesConfig::default(),
     };
 
     let serialized = toml::to_string_pretty(&config).unwrap();
@@ -301,4 +302,53 @@ fn config_serialize_deserialize_roundtrip() {
     assert_eq!(deserialized.backup.prefix, "custom/");
     assert_eq!(deserialized.backup.schedule_days, 14);
     assert_eq!(deserialized.backup.max_backups, 20);
+}
+
+// ── PreferencesConfig ───────────────────────────────────────────────
+
+#[test]
+fn preferences_default_week_start_sunday() {
+    let config = Config::default();
+    assert_eq!(config.preferences.week_start, WeekStart::Sunday);
+}
+
+#[test]
+fn preferences_parse_week_start_monday() {
+    let toml = r#"
+[preferences]
+week_start = "monday"
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert_eq!(config.preferences.week_start, WeekStart::Monday);
+}
+
+#[test]
+fn preferences_parse_week_start_sunday() {
+    let toml = r#"
+[preferences]
+week_start = "sunday"
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert_eq!(config.preferences.week_start, WeekStart::Sunday);
+}
+
+#[test]
+fn preferences_missing_defaults_to_sunday() {
+    let toml = "";
+    let config: Config = toml::from_str(toml).unwrap();
+    assert_eq!(config.preferences.week_start, WeekStart::Sunday);
+}
+
+#[test]
+fn preferences_roundtrip() {
+    let config = Config {
+        sync: SyncConfig::default(),
+        backup: BackupConfig::default(),
+        preferences: PreferencesConfig {
+            week_start: WeekStart::Monday,
+        },
+    };
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let deserialized: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.preferences.week_start, WeekStart::Monday);
 }
