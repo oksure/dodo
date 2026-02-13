@@ -999,3 +999,172 @@ fn report_with_data() {
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].0, "Report task");
 }
+
+// ── Merge: remote newer wins ─────────────────────────────────────────
+
+#[test]
+fn merge_remote_newer_wins() {
+    use chrono::{Duration, Utc};
+
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_task("Original title", Area::Today, Some("old_proj".into()), None, Some(60), None, Some(today), None, None).unwrap();
+
+    let task = db.find_task_by_num_id(1).unwrap().unwrap();
+
+    // Create a "remote" version that's newer
+    let mut remote_task = task.clone();
+    remote_task.title = "Updated from remote".to_string();
+    remote_task.project = Some("new_proj".to_string());
+    remote_task.modified_at = Some(Utc::now() + Duration::seconds(100));
+
+    db.merge_remote_data(&[remote_task], &[]).unwrap();
+
+    let updated = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(updated.title, "Updated from remote");
+    assert_eq!(updated.project.as_deref(), Some("new_proj"));
+}
+
+#[test]
+fn merge_local_newer_wins() {
+    use chrono::{Duration, Utc};
+
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_task("Local title", Area::Today, Some("local_proj".into()), None, None, None, Some(today), None, None).unwrap();
+
+    let task = db.find_task_by_num_id(1).unwrap().unwrap();
+
+    // Create a "remote" version that's OLDER
+    let mut remote_task = task.clone();
+    remote_task.title = "Old remote title".to_string();
+    remote_task.project = Some("old_proj".to_string());
+    remote_task.modified_at = Some(Utc::now() - Duration::seconds(100));
+
+    db.merge_remote_data(&[remote_task], &[]).unwrap();
+
+    let unchanged = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(unchanged.title, "Local title");
+    assert_eq!(unchanged.project.as_deref(), Some("local_proj"));
+}
+
+#[test]
+fn merge_new_remote_task_no_conflict() {
+    use chrono::Utc;
+    use dodo::task::Task;
+
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_task("Local task", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+
+    // Create a brand new remote task with num_id=2 (no conflict)
+    let remote_task = Task {
+        id: ulid::Ulid::new().to_string(),
+        num_id: Some(2),
+        title: "Remote task".to_string(),
+        area: Area::Today,
+        project: None,
+        context: None,
+        status: TaskStatus::Pending,
+        created: Utc::now(),
+        completed: None,
+        modified_at: Some(Utc::now()),
+        estimate_minutes: Some(30),
+        deadline: None,
+        scheduled: Some(today),
+        priority: None,
+        tags: None,
+        notes: None,
+        elapsed_seconds: None,
+        recurrence: None,
+        is_template: false,
+        template_id: None,
+    };
+
+    db.merge_remote_data(&[remote_task], &[]).unwrap();
+
+    let local = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(local.title, "Local task");
+
+    let remote = db.find_task_by_num_id(2).unwrap().unwrap();
+    assert_eq!(remote.title, "Remote task");
+    assert_eq!(remote.estimate_minutes, Some(30));
+}
+
+#[test]
+fn merge_num_id_conflict_earlier_wins() {
+    use chrono::{Duration, Utc};
+    use dodo::task::Task;
+
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    // Local task created "now" with num_id=1
+    db.add_task("Local task", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    let _local = db.find_task_by_num_id(1).unwrap().unwrap();
+
+    // Remote task also wants num_id=1, but was created EARLIER
+    let remote_task = Task {
+        id: ulid::Ulid::new().to_string(),
+        num_id: Some(1),
+        title: "Remote task".to_string(),
+        area: Area::Today,
+        project: None,
+        context: None,
+        status: TaskStatus::Pending,
+        created: Utc::now() - Duration::seconds(1000),
+        completed: None,
+        modified_at: Some(Utc::now()),
+        estimate_minutes: None,
+        deadline: None,
+        scheduled: Some(today),
+        priority: None,
+        tags: None,
+        notes: None,
+        elapsed_seconds: None,
+        recurrence: None,
+        is_template: false,
+        template_id: None,
+    };
+
+    db.merge_remote_data(&[remote_task.clone()], &[]).unwrap();
+
+    // Remote was created earlier, so it should keep num_id=1
+    let task_at_1 = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(task_at_1.title, "Remote task");
+
+    // Local task should have been bumped to num_id=2
+    let task_at_2 = db.find_task_by_num_id(2).unwrap().unwrap();
+    assert_eq!(task_at_2.title, "Local task");
+}
+
+#[test]
+fn merge_sessions_ignore_duplicates() {
+    use chrono::Utc;
+    use dodo::session::Session;
+
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_task("Task", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    let task = db.find_task_by_num_id(1).unwrap().unwrap();
+
+    // Create a session
+    let session = Session {
+        id: "test-session-id".to_string(),
+        task_id: task.id.clone(),
+        started: Utc::now(),
+        ended: Some(Utc::now()),
+        duration: 300,
+        manual_edit: false,
+        notes: None,
+    };
+
+    // Merge same session twice — second should be ignored
+    db.merge_remote_data(&[], &[session.clone()]).unwrap();
+    db.merge_remote_data(&[], &[session.clone()]).unwrap();
+
+    // Verify only one session exists
+    let (_, sessions) = db.export_all_data().unwrap();
+    let matching: Vec<_> = sessions.iter().filter(|s| s.id == "test-session-id").collect();
+    assert_eq!(matching.len(), 1);
+    assert_eq!(matching[0].duration, 300);
+}

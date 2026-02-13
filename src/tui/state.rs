@@ -1,5 +1,6 @@
 use anyhow::Result;
 use ratatui::widgets::ListState;
+use std::sync::mpsc;
 
 use dodo::cli::SortBy;
 use dodo::db::Database;
@@ -174,6 +175,7 @@ pub(super) struct App<'a> {
     pub(super) backup_config: dodo::config::BackupConfig,
     pub(super) sync_config: dodo::config::SyncConfig,
     pub(super) sync_status: SyncStatus,
+    pub(super) sync_receiver: Option<mpsc::Receiver<Result<()>>>,
     pub(super) last_sync_tick: u64,
     pub(super) backup_status_msg: Option<String>,
     // Config editor
@@ -230,6 +232,7 @@ impl<'a> App<'a> {
             backup_config: config.backup,
             sync_config: config.sync.clone(),
             sync_status: if config.sync.is_ready() { SyncStatus::Idle } else { SyncStatus::Disabled },
+            sync_receiver: None,
             last_sync_tick: 0,
             backup_status_msg: None,
             config_field_index: 0,
@@ -247,10 +250,36 @@ impl<'a> App<'a> {
         if !self.sync_enabled() {
             return;
         }
+        // Skip if already syncing
+        if matches!(self.sync_status, SyncStatus::Syncing) {
+            return;
+        }
         self.sync_status = SyncStatus::Syncing;
-        match self.db.sync() {
-            Ok(()) => self.sync_status = SyncStatus::Synced(std::time::Instant::now()),
-            Err(e) => self.sync_status = SyncStatus::Error(format!("{}", e)),
+        // Safety: sync_enabled() implies sync_config.is_ready() which guarantees these are Some
+        let url = self.sync_config.turso_url.clone().unwrap_or_default();
+        let token = self.sync_config.turso_token.clone().unwrap_or_default();
+        self.sync_receiver = Some(Database::sync_with_remote(url, token));
+    }
+
+    pub(super) fn check_sync_result(&mut self) {
+        if let Some(ref rx) = self.sync_receiver {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.sync_status = SyncStatus::Synced(std::time::Instant::now());
+                    self.sync_receiver = None;
+                }
+                Ok(Err(e)) => {
+                    self.sync_status = SyncStatus::Error(format!("{}", e));
+                    self.sync_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    // Still syncing, do nothing
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sync_status = SyncStatus::Error("Sync thread disconnected".to_string());
+                    self.sync_receiver = None;
+                }
+            }
         }
     }
 

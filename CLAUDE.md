@@ -23,7 +23,7 @@ cargo test
 - `src/config.rs` — config file parsing (`~/.config/dodo/config.toml`) for sync and backup settings
 - `src/backup.rs` — S3-compatible backup operations (create, list, restore, delete, prune, age check)
 - `src/tui/` — ratatui terminal UI (binary-only, not in lib), split into modules:
-  - `mod.rs` — `run_tui()` entry point, terminal setup/teardown, initial/final sync
+  - `mod.rs` — `run_tui()` entry point, terminal setup/teardown, initial background sync
   - `constants.rs` — color palette, sort modes, field labels/hints/types
   - `format.rs` — `format_dur()`, `format_est()`, `sort_tasks()`, `sort_label()`, `parse_filter_days()`
   - `state.rs` — `PaneState`, `AppMode`, `TuiTab`, `ReportRange`, `SyncStatus`, `App` struct + all impl methods
@@ -32,7 +32,7 @@ cargo test
 - `tests/fuzzy_test.rs` — 8 unit tests for fuzzy scoring logic
 - `tests/notation_test.rs` — 61 unit tests for notation/duration/date/priority/recurrence parsing
 - `tests/config_test.rs` — 22 unit tests for config parsing, defaults, is_ready checks, serialization roundtrip
-- `tests/workflow_test.rs` — 43 integration tests covering real-world workflows
+- `tests/workflow_test.rs` — 58 integration tests covering real-world workflows
 - `USAGE.md` — real-world use cases with GTD, Pomodoro, Eisenhower frameworks
 
 ## Key Patterns
@@ -83,30 +83,29 @@ cargo test
 - **TUI four-tab layout**: Tab 1 (Tasks, `t`): four vertical panes. Tab 2 (Recurring, `c`): template list with pause/generate/edit. Tab 3 (Report, `r`): productivity stats. Tab 4 (Backup, `b`): S3 backup list with upload/restore/delete/sync. `Tab` cycles through all four. `b` key works from any tab.
 - **Recurrence notation**: `parse_recurrence()` validates patterns. `next_occurrence()` computes the next date from a pattern + reference date. Day-of-month clamps to last day (e.g., day31 in Feb → Feb 28).
 - **Instance indicator**: Recurring instances show `↻` after the title in task panes.
-- **Database engine**: Uses `libsql` (SQLite-compatible fork supporting Turso embedded replicas). `Database` struct stores `libsql::Database` handle + `Connection` + `tokio::runtime::Runtime`. Local-only via `Database::new()` / `Builder::new_local()`. Turso sync via `Database::new_with_sync(url, token)` / `Builder::new_remote_replica()` with 60s auto-sync interval and `read_your_writes(true)`. `db.sync()` triggers on-demand sync. All DB methods use an async bridge: each method wraps async libsql calls in `self.rt.block_on()`. Row value extraction uses helper functions (`val_string`, `val_i64`, `val_bool`, `val_opt_string`, `val_opt_i64`, `val_opt_bool`) since libsql uses a `Value` enum for nullable fields.
+- **Database engine**: Uses `libsql` (SQLite-compatible fork supporting Turso embedded replicas). `Database` struct stores `libsql::Database` handle + `Connection` + `tokio::runtime::Runtime`. Main DB (`dodo.db`) is always `Builder::new_local()` — zero network latency. Sync uses a separate replica (`dodo-sync.db`) opened with `Builder::new_remote_replica()` + `read_your_writes(false)` only inside background sync threads. All DB methods use an async bridge: each method wraps async libsql calls in `self.rt.block_on()`. Row value extraction uses helper functions (`val_string`, `val_i64`, `val_bool`, `val_opt_string`, `val_opt_i64`, `val_opt_bool`) since libsql uses a `Value` enum for nullable fields.
 - **Config file**: `~/.config/dodo/config.toml` with `[sync]` and `[backup]` sections. Parsed via `config.rs` with serde. Env var fallbacks: `DODO_TURSO_TOKEN`, `DODO_S3_ACCESS_KEY`, `DODO_S3_SECRET_KEY` (only used when config field is `None`). `SyncConfig::is_ready()` and `BackupConfig::is_ready()` check all required fields are present and enabled. `SyncConfig.sync_interval` (default 10 minutes) controls periodic sync frequency in TUI.
 - **S3 backup**: `backup.rs` provides `create_backup` (gzip compress + upload), `list_backups` (newest first), `restore_backup` (download + decompress + safety `.pre-restore` copy), `delete_backup`, `check_backup_age` (startup overdue warning). Auto-prunes old backups beyond `max_backups` limit. Uses `new_runtime()` helper to deduplicate tokio runtime creation. CLI: `dodo backup` (create), `dodo backup list`, `dodo backup restore [latest]`, `dodo backup delete <name>`.
-- **Turso sync**: Wired up via `Database::new_with_sync()` when `SyncConfig::is_ready()`. Uses `Builder::new_remote_replica()` with 60s auto-sync interval. `main.rs` loads config before DB init and branches on sync readiness. `dodo sync status/enable/disable` commands. Sync config stored in `[sync]` section of config file. Enable flow is interactive (prompts for URL/token).
-- **Sync transitions**: Seamless local↔sync mode switching via `db.rs` transition layer. `needs_sync_transition()` detects local-only DBs missing sync metadata. `migrate_to_sync()` exports all data, renames old DB as `.pre-sync` backup, creates fresh remote replica, imports data, syncs. Rollback on failure restores the backup file. `clean_sync_metadata()` removes `client_wal` when sync is disabled (ensures re-enable triggers fresh migration). `recover_interrupted_migration()` runs at startup to restore from `.pre-sync` backup if crash interrupted migration. `export_all_data()`/`import_all_data()` handle bulk data transfer using `INSERT OR REPLACE`.
-- **TUI sync status**: `SyncStatus` enum (`Disabled`, `Idle`, `Syncing`, `Synced(Instant)`, `Error(String)`) in `state.rs`. Header shows sync indicator: `● synced y:sync` (green) when connected, `↻ syncing` (yellow) during sync, `⚠ sync err y:retry` (red) on failure, nothing when disabled. Syncs on TUI launch, periodically (configurable interval, default 10min), and on quit. Final sync result printed to stderr after terminal teardown. `y` key triggers manual sync globally; `s` key triggers sync in Backup tab.
+- **Turso sync (local-first, non-blocking)**: Two-DB architecture. Main DB (`dodo.db`) always local via `Database::new()`. Sync replica (`dodo-sync.db`) created on-demand during background sync. `do_remote_sync(url, token)` opens both DBs, pulls from Turso, bidirectionally merges using `merge_remote_data()` (modified_at timestamp wins), then pushes back. `sync_with_remote()` spawns this in a `std::thread`, returns `mpsc::Receiver<Result<()>>`. TUI stores receiver in `App.sync_receiver`, polls with `check_sync_result()` via `try_recv()` (non-blocking). CLI `dodo sync now` calls `do_remote_sync()` directly (blocking). `num_id` conflicts resolved deterministically: earlier `created` timestamp keeps the `num_id`, other gets bumped to `MAX+1`. Sessions use `INSERT OR IGNORE` (first-write-wins). `clean_sync_db()` removes `dodo-sync.db` when sync is disabled. `clean_sync_metadata()` removes old replica metadata from `dodo.db`. `recover_interrupted_migration()` runs at startup as safety net. No final sync on TUI quit — data is safe locally, syncs on next startup.
+- **TUI sync status**: `SyncStatus` enum (`Disabled`, `Idle`, `Syncing`, `Synced(Instant)`, `Error(String)`) in `state.rs`. Header shows sync indicator: `● synced y:sync` (green) when connected, `↻ syncing` (yellow) during sync, `⚠ sync err y:retry` (red) on failure, nothing when disabled. Syncs on TUI launch (non-blocking), periodically (configurable interval, default 10min). No final sync on quit. `y` key triggers manual sync globally; `s` key triggers sync in Backup tab.
 - **TUI Backup tab**: Shows config instructions when not configured, or backup list with name/age/size. `SyncStatus`-aware sync line shows URL and time since last sync. When backup is unconfigured, also shows sync config instructions. Keys: `j/k` navigate, `u` upload, `r` restore, `d` delete, `s` sync, `e` config. Status messages shown for operation results.
 - **Startup backup check**: On every CLI invocation, if backup is configured and overdue (>= `schedule_days` since last backup), prints a reminder to stderr.
 
 ## Database
 
-- libsql (SQLite-compatible) stored at `~/.local/share/dodo/dodo.db`
-- `Database::new_with_sync(url, token)` for Turso embedded replica mode
+- libsql (SQLite-compatible) stored at `~/.local/share/dodo/dodo.db` (always local)
+- Sync replica at `~/.local/share/dodo/dodo-sync.db` (created during background sync only)
 - `Database::in_memory()` available for tests
 - Tables: `tasks` (with `num_id INTEGER UNIQUE`, `estimate_minutes`, `deadline`, `scheduled`, `tags`, `task_notes`, `priority`, `modified_at`, `recurrence`, `is_template`, `template_id`), `sessions`
 
 ## Testing
 
-- `cargo test` runs all 169 tests
+- `cargo test` runs all 174 tests
 - `src/backup.rs` (inline) — 25 unit tests for format_size, format_age, parse_backup_timestamp
 - `tests/config_test.rs` — 22 unit tests for config parsing, TOML deserialization, defaults, is_ready checks, serialize/deserialize roundtrip
 - `tests/fuzzy_test.rs` — 8 unit tests for fuzzy scoring (exact, prefix, substring, word-level, ranking)
 - `tests/notation_test.rs` — 61 unit tests for notation parsing (duration, dates, token extraction, title cleanup, edge cases, recurrence patterns, next occurrence computation)
-- `tests/workflow_test.rs` — 53 integration tests using `Database::in_memory()`, covering: simple daily list, Pomodoro start/pause/resume, GTD four horizons with contexts and projects, Eisenhower quadrants, freelance multi-project time tracking, numeric ID selection, fuzzy matching integration, academic multi-area workflow, session lifecycle, estimates, elapsed time, notes, edit command, multiple contexts, tags, deadlines, priority, recurring template CRUD, instance generation, pause/resume, history, update_notes_by_id, export/import roundtrip, done target/undo, move between areas, note line editing, reports
+- `tests/workflow_test.rs` — 58 integration tests using `Database::in_memory()`, covering: simple daily list, Pomodoro start/pause/resume, GTD four horizons with contexts and projects, Eisenhower quadrants, freelance multi-project time tracking, numeric ID selection, fuzzy matching integration, academic multi-area workflow, session lifecycle, estimates, elapsed time, notes, edit command, multiple contexts, tags, deadlines, priority, recurring template CRUD, instance generation, pause/resume, history, update_notes_by_id, export/import roundtrip, done target/undo, move between areas, note line editing, reports, merge remote/local newer wins, num_id conflict resolution, session dedup
 
 ## Conventions
 

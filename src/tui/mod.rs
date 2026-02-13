@@ -16,7 +16,7 @@ mod format;
 mod state;
 
 use event::run_app;
-use state::{App, SyncStatus};
+use state::App;
 
 pub fn run_tui(db: &Database) -> Result<()> {
     enable_raw_mode()?;
@@ -27,7 +27,7 @@ pub fn run_tui(db: &Database) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(db);
-    // Initial sync on launch
+    // Initial sync on launch (non-blocking — fires background thread)
     if app.sync_enabled() {
         app.trigger_sync();
     }
@@ -35,10 +35,7 @@ pub fn run_tui(db: &Database) -> Result<()> {
 
     let res = run_app(&mut terminal, &mut app);
 
-    // Final sync before quit
-    if app.sync_enabled() {
-        app.trigger_sync();
-    }
+    // No final sync — data is safe in local DB, unpushed changes sync on next startup
 
     disable_raw_mode()?;
     execute!(
@@ -47,15 +44,6 @@ pub fn run_tui(db: &Database) -> Result<()> {
         DisableMouseCapture
     )?;
     terminal.show_cursor()?;
-
-    // Print sync result after terminal teardown
-    if app.sync_enabled() {
-        match &app.sync_status {
-            SyncStatus::Synced(_) => eprintln!("Synced with Turso."),
-            SyncStatus::Error(e) => eprintln!("Warning: final sync failed: {}", e),
-            _ => {}
-        }
-    }
 
     res
 }

@@ -438,6 +438,9 @@ where
         if last_data_refresh.elapsed() >= data_refresh_rate {
             app.tick_count = app.tick_count.wrapping_add(1);
 
+            // Poll for background sync completion
+            app.check_sync_result();
+
             // Periodic sync based on configured interval
             let sync_interval_ticks = app.sync_config.sync_interval as u64 * 60;
             if app.sync_enabled() && sync_interval_ticks > 0
@@ -648,11 +651,7 @@ pub(super) fn handle_backup_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('s') => {
             if app.sync_enabled() {
                 app.trigger_sync();
-                app.backup_status_msg = Some(match &app.sync_status {
-                    SyncStatus::Synced(_) => "Sync completed successfully".to_string(),
-                    SyncStatus::Error(e) => format!("Sync failed: {}", e),
-                    _ => "Sync triggered".to_string(),
-                });
+                app.backup_status_msg = Some("Sync started...".to_string());
             } else {
                 app.backup_status_msg = Some("Sync not configured".to_string());
             }
