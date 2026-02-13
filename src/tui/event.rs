@@ -3,6 +3,7 @@ use chrono::Datelike;
 use crossterm::event::{self, Event, KeyCode};
 use ratatui::backend::Backend;
 use ratatui::Terminal;
+use std::io::Write;
 
 use dodo::notation::prepare_task;
 use dodo::task::TaskStatus;
@@ -11,6 +12,11 @@ use super::constants::*;
 use super::draw::draw_ui;
 use super::format::*;
 use super::state::*;
+
+fn play_bell() {
+    print!("\x07");
+    let _ = std::io::stdout().flush();
+}
 
 // Note: `let _ =` is used intentionally throughout the TUI event handlers for
 // fire-and-forget DB operations. There is no user-visible error display mechanism
@@ -580,6 +586,19 @@ where
                 TuiTab::Report => { let _ = app.refresh_report(); }
                 TuiTab::Settings => { app.refresh_backups(); }
             }
+
+            // Periodic ding while a task is running
+            if app.running_task.is_some()
+                && app.preferences.sound_enabled
+                && app.preferences.timer_sound_interval > 0
+            {
+                let interval_ticks = app.preferences.timer_sound_interval as u64 * 60;
+                if app.tick_count.wrapping_sub(app.last_ding_tick) >= interval_ticks {
+                    play_bell();
+                    app.last_ding_tick = app.tick_count;
+                }
+            }
+
             last_data_refresh = std::time::Instant::now();
         }
     }
@@ -593,11 +612,17 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('v') => {
             app.tasks_view = app.tasks_view.next();
             let _ = app.refresh_current_view();
+            if app.tasks_view == TasksView::Daily {
+                app.daily_jump_to_today();
+            }
             return;
         }
         KeyCode::Char('V') => {
             app.tasks_view = app.tasks_view.prev();
             let _ = app.refresh_current_view();
+            if app.tasks_view == TasksView::Daily {
+                app.daily_jump_to_today();
+            }
             return;
         }
         KeyCode::Char('s') => {
@@ -605,7 +630,14 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
             return;
         }
         KeyCode::Char('d') => {
+            let was_done = app.current_selected_task()
+                .map(|t| t.status == TaskStatus::Done)
+                .unwrap_or(true);
             let _ = app.done();
+            // Play bell on marking done (not on undone)
+            if !was_done && app.preferences.sound_enabled {
+                play_bell();
+            }
             return;
         }
         KeyCode::Char('/') => {

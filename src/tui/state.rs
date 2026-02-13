@@ -74,6 +74,12 @@ pub(super) enum CalendarFocus {
     TaskList,
 }
 
+pub(super) struct RunningTaskInfo {
+    pub(super) title: String,
+    pub(super) elapsed_seconds: i64,
+    pub(super) estimate_minutes: Option<i64>,
+}
+
 pub(super) struct PaneState {
     pub(super) tasks: Vec<Task>,
     pub(super) list_state: ListState,
@@ -190,9 +196,10 @@ pub(super) struct ReportData {
 pub(super) struct App<'a> {
     pub(super) panes: [PaneState; 4],
     pub(super) active_pane: usize,
-    pub(super) running_task: Option<String>,
+    pub(super) running_task: Option<RunningTaskInfo>,
     pub(super) db: &'a Database,
     pub(super) mode: AppMode,
+    pub(super) last_ding_tick: u64,
     // Tabs & report
     pub(super) tab: TuiTab,
     pub(super) report_range: ReportRange,
@@ -277,12 +284,19 @@ impl<'a> App<'a> {
         panes[3].sort_ascending = false; // descending (newest done first)
         let config = dodo::config::Config::load().unwrap_or_default();
         let today = chrono::Local::now().date_naive();
+        let initial_view = match config.preferences.default_view.as_str() {
+            "daily" => TasksView::Daily,
+            "weekly" => TasksView::Weekly,
+            "calendar" => TasksView::Calendar,
+            _ => TasksView::Panes,
+        };
         Self {
             panes,
             active_pane: 2,
             running_task: None,
             db,
             mode: AppMode::Normal,
+            last_ding_tick: 0,
             tab: TuiTab::Tasks,
             report_range: ReportRange::Month,
             report: None,
@@ -321,7 +335,7 @@ impl<'a> App<'a> {
             config_field_values: Default::default(),
             config_field_input: String::new(),
             help_scroll: 0,
-            tasks_view: TasksView::Panes,
+            tasks_view: initial_view,
             daily_entries: Vec::new(),
             daily_cursor: 0,
             weekly_panes: [
@@ -553,8 +567,12 @@ impl<'a> App<'a> {
             }
         }
 
-        self.running_task = if let Ok(Some((title, _))) = self.db.get_running_task() {
-            Some(title)
+        self.running_task = if let Ok(Some((title, elapsed, estimate))) = self.db.get_running_task() {
+            Some(RunningTaskInfo {
+                title,
+                elapsed_seconds: elapsed,
+                estimate_minutes: estimate,
+            })
         } else {
             None
         };
@@ -878,7 +896,11 @@ impl<'a> App<'a> {
 
     pub(super) fn confirm_add_task(&mut self) -> Result<()> {
         if !self.add_input.is_empty() {
-            let prep = prepare_task(&self.add_input);
+            let mut prep = prepare_task(&self.add_input);
+            // If estimate is the hardcoded default (60) and user has a different pref, override
+            if prep.estimate_minutes == Some(60) && self.preferences.default_estimate != 60 {
+                prep.estimate_minutes = Some(self.preferences.default_estimate as i64);
+            }
             self.db.add_task(
                 &prep.title,
                 Area::Today,
@@ -1178,11 +1200,15 @@ impl<'a> App<'a> {
             self.backup_config.region.clone().unwrap_or_default(),
             self.backup_config.schedule_days.to_string(),
             self.backup_config.max_backups.to_string(),
-            // Preferences fields (13)
+            // Preferences fields (13-17)
             match self.preferences.week_start {
                 WeekStart::Sunday => "sunday".to_string(),
                 WeekStart::Monday => "monday".to_string(),
             },
+            if self.preferences.sound_enabled { "true".to_string() } else { "false".to_string() },
+            self.preferences.timer_sound_interval.to_string(),
+            self.preferences.default_view.clone(),
+            self.preferences.default_estimate.to_string(),
         ];
         self.mode = AppMode::EditConfig;
     }
@@ -1233,6 +1259,10 @@ impl<'a> App<'a> {
                     WeekStart::Sunday
                 };
             }
+            14 => self.preferences.sound_enabled = val == "true",
+            15 => self.preferences.timer_sound_interval = val.parse().unwrap_or(10),
+            16 => self.preferences.default_view = val.clone(),
+            17 => self.preferences.default_estimate = val.parse().unwrap_or(60),
             _ => {}
         }
     }

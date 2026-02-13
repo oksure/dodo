@@ -346,9 +346,112 @@ fn preferences_roundtrip() {
         backup: BackupConfig::default(),
         preferences: PreferencesConfig {
             week_start: WeekStart::Monday,
+            ..Default::default()
         },
     };
     let serialized = toml::to_string_pretty(&config).unwrap();
     let deserialized: Config = toml::from_str(&serialized).unwrap();
     assert_eq!(deserialized.preferences.week_start, WeekStart::Monday);
+}
+
+// ── New preferences fields ──────────────────────────────────────────
+
+#[test]
+fn preferences_default_sound_enabled() {
+    let config = Config::default();
+    assert!(config.preferences.sound_enabled);
+}
+
+#[test]
+fn preferences_default_timer_sound_interval() {
+    let config = Config::default();
+    assert_eq!(config.preferences.timer_sound_interval, 10);
+}
+
+#[test]
+fn preferences_default_view_panes() {
+    let config = Config::default();
+    assert_eq!(config.preferences.default_view, "panes");
+}
+
+#[test]
+fn preferences_default_estimate_60() {
+    let config = Config::default();
+    assert_eq!(config.preferences.default_estimate, 60);
+}
+
+#[test]
+fn preferences_parse_sound_disabled() {
+    let toml = r#"
+[preferences]
+sound_enabled = false
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert!(!config.preferences.sound_enabled);
+}
+
+#[test]
+fn preferences_parse_timer_sound_interval() {
+    let toml = r#"
+[preferences]
+timer_sound_interval = 5
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert_eq!(config.preferences.timer_sound_interval, 5);
+}
+
+#[test]
+fn preferences_parse_default_view() {
+    let toml = r#"
+[preferences]
+default_view = "daily"
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert_eq!(config.preferences.default_view, "daily");
+}
+
+#[test]
+fn preferences_parse_default_estimate() {
+    let toml = r#"
+[preferences]
+default_estimate = 30
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert_eq!(config.preferences.default_estimate, 30);
+}
+
+#[test]
+fn preferences_missing_new_fields_get_defaults() {
+    let toml = r#"
+[preferences]
+week_start = "monday"
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert_eq!(config.preferences.week_start, WeekStart::Monday);
+    assert!(config.preferences.sound_enabled);
+    assert_eq!(config.preferences.timer_sound_interval, 10);
+    assert_eq!(config.preferences.default_view, "panes");
+    assert_eq!(config.preferences.default_estimate, 60);
+}
+
+#[test]
+fn preferences_full_roundtrip() {
+    let config = Config {
+        sync: SyncConfig::default(),
+        backup: BackupConfig::default(),
+        preferences: PreferencesConfig {
+            week_start: WeekStart::Monday,
+            sound_enabled: false,
+            timer_sound_interval: 15,
+            default_view: "calendar".to_string(),
+            default_estimate: 45,
+        },
+    };
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let deserialized: Config = toml::from_str(&serialized).unwrap();
+    assert_eq!(deserialized.preferences.week_start, WeekStart::Monday);
+    assert!(!deserialized.preferences.sound_enabled);
+    assert_eq!(deserialized.preferences.timer_sound_interval, 15);
+    assert_eq!(deserialized.preferences.default_view, "calendar");
+    assert_eq!(deserialized.preferences.default_estimate, 45);
 }

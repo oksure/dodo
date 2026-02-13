@@ -1018,10 +1018,10 @@ impl Database {
         }
     }
 
-    pub fn get_running_task(&self) -> Result<Option<(String, i64)>> {
+    pub fn get_running_task(&self) -> Result<Option<(String, i64, Option<i64>)>> {
         self.rt.block_on(async {
             let mut rows = self.conn.query(
-                "SELECT t.id, t.title FROM tasks t WHERE t.status = 'Running' LIMIT 1",
+                "SELECT t.id, t.title, t.estimate_minutes FROM tasks t WHERE t.status = 'Running' LIMIT 1",
                 (),
             ).await?;
 
@@ -1029,11 +1029,12 @@ impl Database {
                 Some(row) => {
                     let task_id = val_string(&row, 0)?;
                     let title = val_string(&row, 1)?;
+                    let estimate = val_opt_i64(&row, 2)?;
                     let elapsed = match get_active_session(&self.conn, &task_id).await? {
                         Some(session) => session.elapsed_seconds(),
                         None => 0,
                     };
-                    Ok(Some((title, elapsed)))
+                    Ok(Some((title, elapsed, estimate)))
                 }
                 None => Ok(None),
             }

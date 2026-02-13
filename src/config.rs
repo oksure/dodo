@@ -15,10 +15,46 @@ impl Default for WeekStart {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferencesConfig {
     #[serde(default)]
     pub week_start: WeekStart,
+    #[serde(default = "default_true")]
+    pub sound_enabled: bool,
+    #[serde(default = "default_sound_interval")]
+    pub timer_sound_interval: u32,
+    #[serde(default = "default_view_str")]
+    pub default_view: String,
+    #[serde(default = "default_estimate")]
+    pub default_estimate: u32,
+}
+
+impl Default for PreferencesConfig {
+    fn default() -> Self {
+        Self {
+            week_start: WeekStart::default(),
+            sound_enabled: default_true(),
+            timer_sound_interval: default_sound_interval(),
+            default_view: default_view_str(),
+            default_estimate: default_estimate(),
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_sound_interval() -> u32 {
+    10
+}
+
+fn default_view_str() -> String {
+    "panes".to_string()
+}
+
+fn default_estimate() -> u32 {
+    60
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

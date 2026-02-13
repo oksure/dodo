@@ -149,10 +149,51 @@ pub(super) fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
-    let running_info = if let Some(ref task) = app.running_task {
-        format!(" \u{25B6} {} ", task)
+    let (running_info, timer_info, timer_style) = if let Some(ref info) = app.running_task {
+        let title_str = format!(" \u{25B6} {} ", info.title);
+        if let Some(est_min) = info.estimate_minutes {
+            let remaining = est_min * 60 - info.elapsed_seconds;
+            if remaining > 0 {
+                let r = remaining.unsigned_abs();
+                let timer = if r >= 3600 {
+                    format!(" \u{23F1} {}h{:02}m left ", r / 3600, (r % 3600) / 60)
+                } else {
+                    format!(" \u{23F1} {}m left ", r / 60)
+                };
+                // Green when >50% left, yellow when <=50%
+                let pct = remaining as f64 / (est_min * 60) as f64;
+                let style = if pct > 0.5 {
+                    Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(ACCENT_YELLOW).add_modifier(Modifier::BOLD)
+                };
+                (title_str, timer, style)
+            } else {
+                let over = (-remaining) as u64;
+                let timer = if over >= 3600 {
+                    format!(" +{}h{:02}m over ", over / 3600, (over % 3600) / 60)
+                } else {
+                    format!(" +{}m over ", over / 60)
+                };
+                // Red, pulse animation
+                let style = if app.tick_count % 2 == 0 {
+                    Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Rgb(200, 80, 100)).add_modifier(Modifier::BOLD)
+                };
+                (title_str, timer, style)
+            }
+        } else {
+            let elapsed = info.elapsed_seconds as u64;
+            let timer = if elapsed >= 3600 {
+                format!(" \u{23F1} {}h{:02}m ", elapsed / 3600, (elapsed % 3600) / 60)
+            } else {
+                format!(" \u{23F1} {}m ", elapsed / 60)
+            };
+            (title_str, timer, Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD))
+        }
     } else {
-        String::new()
+        (String::new(), String::new(), Style::default())
     };
 
     let running_style = if app.running_task.is_some() {
@@ -212,6 +253,7 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(running_info, running_style),
+        Span::styled(timer_info, timer_style),
     ];
 
     // Sync indicator
@@ -759,22 +801,28 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(area);
 
-    // Title line
+    // Title line — centered title with right-aligned hints
     let month_names = [
         "", "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
     ];
     let month_name = month_names[app.calendar_month as usize];
-    let title = format!("  \u{25C4} {} {} \u{25BA}", month_name, app.calendar_year);
+    let title = format!("\u{25C4} {} {} \u{25BA}", month_name, app.calendar_year);
     let hints = "[/]:month  t:today ";
-    let title_width = title.len();
-    let pad = (layout[0].width as usize).saturating_sub(title_width + hints.len());
-    let title_line = Line::from(vec![
-        Span::styled(title, Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)),
-        Span::raw(" ".repeat(pad)),
-        Span::styled(hints, Style::default().fg(FG_OVERLAY)),
-    ]);
-    f.render_widget(Paragraph::new(title_line), layout[0]);
+    let hints_len = hints.len() as u16;
+    let title_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(hints_len)])
+        .split(layout[0]);
+    f.render_widget(
+        Paragraph::new(Span::styled(title, Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)))
+            .alignment(Alignment::Center),
+        title_cols[0],
+    );
+    f.render_widget(
+        Paragraph::new(Span::styled(hints, Style::default().fg(FG_OVERLAY))),
+        title_cols[1],
+    );
 
     // Day-of-week headers aligned with grid columns
     let dow_labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -953,7 +1001,7 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
 fn calendar_task_style(task: &Task, today: chrono::NaiveDate) -> Style {
     match task.status {
         TaskStatus::Running => Style::default().fg(ACCENT_GREEN),
-        TaskStatus::Done => Style::default().fg(ACCENT_TEAL).add_modifier(Modifier::DIM),
+        TaskStatus::Done => Style::default().fg(ACCENT_TEAL).add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
         TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
         TaskStatus::Pending => {
             if task.deadline.map(|d| d < today).unwrap_or(false) {
@@ -2176,7 +2224,7 @@ pub(super) fn build_pane_stats(elapsed: i64, estimate: i64, done: usize, total: 
 pub(super) fn task_num_style(task: &Task) -> Style {
     match task.status {
         TaskStatus::Running => Style::default().fg(ACCENT_GREEN),
-        TaskStatus::Done => Style::default().fg(FG_SUBTEXT),
+        TaskStatus::Done => Style::default().fg(FG_SUBTEXT).add_modifier(Modifier::CROSSED_OUT),
         TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
         TaskStatus::Pending => Style::default().fg(FG_SUBTEXT),
     }
@@ -2187,7 +2235,7 @@ pub(super) fn task_title_style(task: &Task) -> Style {
         TaskStatus::Running => Style::default()
             .fg(ACCENT_GREEN)
             .add_modifier(Modifier::BOLD),
-        TaskStatus::Done => Style::default().fg(FG_SUBTEXT),
+        TaskStatus::Done => Style::default().fg(FG_SUBTEXT).add_modifier(Modifier::CROSSED_OUT),
         TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
         TaskStatus::Pending => Style::default().fg(FG_TEXT),
     }

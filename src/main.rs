@@ -287,7 +287,7 @@ fn cmd_done(db: &Database, args: dodo::cli::DoneArgs) -> Result<()> {
 }
 
 fn cmd_status(db: &Database) -> Result<()> {
-    if let Some((task, elapsed)) = db.get_running_task()? {
+    if let Some((task, elapsed, _estimate)) = db.get_running_task()? {
         println!(
             "{} {} ({})",
             "Running:".green().bold(),

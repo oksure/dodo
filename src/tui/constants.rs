@@ -31,13 +31,14 @@ pub(super) enum ConfigFieldType {
     Number,
 }
 
-pub(super) const CONFIG_FIELD_COUNT: usize = 14;
+pub(super) const CONFIG_FIELD_COUNT: usize = 18;
 
 pub(super) const CONFIG_FIELD_LABELS: [&str; CONFIG_FIELD_COUNT] = [
     "Sync Enabled", "Turso URL", "Turso Token", "Sync Interval",
     "Backup Enabled", "Endpoint", "Bucket", "Prefix",
     "Access Key", "Secret Key", "Region", "Schedule Days", "Max Backups",
     "Week Start",
+    "Sound", "Sound Interval", "Default View", "Default Est.",
 ];
 
 pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
@@ -55,6 +56,10 @@ pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
     "Days between backups (default: 7)",
     "Max backups to keep (default: 10)",
     "sunday or monday (default: sunday)",
+    "Play bell sound on timer and completion",
+    "Minutes between timer dings (default: 10)",
+    "panes, daily, weekly, or calendar (default: panes)",
+    "Default estimate in minutes (default: 60)",
 ];
 
 pub(super) const TOAST_DURATION_SECS: u64 = 5;
@@ -66,4 +71,5 @@ pub(super) const CONFIG_FIELD_TYPES: [ConfigFieldType; CONFIG_FIELD_COUNT] = [
     ConfigFieldType::Sensitive, ConfigFieldType::Sensitive, ConfigFieldType::String,
     ConfigFieldType::Number, ConfigFieldType::Number,
     ConfigFieldType::String,
+    ConfigFieldType::Boolean, ConfigFieldType::Number, ConfigFieldType::String, ConfigFieldType::Number,
 ];
