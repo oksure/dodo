@@ -484,6 +484,41 @@ impl Database {
         rx
     }
 
+    /// Test sync connection by attempting to open a remote replica in a temp dir.
+    pub fn test_sync_connection(url: String, token: String) -> Result<()> {
+        let tmp_dir = std::env::temp_dir().join("dodo-sync-test");
+        std::fs::create_dir_all(&tmp_dir)
+            .context("Failed to create temp dir for sync test")?;
+        let tmp_db = tmp_dir.join("test-sync.db");
+        let tmp_path = tmp_db.to_str().context("Invalid temp path")?.to_string();
+
+        let result = (|| -> Result<()> {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .context("Failed to create tokio runtime")?;
+
+            let sync_db = rt.block_on(async {
+                libsql::Builder::new_remote_replica(tmp_path.clone(), url, token)
+                    .read_your_writes(false)
+                    .build()
+                    .await
+            }).context("Failed to connect to Turso")?;
+
+            rt.block_on(async {
+                sync_db.sync().await.context("Failed to sync with Turso")?;
+                Ok::<(), anyhow::Error>(())
+            })?;
+
+            Ok(())
+        })();
+
+        // Clean up temp files regardless of outcome
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        result
+    }
+
     /// Export all tasks and sessions from the database.
     pub fn export_all_data(&self) -> Result<(Vec<Task>, Vec<Session>)> {
         self.rt.block_on(async {

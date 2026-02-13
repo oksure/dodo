@@ -178,6 +178,8 @@ pub(super) struct App<'a> {
     pub(super) sync_receiver: Option<mpsc::Receiver<Result<()>>>,
     pub(super) last_sync_tick: u64,
     pub(super) backup_status_msg: Option<String>,
+    pub(super) backup_status_msg_at: Option<std::time::Instant>,
+    pub(super) config_test_result: Option<String>,
     // Config editor
     pub(super) config_field_index: usize,
     pub(super) config_field_values: [String; CONFIG_FIELD_COUNT],
@@ -235,6 +237,8 @@ impl<'a> App<'a> {
             sync_receiver: None,
             last_sync_tick: 0,
             backup_status_msg: None,
+            backup_status_msg_at: None,
+            config_test_result: None,
             config_field_index: 0,
             config_field_values: Default::default(),
             config_field_input: String::new(),
@@ -244,6 +248,11 @@ impl<'a> App<'a> {
 
     pub(super) fn sync_enabled(&self) -> bool {
         !matches!(self.sync_status, SyncStatus::Disabled)
+    }
+
+    pub(super) fn set_backup_status(&mut self, msg: String) {
+        self.backup_status_msg = Some(msg);
+        self.backup_status_msg_at = Some(std::time::Instant::now());
     }
 
     pub(super) fn trigger_sync(&mut self) {
@@ -463,7 +472,7 @@ impl<'a> App<'a> {
                     }
                 }
                 Err(e) => {
-                    self.backup_status_msg = Some(format!("Error: {}", e));
+                    self.set_backup_status(format!("Error: {}", e));
                 }
             }
         }

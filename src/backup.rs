@@ -302,6 +302,12 @@ async fn build_s3_client(config: &BackupConfig) -> Result<aws_sdk_s3::Client> {
     Ok(aws_sdk_s3::Client::from_conf(s3_config))
 }
 
+/// Test S3 connection by listing backups
+pub fn test_connection(config: &BackupConfig) -> Result<String> {
+    let entries = list_backups(config)?;
+    Ok(format!("Connected — {} backup(s) found", entries.len()))
+}
+
 /// Get the path to the pre-restore backup
 pub fn pre_restore_path() -> Result<PathBuf> {
     let db_path = Database::db_path()?;

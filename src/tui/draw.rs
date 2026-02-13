@@ -286,6 +286,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             AppMode::EditConfig => vec![
                 ("j/k \u{2193}\u{2191}", "navigate"),
                 ("\u{21B5}", "edit"),
+                ("t", "test"),
                 ("Esc", "close"),
             ],
             AppMode::EditConfigField => vec![
@@ -988,78 +989,182 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block, area);
 
     if !app.backup_config.is_ready() {
-        let mut msg = vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                "Backup not configured",
+        // Unconfigured state: bordered setup block
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),  // Sync status
+                Constraint::Length(1),  // Spacer
+                Constraint::Min(0),    // Setup block
+            ])
+            .split(inner);
+
+        f.render_widget(Paragraph::new(build_sync_status_line(app)), chunks[0]);
+
+        let setup_block = Block::bordered()
+            .title(Span::styled(
+                " Setup ",
                 Style::default().fg(ACCENT_YELLOW).add_modifier(Modifier::BOLD),
-            )),
+            ))
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT_YELLOW))
+            .padding(Padding::horizontal(1));
+        let setup_inner = setup_block.inner(chunks[2]);
+        f.render_widget(setup_block, chunks[2]);
+
+        let msg = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "Add a [backup] section to ~/.config/dodo/config.toml:",
+                "S3-compatible backup is not configured yet.",
                 Style::default().fg(FG_SUBTEXT),
             )),
             Line::from(""),
-            Line::from(Span::styled("  [backup]", Style::default().fg(FG_TEXT))),
-            Line::from(Span::styled("  enabled = true", Style::default().fg(FG_TEXT))),
             Line::from(Span::styled(
-                "  endpoint = \"https://s3.example.com\"",
-                Style::default().fg(FG_TEXT),
+                "You need: endpoint, bucket, access key, and secret key.",
+                Style::default().fg(FG_SUBTEXT),
             )),
             Line::from(Span::styled(
-                "  bucket = \"my-bucket\"",
-                Style::default().fg(FG_TEXT),
-            )),
-            Line::from(Span::styled(
-                "  access_key = \"...\"",
-                Style::default().fg(FG_TEXT),
-            )),
-            Line::from(Span::styled(
-                "  secret_key = \"...\"",
-                Style::default().fg(FG_TEXT),
+                "Prefix and region are optional (R2/MinIO don't need region).",
+                Style::default().fg(FG_OVERLAY),
             )),
             Line::from(""),
+            Line::from(vec![
+                Span::styled("Press ", Style::default().fg(FG_SUBTEXT)),
+                Span::styled(" e ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+                Span::styled(" to open config editor", Style::default().fg(FG_SUBTEXT)),
+            ]),
         ];
-        // Sync status in unconfigured backup view
-        msg.push(build_sync_status_line(app));
-        f.render_widget(Paragraph::new(msg), inner);
+        f.render_widget(Paragraph::new(msg), setup_inner);
         return;
     }
 
-    // Split into sync status + status message + list area
+    // Configured state: 4-chunk layout
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Sync status
-            Constraint::Length(2), // Status message
-            Constraint::Min(0),   // Backup list
+            Constraint::Length(1), // [0] Sync status line
+            Constraint::Length(5), // [1] Summary stats block
+            Constraint::Length(1), // [2] Toast message
+            Constraint::Min(0),   // [3] Backup list
         ])
         .split(inner);
 
-    // Sync status line
+    // [0] Sync status line
     f.render_widget(Paragraph::new(build_sync_status_line(app)), chunks[0]);
 
-    // Status message
+    // [1] Summary stats block
+    let summary_block = Block::bordered()
+        .title(Span::styled(
+            " Summary ",
+            Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD),
+        ))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(FG_OVERLAY));
+    let summary_inner = summary_block.inner(chunks[1]);
+    f.render_widget(summary_block, chunks[1]);
+
+    if !app.backup_entries.is_empty() {
+        let total_size: i64 = app.backup_entries.iter().map(|e| e.size).sum();
+        let endpoint = app.backup_config.endpoint.as_deref().unwrap_or("?");
+        let bucket = app.backup_config.bucket.as_deref().unwrap_or("?");
+
+        let latest_age = dodo::backup::format_age(&app.backup_entries[0].timestamp);
+        let schedule = app.backup_config.schedule_days;
+        let max = app.backup_config.max_backups;
+
+        // Line 1: count + total size + endpoint/bucket
+        let line1 = Line::from(vec![
+            Span::styled(
+                format!(" {} backup{}", app.backup_entries.len(), if app.backup_entries.len() == 1 { "" } else { "s" }),
+                Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  \u{2022}  ", Style::default().fg(FG_OVERLAY)),
+            Span::styled(
+                dodo::backup::format_size(total_size),
+                Style::default().fg(FG_TEXT),
+            ),
+            Span::styled("          ", Style::default().fg(FG_OVERLAY)),
+            Span::styled(
+                format!("{}/{}", endpoint.trim_end_matches('/'), bucket),
+                Style::default().fg(FG_OVERLAY),
+            ),
+        ]);
+
+        // Line 2: latest + schedule + max
+        let line2 = Line::from(vec![
+            Span::styled(" Latest: ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled(&latest_age, Style::default().fg(ACCENT_TEAL)),
+            Span::styled("  \u{2022}  ", Style::default().fg(FG_OVERLAY)),
+            Span::styled(format!("Schedule: {}d", schedule), Style::default().fg(FG_SUBTEXT)),
+            Span::styled("  \u{2022}  ", Style::default().fg(FG_OVERLAY)),
+            Span::styled(format!("Max: {}", max), Style::default().fg(FG_SUBTEXT)),
+        ]);
+
+        let summary_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
+            .split(summary_inner);
+
+        f.render_widget(Paragraph::new(line1), summary_chunks[0]);
+        f.render_widget(Paragraph::new(line2), summary_chunks[1]);
+
+        // Line 3: LineGauge showing days since last backup vs schedule
+        let days_since = (chrono::Utc::now() - app.backup_entries[0].timestamp).num_days().max(0) as f64;
+        let schedule_f = schedule as f64;
+        let ratio = if schedule_f > 0.0 { (days_since / schedule_f).min(1.0) } else { 0.0 };
+        let gauge_color = if ratio >= 1.0 {
+            ACCENT_RED
+        } else if ratio >= 0.75 {
+            ACCENT_YELLOW
+        } else {
+            ACCENT_GREEN
+        };
+        let gauge = LineGauge::default()
+            .filled_style(Style::default().fg(gauge_color))
+            .unfilled_style(Style::default().fg(Color::Rgb(40, 42, 54)))
+            .ratio(ratio);
+        f.render_widget(gauge, summary_chunks[2]);
+    } else {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                " No backup data yet",
+                Style::default().fg(FG_OVERLAY),
+            )),
+            summary_inner,
+        );
+    }
+
+    // [2] Toast message
     if let Some(ref msg) = app.backup_status_msg {
-        let color = if msg.starts_with("Error") || msg.contains("failed") {
+        let color = if msg.starts_with("Error") || msg.contains("failed") || msg.starts_with("\u{2717}") {
             ACCENT_RED
         } else {
             ACCENT_GREEN
         };
         f.render_widget(
-            Paragraph::new(Span::styled(msg.as_str(), Style::default().fg(color))),
-            chunks[1],
+            Paragraph::new(Span::styled(format!(" {}", msg), Style::default().fg(color))),
+            chunks[2],
         );
     }
 
-    // Backup list
+    // [3] Backup list
     if app.backup_entries.is_empty() {
-        f.render_widget(
-            Paragraph::new(Span::styled(
-                "No backups found. Press 'u' to create one.",
+        let empty_msg = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "No backups yet",
                 Style::default().fg(FG_SUBTEXT),
             )),
-            chunks[2],
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Press ", Style::default().fg(FG_OVERLAY)),
+                Span::styled(" u ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+                Span::styled(" to create your first backup", Style::default().fg(FG_OVERLAY)),
+            ]),
+        ];
+        f.render_widget(
+            Paragraph::new(empty_msg).alignment(Alignment::Center),
+            chunks[3],
         );
         return;
     }
@@ -1071,32 +1176,63 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
         .map(|(i, entry)| {
             let age = dodo::backup::format_age(&entry.timestamp);
             let size = dodo::backup::format_size(entry.size);
+            let date_str = entry.timestamp.format("%b %d %H:%M").to_string();
             let is_selected = i == app.backup_selected;
+            let num = format!("{:>3}", i + 1);
 
-            let style = if is_selected {
-                Style::default().fg(FG_TEXT).bg(BG_SURFACE)
-            } else {
-                Style::default().fg(FG_SUBTEXT)
-            };
-
-            let line = Line::from(vec![
+            // Line 1: NUM  ■  display_name
+            let line1 = Line::from(vec![
                 Span::styled(
-                    if is_selected { " > " } else { "   " },
+                    if is_selected { "\u{258C}" } else { " " },
                     Style::default().fg(ACCENT_BLUE),
                 ),
-                Span::styled(&entry.display_name, style.add_modifier(Modifier::BOLD)),
-                Span::styled("  ", style),
-                Span::styled(age, Style::default().fg(ACCENT_TEAL)),
-                Span::styled("  ", style),
-                Span::styled(size, Style::default().fg(FG_OVERLAY)),
+                Span::styled(format!("{} ", num), Style::default().fg(FG_SUBTEXT)),
+                Span::styled(
+                    "\u{25A0} ",
+                    Style::default().fg(if is_selected { ACCENT_BLUE } else { FG_OVERLAY }),
+                ),
+                Span::styled(
+                    entry.display_name.clone(),
+                    Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
+                ),
             ]);
 
-            ListItem::new(line)
+            // Line 2: age  •  size  •  date
+            let line2 = Line::from(vec![
+                Span::raw("      "),
+                Span::styled(age, Style::default().fg(ACCENT_TEAL)),
+                Span::styled("  \u{2022}  ", Style::default().fg(FG_OVERLAY)),
+                Span::styled(size, Style::default().fg(FG_SUBTEXT)),
+                Span::styled("  \u{2022}  ", Style::default().fg(FG_OVERLAY)),
+                Span::styled(date_str, Style::default().fg(FG_OVERLAY)),
+            ]);
+
+            let item = ListItem::new(vec![line1, line2]);
+            if is_selected {
+                item.style(Style::default().bg(Color::Rgb(65, 75, 120)))
+            } else {
+                item
+            }
         })
         .collect();
 
-    let list = List::new(items);
-    f.render_widget(list, chunks[2]);
+    let list = List::new(items)
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD))
+        .highlight_symbol("\u{258C} ");
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(app.backup_selected));
+    f.render_stateful_widget(list, chunks[3], &mut list_state);
+
+    // Scrollbar when entries exceed visible area (2 lines per entry)
+    let visible_approx = chunks[3].height as usize / 2;
+    if app.backup_entries.len() > visible_approx && chunks[3].height > 0 {
+        let mut scrollbar_state = ScrollbarState::new(app.backup_entries.len())
+            .position(app.backup_selected);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .style(Style::default().fg(FG_OVERLAY));
+        f.render_stateful_widget(scrollbar, chunks[3], &mut scrollbar_state);
+    }
 }
 
 pub(super) fn draw_pane(
@@ -1811,7 +1947,7 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
     let help_text = if app.mode == AppMode::EditConfigField {
         " Enter:save  Esc:cancel "
     } else {
-        " j/k \u{2193}\u{2191}:navigate  Enter:edit  Esc:close "
+        " j/k \u{2193}\u{2191}:navigate  Enter:edit  t:test  Esc:close "
     };
 
     let block = Block::bordered()
@@ -1887,6 +2023,17 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
         f.render_widget(input_widget, chunks[1]);
     } else {
         // Field navigation view
+        let has_test_result = app.config_test_result.is_some();
+        let constraints = if has_test_result {
+            vec![Constraint::Min(1), Constraint::Length(2)]
+        } else {
+            vec![Constraint::Min(1)]
+        };
+        let nav_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(constraints)
+            .split(inner);
+
         let mut lines: Vec<Line> = vec![];
         lines.push(Line::from(Span::styled(
             "\u{2500}\u{2500} Sync \u{2500}\u{2500}",
@@ -1930,7 +2077,28 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                 lines.push(Line::from(""));
             }
         }
-        f.render_widget(Paragraph::new(lines), inner);
+        f.render_widget(Paragraph::new(lines), nav_chunks[0]);
+
+        // Test result display
+        if let Some(ref result) = app.config_test_result {
+            let color = if result.starts_with('\u{2713}') {
+                ACCENT_GREEN
+            } else {
+                ACCENT_RED
+            };
+            let result_block = Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(FG_OVERLAY))
+                .border_type(BorderType::Rounded);
+            let result_line = Line::from(Span::styled(
+                format!("  {}", result),
+                Style::default().fg(color),
+            ));
+            f.render_widget(
+                Paragraph::new(result_line).block(result_block),
+                nav_chunks[1],
+            );
+        }
     }
 }
 

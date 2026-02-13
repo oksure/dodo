@@ -47,13 +47,16 @@ pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
     "Toggle backup on/off",
     "https://s3.example.com",
     "my-bucket",
-    "dodo/",
+    "dodo/ (optional, default: dodo/)",
     "S3 access key",
     "S3 secret key",
-    "us-east-1",
+    "us-east-1 (optional, not needed for R2/MinIO)",
     "Days between backups (default: 7)",
     "Max backups to keep (default: 10)",
 ];
+
+pub(super) const TOAST_DURATION_SECS: u64 = 5;
+pub(super) const TOAST_ERROR_DURATION_SECS: u64 = 8;
 
 pub(super) const CONFIG_FIELD_TYPES: [ConfigFieldType; CONFIG_FIELD_COUNT] = [
     ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::Sensitive, ConfigFieldType::Number,

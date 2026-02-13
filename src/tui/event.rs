@@ -385,6 +385,7 @@ where
                         }
                         KeyCode::Char('j') | KeyCode::Down => {
                             app.config_field_index = (app.config_field_index + 1) % CONFIG_FIELD_COUNT;
+                            app.config_test_result = None;
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
                             app.config_field_index = if app.config_field_index == 0 {
@@ -392,9 +393,49 @@ where
                             } else {
                                 app.config_field_index - 1
                             };
+                            app.config_test_result = None;
                         }
                         KeyCode::Enter => {
                             app.enter_config_field();
+                        }
+                        KeyCode::Char('t') => {
+                            if app.config_field_index <= 3 {
+                                // Sync fields (0-3): test Turso connection
+                                let url = app.config_field_values[1].clone();
+                                let token = app.config_field_values[2].clone();
+                                if url.is_empty() || token.is_empty() {
+                                    app.config_test_result = Some("\u{2717} URL and token are required".to_string());
+                                    app.set_backup_status("Error: Sync URL and token required".to_string());
+                                } else {
+                                    match dodo::db::Database::test_sync_connection(url, token) {
+                                        Ok(()) => {
+                                            app.config_test_result = Some("\u{2713} Turso connection successful".to_string());
+                                            app.set_backup_status("\u{2713} Turso connection successful".to_string());
+                                        }
+                                        Err(e) => {
+                                            app.config_test_result = Some(format!("\u{2717} {}", e));
+                                            app.set_backup_status(format!("Error: Sync test failed: {}", e));
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Backup fields (4-12): test S3 connection
+                                if !app.backup_config.is_ready() {
+                                    app.config_test_result = Some("\u{2717} Backup config incomplete".to_string());
+                                    app.set_backup_status("Error: Backup config incomplete".to_string());
+                                } else {
+                                    match dodo::backup::test_connection(&app.backup_config) {
+                                        Ok(msg) => {
+                                            app.config_test_result = Some(format!("\u{2713} {}", msg));
+                                            app.set_backup_status(format!("\u{2713} {}", msg));
+                                        }
+                                        Err(e) => {
+                                            app.config_test_result = Some(format!("\u{2717} {}", e));
+                                            app.set_backup_status(format!("Error: Backup test failed: {}", e));
+                                        }
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     },
@@ -440,6 +481,22 @@ where
 
             // Poll for background sync completion
             app.check_sync_result();
+
+            // Auto-dismiss toast messages
+            if let Some(at) = app.backup_status_msg_at {
+                let is_error = app.backup_status_msg.as_ref()
+                    .map(|m| m.starts_with("Error") || m.contains("failed") || m.starts_with("\u{2717}"))
+                    .unwrap_or(false);
+                let threshold = if is_error {
+                    TOAST_ERROR_DURATION_SECS
+                } else {
+                    TOAST_DURATION_SECS
+                };
+                if at.elapsed().as_secs() >= threshold {
+                    app.backup_status_msg = None;
+                    app.backup_status_msg_at = None;
+                }
+            }
 
             // Periodic sync based on configured interval
             let sync_interval_ticks = app.sync_config.sync_interval as u64 * 60;
@@ -604,28 +661,28 @@ pub(super) fn handle_backup_key(app: &mut App, code: KeyCode) {
             if app.backup_config.is_ready() {
                 match dodo::backup::create_backup(&app.backup_config) {
                     Ok(key) => {
-                        app.backup_status_msg = Some(format!("Uploaded: {}", key));
+                        app.set_backup_status(format!("\u{2713} Uploaded: {}", key));
                         app.refresh_backups();
                     }
                     Err(e) => {
-                        app.backup_status_msg = Some(format!("Upload failed: {}", e));
+                        app.set_backup_status(format!("Error: Upload failed: {}", e));
                     }
                 }
             } else {
-                app.backup_status_msg = Some("Backup not configured".to_string());
+                app.set_backup_status("Error: Backup not configured".to_string());
             }
         }
         KeyCode::Char('r') => {
             if let Some(entry) = app.backup_entries.get(app.backup_selected) {
                 let key = entry.key.clone();
+                let name = entry.display_name.clone();
                 match dodo::backup::restore_backup(&app.backup_config, &key) {
                     Ok(()) => {
-                        app.backup_status_msg =
-                            Some(format!("Restored: {}", entry.display_name));
+                        app.set_backup_status(format!("\u{2713} Restored: {}", name));
                         let _ = app.refresh_all();
                     }
                     Err(e) => {
-                        app.backup_status_msg = Some(format!("Restore failed: {}", e));
+                        app.set_backup_status(format!("Error: Restore failed: {}", e));
                     }
                 }
             }
@@ -633,14 +690,14 @@ pub(super) fn handle_backup_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('d') | KeyCode::Delete => {
             if let Some(entry) = app.backup_entries.get(app.backup_selected) {
                 let key = entry.key.clone();
+                let name = entry.display_name.clone();
                 match dodo::backup::delete_backup(&app.backup_config, &key) {
                     Ok(()) => {
-                        app.backup_status_msg =
-                            Some(format!("Deleted: {}", entry.display_name));
+                        app.set_backup_status(format!("\u{2713} Deleted: {}", name));
                         app.refresh_backups();
                     }
                     Err(e) => {
-                        app.backup_status_msg = Some(format!("Delete failed: {}", e));
+                        app.set_backup_status(format!("Error: Delete failed: {}", e));
                     }
                 }
             }
@@ -651,9 +708,9 @@ pub(super) fn handle_backup_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('s') => {
             if app.sync_enabled() {
                 app.trigger_sync();
-                app.backup_status_msg = Some("Sync started...".to_string());
+                app.set_backup_status("\u{21BB} Sync started...".to_string());
             } else {
-                app.backup_status_msg = Some("Sync not configured".to_string());
+                app.set_backup_status("Error: Sync not configured".to_string());
             }
         }
         _ => {}
