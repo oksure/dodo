@@ -32,43 +32,45 @@ pub(super) fn draw_ui(f: &mut Frame, app: &App) {
     draw_header(f, app, outer[0]);
 
     // Tab bar
-    let tab_titles: Vec<Line> = vec![
-        Line::from(vec![
-            Span::raw(" Tasks "),
-            Span::styled(" t ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
-            Span::raw(" "),
-        ]),
-        Line::from(vec![
-            Span::raw(" Recurring "),
-            Span::styled(" c ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
-            Span::raw(" "),
-        ]),
-        Line::from(vec![
-            Span::raw(" Report "),
-            Span::styled(" r ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
-            Span::raw(" "),
-        ]),
-        Line::from(vec![
-            Span::raw(" Backup "),
-            Span::styled(" b ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
-            Span::raw(" "),
-        ]),
-    ];
     let tab_index = match app.tab {
         TuiTab::Tasks => 0,
         TuiTab::Recurring => 1,
         TuiTab::Report => 2,
         TuiTab::Backup => 3,
     };
+    let tab_names = [" Tasks ", " Recurring ", " Report ", " Backup "];
+    let tab_keys = [" t ", " c ", " r ", " b "];
+    let tab_titles: Vec<Line> = (0..4)
+        .map(|i| {
+            if i == tab_index {
+                Line::from(vec![
+                    Span::styled(
+                        tab_names[i],
+                        Style::default()
+                            .fg(Color::Rgb(30, 30, 46))
+                            .bg(FG_TEXT)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        tab_keys[i],
+                        Style::default()
+                            .fg(FG_TEXT)
+                            .bg(Color::Rgb(30, 30, 46)),
+                    ),
+                    Span::raw(" "),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled(tab_names[i], Style::default().fg(FG_OVERLAY)),
+                    Span::styled(tab_keys[i], Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+                    Span::raw(" "),
+                ])
+            }
+        })
+        .collect();
     let tabs = Tabs::new(tab_titles)
         .select(tab_index)
         .style(Style::default().fg(FG_OVERLAY))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Rgb(30, 30, 46))
-                .bg(FG_TEXT)
-                .add_modifier(Modifier::BOLD),
-        )
         .divider(Span::styled(" | ", Style::default().fg(FG_OVERLAY)));
     f.render_widget(tabs, outer[1]);
 
@@ -98,6 +100,7 @@ pub(super) fn draw_ui(f: &mut Frame, app: &App) {
         AppMode::RecAddTemplate => draw_rec_add_bar(f, app),
         AppMode::MoveTask => draw_move_bar(f, app),
         AppMode::EditConfig | AppMode::EditConfigField => draw_config_modal(f, app),
+        AppMode::Help => draw_help_modal(f, app),
         AppMode::Normal | AppMode::Search => {}
     }
 }
@@ -231,6 +234,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("n", "note"),
                 ("o", "sort"),
                 ("/", "search"),
+                ("?", "help"),
                 ("q", "quit"),
             ],
         },
@@ -245,11 +249,13 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("d", "del"),
                 ("p", "pause"),
                 ("g", "generate"),
+                ("?", "help"),
                 ("q", "quit"),
             ],
         },
         TuiTab::Report => vec![
             ("h/l", "range"),
+            ("?", "help"),
             ("q", "quit"),
         ],
         TuiTab::Backup => match app.mode {
@@ -268,6 +274,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("r", "restore"),
                 ("d", "delete"),
                 ("e", "config"),
+                ("?", "help"),
                 ("q", "quit"),
             ],
         },
@@ -856,29 +863,31 @@ pub(super) fn pastel_from_hue(hue: f64) -> Color {
     )
 }
 
-/// Apply pastel rainbow sweep effect: a glow spot moves continuously left→right.
+/// Apply inverted pastel rainbow sweep: dark bold text on bright animated background.
 pub(super) fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> Line<'static> {
     let sigma = width as f64 * 0.25;
     let period = width as f64 + sigma * 4.0;
     let wave_center = (frame_count as f64 * 0.8) % period - sigma * 2.0;
     let hue_offset = frame_count as f64 * 0.008;
 
+    let dark_fg = Color::Rgb(30, 30, 46);
+    let text_style = Style::default().fg(dark_fg).add_modifier(Modifier::BOLD);
+
     let mut result: Vec<Span<'static>> = Vec::new();
     let mut x: f64 = 0.0;
 
     for span in line.spans {
-        let base_style = span.style;
         for ch in span.content.chars() {
             let d = x - wave_center;
             let intensity = (-0.5 * (d / sigma).powi(2)).exp();
             let hue = hue_offset + x / width as f64;
             let Color::Rgb(pr, pg, pb) = pastel_from_hue(hue) else { unreachable!() };
             let bg = Color::Rgb(
-                (30.0 + intensity * (pr as f64 - 30.0)) as u8,
-                (30.0 + intensity * (pg as f64 - 30.0)) as u8,
-                (35.0 + intensity * (pb as f64 - 35.0)) as u8,
+                (80.0 + intensity * (pr as f64 - 80.0)) as u8,
+                (85.0 + intensity * (pg as f64 - 85.0)) as u8,
+                (100.0 + intensity * (pb as f64 - 100.0)) as u8,
             );
-            result.push(Span::styled(ch.to_string(), base_style.bg(bg)));
+            result.push(Span::styled(ch.to_string(), text_style.bg(bg)));
             x += 1.0;
         }
     }
@@ -890,11 +899,11 @@ pub(super) fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> L
         let hue = hue_offset + x / width as f64;
         let Color::Rgb(pr, pg, pb) = pastel_from_hue(hue) else { unreachable!() };
         let bg = Color::Rgb(
-            (30.0 + intensity * (pr as f64 - 30.0)) as u8,
-            (30.0 + intensity * (pg as f64 - 30.0)) as u8,
-            (35.0 + intensity * (pb as f64 - 35.0)) as u8,
+            (80.0 + intensity * (pr as f64 - 80.0)) as u8,
+            (85.0 + intensity * (pg as f64 - 85.0)) as u8,
+            (100.0 + intensity * (pb as f64 - 100.0)) as u8,
         );
-        result.push(Span::styled(" ", Style::default().bg(bg)));
+        result.push(Span::styled(" ", text_style.bg(bg)));
         x += 1.0;
     }
 
@@ -1991,6 +2000,140 @@ pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
         }
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
+}
+
+pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(60, 80, f.area());
+    draw_shadow(f, area);
+    f.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .title(Span::styled(
+            " Help ",
+            Style::default()
+                .fg(ACCENT_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Span::styled(
+            " j/k:scroll  Esc:close ",
+            Style::default().fg(FG_OVERLAY),
+        ))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_BLUE))
+        .padding(Padding::horizontal(1));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let section_style = Style::default()
+        .fg(ACCENT_BLUE)
+        .add_modifier(Modifier::BOLD);
+    let key_style = Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(FG_SUBTEXT);
+    let muted = Style::default().fg(FG_OVERLAY);
+
+    let help_key = |k: &str, d: &str| -> Line<'static> {
+        Line::from(vec![
+            Span::styled(format!("  {:<14}", k), key_style),
+            Span::styled(d.to_string(), desc_style),
+        ])
+    };
+
+    let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled("GLOBAL", section_style)),
+        Line::from(""),
+        help_key("Tab", "Next tab"),
+        help_key("Shift+Tab", "Previous tab"),
+        help_key("t", "Tasks tab"),
+        help_key("c", "Recurring tab"),
+        help_key("r", "Report tab"),
+        help_key("b", "Backup tab"),
+        help_key("?", "Toggle this help"),
+        help_key("q / Esc", "Quit"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            muted,
+        )),
+        Line::from(""),
+    ];
+
+    match app.tab {
+        TuiTab::Tasks => {
+            lines.push(Line::from(Span::styled("TASKS", section_style)));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Navigation", desc_style)));
+            lines.push(help_key("j / Down", "Next task"));
+            lines.push(help_key("k / Up", "Previous task (search at top)"));
+            lines.push(help_key("h / Left", "Previous pane"));
+            lines.push(help_key("l / Right", "Next pane"));
+            lines.push(help_key("G", "Jump to last task"));
+            lines.push(help_key("gg", "Jump to first task"));
+            lines.push(help_key("PgDn / PgUp", "Jump 10 tasks"));
+            lines.push(help_key("[count]j/k", "Move by count (e.g., 5j)"));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Actions", desc_style)));
+            lines.push(help_key("a", "Add new task"));
+            lines.push(help_key("s", "Start/pause timer"));
+            lines.push(help_key("d", "Toggle done/undone"));
+            lines.push(help_key("n", "Open notes"));
+            lines.push(help_key("Enter", "Edit task detail"));
+            lines.push(help_key("Del / Bksp", "Delete task"));
+            lines.push(help_key("< / >", "Quick-move task between panes"));
+            lines.push(help_key("m", "Move task (pick target)"));
+            lines.push(help_key("o", "Cycle sort mode"));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("Search", desc_style)));
+            lines.push(help_key("/", "Open search bar"));
+            lines.push(help_key("+proj", "Filter by project"));
+            lines.push(help_key("@ctx", "Filter by context"));
+            lines.push(help_key("!!", "Filter by priority >= 2"));
+            lines.push(help_key("^<3d", "Deadline within 3 days"));
+            lines.push(help_key("=<1w", "Scheduled within 1 week"));
+            lines.push(help_key("keyword", "Filter by title"));
+        }
+        TuiTab::Recurring => {
+            lines.push(Line::from(Span::styled("RECURRING", section_style)));
+            lines.push(Line::from(""));
+            lines.push(help_key("j / k", "Navigate templates"));
+            lines.push(help_key("a", "Add template (*daily, *weekly, ...)"));
+            lines.push(help_key("e / Enter", "Edit template"));
+            lines.push(help_key("d / Del", "Delete template"));
+            lines.push(help_key("p", "Pause/resume template"));
+            lines.push(help_key("g", "Generate instances"));
+        }
+        TuiTab::Report => {
+            lines.push(Line::from(Span::styled("REPORT", section_style)));
+            lines.push(Line::from(""));
+            lines.push(help_key("h / Left", "Previous range"));
+            lines.push(help_key("l / Right", "Next range"));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Ranges: Day, Week, Month, Year, All",
+                desc_style,
+            )));
+        }
+        TuiTab::Backup => {
+            lines.push(Line::from(Span::styled("BACKUP", section_style)));
+            lines.push(Line::from(""));
+            lines.push(help_key("j / k", "Navigate backups"));
+            lines.push(help_key("u", "Upload new backup"));
+            lines.push(help_key("r", "Restore selected backup"));
+            lines.push(help_key("d / Del", "Delete selected backup"));
+            lines.push(help_key("e", "Edit config"));
+        }
+    }
+
+    // Clamp scroll to content
+    let content_height = lines.len() as u16;
+    let visible_height = inner.height;
+    let max_scroll = content_height.saturating_sub(visible_height) as usize;
+    let scroll = app.help_scroll.min(max_scroll);
+
+    let paragraph = Paragraph::new(lines)
+        .wrap(Wrap { trim: false })
+        .scroll((scroll as u16, 0));
+    f.render_widget(paragraph, inner);
 }
 
 pub(super) fn draw_add_bar(f: &mut Frame, app: &App) {

@@ -34,7 +34,7 @@ impl PaneState {
         }
         let len = self.tasks.len();
         let i = match self.list_state.selected() {
-            Some(i) => (i + n) % len,
+            Some(i) => (i + n).min(len - 1),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -44,9 +44,8 @@ impl PaneState {
         if self.tasks.is_empty() {
             return;
         }
-        let len = self.tasks.len();
         let i = match self.list_state.selected() {
-            Some(i) => (i + len - (n % len)) % len,
+            Some(i) => i.saturating_sub(n),
             None => 0,
         };
         self.list_state.select(Some(i));
@@ -97,6 +96,7 @@ pub(super) enum AppMode {
     RecConfirmDelete,
     EditConfig,
     EditConfigField,
+    Help,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -232,6 +232,8 @@ pub(super) struct App<'a> {
     pub(super) config_field_index: usize,
     pub(super) config_field_values: [String; CONFIG_FIELD_COUNT],
     pub(super) config_field_input: String,
+    // Help modal
+    pub(super) help_scroll: usize,
 }
 
 impl<'a> App<'a> {
@@ -283,6 +285,7 @@ impl<'a> App<'a> {
             config_field_index: 0,
             config_field_values: Default::default(),
             config_field_input: String::new(),
+            help_scroll: 0,
         }
     }
 

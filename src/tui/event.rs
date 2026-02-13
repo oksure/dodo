@@ -76,6 +76,31 @@ where
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
+                        KeyCode::BackTab => {
+                            match app.tab {
+                                TuiTab::Tasks => {
+                                    app.tab = TuiTab::Backup;
+                                    app.refresh_backups();
+                                }
+                                TuiTab::Recurring => {
+                                    app.tab = TuiTab::Tasks;
+                                }
+                                TuiTab::Report => {
+                                    app.tab = TuiTab::Recurring;
+                                    let _ = app.refresh_templates();
+                                }
+                                TuiTab::Backup => {
+                                    app.tab = TuiTab::Report;
+                                    let _ = app.refresh_report();
+                                }
+                            }
+                            app.count_prefix = None;
+                            app.pending_g = false;
+                        }
+                        KeyCode::Char('?') => {
+                            app.help_scroll = 0;
+                            app.mode = AppMode::Help;
+                        }
                         _ => {
                             if app.tab == TuiTab::Tasks {
                                 // Handle pending 'g' for gg (jump to first)
@@ -400,6 +425,24 @@ where
                         }
                         KeyCode::Char(c) => {
                             app.config_field_input.push(c);
+                        }
+                        _ => {}
+                    },
+                    AppMode::Help => match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                            app.mode = AppMode::Normal;
+                        }
+                        KeyCode::Char('j') | KeyCode::Down => {
+                            app.help_scroll += 1;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up => {
+                            app.help_scroll = app.help_scroll.saturating_sub(1);
+                        }
+                        KeyCode::PageDown => {
+                            app.help_scroll += 10;
+                        }
+                        KeyCode::PageUp => {
+                            app.help_scroll = app.help_scroll.saturating_sub(10);
                         }
                         _ => {}
                     },
