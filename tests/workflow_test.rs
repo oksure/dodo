@@ -1,5 +1,6 @@
 use dodo::cli::Area;
 use dodo::db::Database;
+use dodo::task::TaskStatus;
 
 fn test_db() -> Database {
     Database::in_memory().unwrap()
@@ -748,4 +749,104 @@ fn update_notes_by_id_replaces_existing() {
     db.update_notes_by_id(&task.id, "completely new content").unwrap();
     let notes = db.get_task_notes_by_id(&task.id).unwrap();
     assert_eq!(notes, Some("completely new content".to_string()));
+}
+
+// ── Export / Import roundtrip ───────────────────────────────────────
+
+#[test]
+fn export_import_roundtrip_preserves_all_data() {
+    let db1 = test_db();
+
+    // Add tasks with various field types
+    let today = chrono::Local::now().date_naive();
+    let deadline = today + chrono::Duration::days(7);
+
+    db1.add_task(
+        "Task with all fields",
+        Area::Today,
+        Some("backend".into()),
+        Some("work,office".into()),
+        Some(120),
+        Some(deadline),
+        Some(today),
+        Some("urgent,review".into()),
+        Some(3),
+    )
+    .unwrap();
+
+    db1.add_task("Simple task", Area::ThisWeek, None, None, Some(60), None, None, None, None)
+        .unwrap();
+
+    db1.add_task("Long term task", Area::LongTerm, Some("frontend".into()), None, None, None, None, None, Some(1))
+        .unwrap();
+
+    // Add notes to first task
+    db1.append_note("1", "First note line").unwrap();
+
+    // Start and pause a task to create sessions
+    db1.start_timer("1").unwrap();
+    db1.pause_timer().unwrap();
+
+    // Complete a task
+    db1.start_timer("2").unwrap();
+    db1.complete_task().unwrap();
+
+    // Add a recurring template
+    db1.add_template(
+        "standup",
+        "daily",
+        Some("team".into()),
+        Some("meeting".into()),
+        Some(15),
+        None,
+        Some(today),
+        None,
+        Some(2),
+    )
+    .unwrap();
+
+    // Export all data
+    let (tasks, sessions) = db1.export_all_data().unwrap();
+    assert!(tasks.len() >= 4); // 3 tasks + 1 template + at least 1 instance
+    assert!(!sessions.is_empty());
+
+    // Import into a fresh database
+    let db2 = test_db();
+    db2.import_all_data(&tasks, &sessions).unwrap();
+
+    // Verify tasks
+    let (exported_tasks, exported_sessions) = db2.export_all_data().unwrap();
+    assert_eq!(exported_tasks.len(), tasks.len());
+    assert_eq!(exported_sessions.len(), sessions.len());
+
+    // Verify specific task fields survived roundtrip
+    let full_task = exported_tasks.iter().find(|t| t.title == "Task with all fields").unwrap();
+    assert_eq!(full_task.project.as_deref(), Some("backend"));
+    assert_eq!(full_task.context.as_deref(), Some("work,office"));
+    assert_eq!(full_task.estimate_minutes, Some(120));
+    assert_eq!(full_task.deadline, Some(deadline));
+    assert_eq!(full_task.scheduled, Some(today));
+    assert_eq!(full_task.tags.as_deref(), Some("urgent,review"));
+    assert_eq!(full_task.priority, Some(3));
+    assert!(full_task.notes.is_some());
+    assert_eq!(full_task.status, TaskStatus::Paused);
+
+    // Verify completed task
+    let simple_task = exported_tasks.iter().find(|t| t.title == "Simple task").unwrap();
+    assert_eq!(simple_task.status, TaskStatus::Done);
+    assert!(simple_task.completed.is_some());
+
+    // Verify template survived
+    let template = exported_tasks.iter().find(|t| t.title == "standup" && t.is_template).unwrap();
+    assert_eq!(template.recurrence.as_deref(), Some("daily"));
+    assert_eq!(template.project.as_deref(), Some("team"));
+    assert_eq!(template.priority, Some(2));
+
+    // Verify sessions have correct data
+    for orig in &sessions {
+        let imported = exported_sessions.iter().find(|s| s.id == orig.id).unwrap();
+        assert_eq!(imported.task_id, orig.task_id);
+        assert_eq!(imported.duration, orig.duration);
+        assert_eq!(imported.manual_edit, orig.manual_edit);
+    }
 }

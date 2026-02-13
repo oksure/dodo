@@ -21,14 +21,21 @@ fn main() -> Result<()> {
     // Load config before database init (needed for sync + backup-age check)
     let config = Config::load().unwrap_or_default();
 
+    // Recover from any interrupted sync migration before opening DB
+    Database::recover_interrupted_migration()?;
+
     // Initialize database (with Turso sync if configured)
     let db = if config.sync.is_ready() {
         // Safety: is_ready() guarantees turso_url and turso_token are Some
-        Database::new_with_sync(
-            config.sync.turso_url.as_deref().unwrap(),
-            config.sync.turso_token.as_deref().unwrap(),
-        )?
+        let url = config.sync.turso_url.as_deref().unwrap();
+        let token = config.sync.turso_token.as_deref().unwrap();
+        if Database::needs_sync_transition()? {
+            Database::migrate_to_sync(url, token)?
+        } else {
+            Database::new_with_sync(url, token)?
+        }
     } else {
+        let _ = Database::clean_sync_metadata();
         Database::new()?
     };
 
@@ -477,11 +484,13 @@ fn cmd_sync(args: dodo::cli::SyncArgs) -> Result<()> {
             }
             config.save()?;
             println!("{}", "Sync enabled.".green());
+            println!("Note: Your existing local data will be migrated to Turso on the next command.");
         }
         Some(SyncAction::Disable) => {
             let mut config = config;
             config.sync.enabled = false;
             config.save()?;
+            let _ = Database::clean_sync_metadata();
             println!("Sync disabled.");
         }
     }

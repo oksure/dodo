@@ -79,6 +79,7 @@ cargo test
 - **Config file**: `~/.config/dodo/config.toml` with `[sync]` and `[backup]` sections. Parsed via `config.rs` with serde. Env var fallbacks: `DODO_TURSO_TOKEN`, `DODO_S3_ACCESS_KEY`, `DODO_S3_SECRET_KEY` (only used when config field is `None`). `SyncConfig::is_ready()` and `BackupConfig::is_ready()` check all required fields are present and enabled.
 - **S3 backup**: `backup.rs` provides `create_backup` (gzip compress + upload), `list_backups` (newest first), `restore_backup` (download + decompress + safety `.pre-restore` copy), `delete_backup`, `check_backup_age` (startup overdue warning). Auto-prunes old backups beyond `max_backups` limit. Uses `new_runtime()` helper to deduplicate tokio runtime creation. CLI: `dodo backup` (create), `dodo backup list`, `dodo backup restore [latest]`, `dodo backup delete <name>`.
 - **Turso sync**: Wired up via `Database::new_with_sync()` when `SyncConfig::is_ready()`. Uses `Builder::new_remote_replica()` with 60s auto-sync interval. `main.rs` loads config before DB init and branches on sync readiness. `dodo sync status/enable/disable` commands. Sync config stored in `[sync]` section of config file. Enable flow is interactive (prompts for URL/token).
+- **Sync transitions**: Seamless local↔sync mode switching via `db.rs` transition layer. `needs_sync_transition()` detects local-only DBs missing sync metadata. `migrate_to_sync()` exports all data, renames old DB as `.pre-sync` backup, creates fresh remote replica, imports data, syncs. Rollback on failure restores the backup file. `clean_sync_metadata()` removes `client_wal` when sync is disabled (ensures re-enable triggers fresh migration). `recover_interrupted_migration()` runs at startup to restore from `.pre-sync` backup if crash interrupted migration. `export_all_data()`/`import_all_data()` handle bulk data transfer using `INSERT OR REPLACE`.
 - **TUI Backup tab**: Shows config instructions when not configured, or backup list with name/age/size. Sync status indicator at top: `● enabled` (green) with Turso URL, or `○ not configured` (dim). When backup is unconfigured, also shows sync config instructions. Keys: `j/k` navigate, `u` upload, `r` restore, `d` delete. Status messages shown for operation results.
 - **Startup backup check**: On every CLI invocation, if backup is configured and overdue (>= `schedule_days` since last backup), prints a reminder to stderr.
 
@@ -91,12 +92,12 @@ cargo test
 
 ## Testing
 
-- `cargo test` runs all 159 tests
+- `cargo test` runs all 160 tests
 - `src/backup.rs` (inline) — 25 unit tests for format_size, format_age, parse_backup_timestamp
 - `tests/config_test.rs` — 22 unit tests for config parsing, TOML deserialization, defaults, is_ready checks, serialize/deserialize roundtrip
 - `tests/fuzzy_test.rs` — 8 unit tests for fuzzy scoring (exact, prefix, substring, word-level, ranking)
 - `tests/notation_test.rs` — 61 unit tests for notation parsing (duration, dates, token extraction, title cleanup, edge cases, recurrence patterns, next occurrence computation)
-- `tests/workflow_test.rs` — 43 integration tests using `Database::in_memory()`, covering: simple daily list, Pomodoro start/pause/resume, GTD four horizons with contexts and projects, Eisenhower quadrants, freelance multi-project time tracking, numeric ID selection, fuzzy matching integration, academic multi-area workflow, session lifecycle, estimates, elapsed time, notes, edit command, multiple contexts, tags, deadlines, priority, recurring template CRUD, instance generation, pause/resume, history, update_notes_by_id
+- `tests/workflow_test.rs` — 44 integration tests using `Database::in_memory()`, covering: simple daily list, Pomodoro start/pause/resume, GTD four horizons with contexts and projects, Eisenhower quadrants, freelance multi-project time tracking, numeric ID selection, fuzzy matching integration, academic multi-area workflow, session lifecycle, estimates, elapsed time, notes, edit command, multiple contexts, tags, deadlines, priority, recurring template CRUD, instance generation, pause/resume, history, update_notes_by_id, export/import roundtrip
 
 ## Conventions
 

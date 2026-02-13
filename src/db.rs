@@ -134,6 +134,200 @@ impl Database {
         Ok(home.join("dodo").join("dodo.db"))
     }
 
+    // ── Sync Transition Methods ──────────────────────────────────────
+
+    /// Detects if a local-only db exists that needs migration before sync mode can work.
+    /// Returns true if db file exists but has no sync metadata (client_wal file).
+    pub fn needs_sync_transition() -> Result<bool> {
+        let db_path = Self::db_path()?;
+        if !db_path.exists() {
+            return Ok(false);
+        }
+        let client_wal = db_path.with_extension("db-client_wal");
+        Ok(!client_wal.exists())
+    }
+
+    /// Startup safety net: if dodo.db.pre-sync exists but dodo.db doesn't
+    /// (crash between rename and replica creation), restores from backup.
+    pub fn recover_interrupted_migration() -> Result<()> {
+        let db_path = Self::db_path()?;
+        let backup_path = db_path.with_extension("db.pre-sync");
+        if backup_path.exists() && !db_path.exists() {
+            eprintln!("Recovering from interrupted migration...");
+            std::fs::rename(&backup_path, &db_path)
+                .context("Failed to recover database from interrupted migration")?;
+            eprintln!("Recovery complete.");
+        }
+        Ok(())
+    }
+
+    /// Removes sync metadata (client_wal) when sync is disabled.
+    /// Ensures re-enabling sync later triggers a fresh migration.
+    pub fn clean_sync_metadata() -> Result<()> {
+        let db_path = Self::db_path()?;
+        let client_wal = db_path.with_extension("db-client_wal");
+        if client_wal.exists() {
+            std::fs::remove_file(&client_wal)
+                .context("Failed to remove sync metadata")?;
+        }
+        Ok(())
+    }
+
+    /// Orchestrates the local→sync transition:
+    /// 1. Open existing local db, export all data
+    /// 2. Rename dodo.db → dodo.db.pre-sync (safety backup)
+    /// 3. Clean up old WAL/SHM files
+    /// 4. Create fresh remote replica
+    /// 5. Import all exported data
+    /// 6. Sync to ensure durability
+    pub fn migrate_to_sync(url: &str, token: &str) -> Result<Self> {
+        let db_path = Self::db_path()?;
+
+        // 1. Open existing local db and export all data
+        eprintln!("Migrating local database to Turso sync...");
+        let local_db = Self::open(&db_path)?;
+        let (tasks, sessions) = local_db.export_all_data()?;
+        drop(local_db);
+
+        // 2. Rename dodo.db → dodo.db.pre-sync (safety backup)
+        let backup_path = db_path.with_extension("db.pre-sync");
+        std::fs::rename(&db_path, &backup_path)
+            .context("Failed to rename database for migration")?;
+
+        // 3. Clean up old WAL/SHM files
+        let wal_path = db_path.with_extension("db-wal");
+        let shm_path = db_path.with_extension("db-shm");
+        let _ = std::fs::remove_file(&wal_path);
+        let _ = std::fs::remove_file(&shm_path);
+
+        // 4. Create fresh remote replica
+        let new_db = match Self::new_with_sync(url, token) {
+            Ok(db) => db,
+            Err(e) => {
+                // Rollback: restore the renamed file
+                eprintln!("Migration failed, restoring backup...");
+                if let Err(restore_err) = std::fs::rename(&backup_path, &db_path) {
+                    eprintln!(
+                        "WARNING: Failed to restore backup. Your data is safe at: {}",
+                        backup_path.display()
+                    );
+                    eprintln!("Restore error: {}", restore_err);
+                }
+                return Err(e).context("Failed to create synced database during migration");
+            }
+        };
+
+        // 5. Import all data
+        if let Err(e) = new_db.import_all_data(&tasks, &sessions) {
+            eprintln!("Migration failed during import, restoring backup...");
+            drop(new_db);
+            // Clean up the failed replica files
+            let _ = std::fs::remove_file(&db_path);
+            let client_wal = db_path.with_extension("db-client_wal");
+            let _ = std::fs::remove_file(&client_wal);
+            if let Err(restore_err) = std::fs::rename(&backup_path, &db_path) {
+                eprintln!(
+                    "WARNING: Failed to restore backup. Your data is safe at: {}",
+                    backup_path.display()
+                );
+                eprintln!("Restore error: {}", restore_err);
+            }
+            return Err(e).context("Failed to import data during migration");
+        }
+
+        // 6. Sync to ensure durability
+        if let Err(e) = new_db.sync() {
+            eprintln!("Warning: post-migration sync failed: {e}");
+        }
+
+        eprintln!(
+            "Migration complete. {} tasks and {} sessions transferred.",
+            tasks.len(),
+            sessions.len()
+        );
+        eprintln!("Backup saved at: {}", backup_path.display());
+
+        Ok(new_db)
+    }
+
+    /// Export all tasks and sessions from the database.
+    pub fn export_all_data(&self) -> Result<(Vec<Task>, Vec<Session>)> {
+        self.rt.block_on(async {
+            // Export all tasks (including templates)
+            let query = format!("{} GROUP BY t.id", Self::TASK_SELECT_WITH_ELAPSED);
+            let mut rows = self.conn.query(&query, ()).await?;
+            let mut tasks = Vec::new();
+            while let Some(row) = rows.next().await? {
+                tasks.push(row_to_task(&row)?);
+            }
+
+            // Export all sessions
+            let mut rows = self.conn.query(
+                "SELECT id, task_id, started, ended, duration, manual_edit, notes FROM sessions",
+                (),
+            ).await?;
+            let mut sessions = Vec::new();
+            while let Some(row) = rows.next().await? {
+                sessions.push(row_to_session(&row)?);
+            }
+
+            Ok((tasks, sessions))
+        })
+    }
+
+    /// Import tasks and sessions into the database using INSERT OR REPLACE.
+    pub fn import_all_data(&self, tasks: &[Task], sessions: &[Session]) -> Result<()> {
+        self.rt.block_on(async {
+            for task in tasks {
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO tasks (id, num_id, title, area, project, context, status, created, completed,
+                     estimate_minutes, deadline, scheduled, tags, task_notes, priority, modified_at,
+                     recurrence, is_template, template_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                    params![
+                        task.id.clone(),
+                        task.num_id,
+                        task.title.clone(),
+                        task.area.as_str(),
+                        task.project.clone(),
+                        task.context.clone(),
+                        task.status.as_str(),
+                        task.created.to_rfc3339(),
+                        task.completed.map(|d| d.to_rfc3339()),
+                        task.estimate_minutes,
+                        task.deadline.map(|d| d.to_string()),
+                        task.scheduled.map(|d| d.to_string()),
+                        task.tags.clone(),
+                        task.notes.clone(),
+                        task.priority,
+                        task.modified_at.map(|d| d.to_rfc3339()),
+                        task.recurrence.clone(),
+                        task.is_template as i64,
+                        task.template_id.clone(),
+                    ],
+                ).await?;
+            }
+
+            for session in sessions {
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO sessions (id, task_id, started, ended, duration, manual_edit, notes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    params![
+                        session.id.clone(),
+                        session.task_id.clone(),
+                        session.started.to_rfc3339(),
+                        session.ended.map(|d| d.to_rfc3339()),
+                        session.duration,
+                        session.manual_edit,
+                        session.notes.clone(),
+                    ],
+                ).await?;
+            }
+
+            Ok(())
+        })
+    }
+
     fn migrate(&self) -> Result<()> {
         self.rt.block_on(async {
             self.conn.execute(
