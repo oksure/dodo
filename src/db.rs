@@ -136,15 +136,68 @@ impl Database {
 
     // ── Sync Transition Methods ──────────────────────────────────────
 
+    /// List all auxiliary files for the database (everything matching dodo.db*
+    /// except the db itself and .pre-sync backup). Includes WAL, SHM, and any
+    /// libsql sync metadata files (like -info, -client_wal, etc.).
+    fn list_auxiliary_db_files() -> Result<Vec<PathBuf>> {
+        let db_path = Self::db_path()?;
+        let parent = db_path
+            .parent()
+            .context("Database path has no parent directory")?;
+        let db_name = db_path
+            .file_name()
+            .context("Database path has no file name")?
+            .to_string_lossy()
+            .to_string();
+
+        let mut files = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(&db_name)
+                    && name != db_name
+                    && !name.ends_with(".pre-sync")
+                {
+                    files.push(parent.join(&name));
+                }
+            }
+        }
+        Ok(files)
+    }
+
+    /// Remove all auxiliary database files (WAL, SHM, sync metadata, etc.).
+    fn remove_auxiliary_db_files() {
+        if let Ok(files) = Self::list_auxiliary_db_files() {
+            for file in files {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+    }
+
     /// Detects if a local-only db exists that needs migration before sync mode can work.
-    /// Returns true if db file exists but has no sync metadata (client_wal file).
+    /// Returns true if db file exists but has no sync metadata files.
+    /// Checks for any non-standard SQLite files (libsql creates -info, -client_wal, etc.).
     pub fn needs_sync_transition() -> Result<bool> {
         let db_path = Self::db_path()?;
         if !db_path.exists() {
             return Ok(false);
         }
-        let client_wal = db_path.with_extension("db-client_wal");
-        Ok(!client_wal.exists())
+        let db_name = db_path
+            .file_name()
+            .context("Database path has no file name")?
+            .to_string_lossy()
+            .to_string();
+        let local_suffixes = ["-wal", "-shm", "-journal"];
+        let has_sync_metadata = Self::list_auxiliary_db_files()?.iter().any(|f| {
+            let name = f
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let suffix = &name[db_name.len()..];
+            !local_suffixes.contains(&suffix)
+        });
+        Ok(!has_sync_metadata)
     }
 
     /// Startup safety net: if dodo.db.pre-sync exists but dodo.db doesn't
@@ -154,6 +207,8 @@ impl Database {
         let backup_path = db_path.with_extension("db.pre-sync");
         if backup_path.exists() && !db_path.exists() {
             eprintln!("Recovering from interrupted migration...");
+            // Clean up any orphaned sync metadata before restoring
+            Self::remove_auxiliary_db_files();
             std::fs::rename(&backup_path, &db_path)
                 .context("Failed to recover database from interrupted migration")?;
             eprintln!("Recovery complete.");
@@ -161,51 +216,49 @@ impl Database {
         Ok(())
     }
 
-    /// Removes sync metadata (client_wal) when sync is disabled.
+    /// Removes all sync metadata files when sync is disabled.
     /// Ensures re-enabling sync later triggers a fresh migration.
     pub fn clean_sync_metadata() -> Result<()> {
-        let db_path = Self::db_path()?;
-        let client_wal = db_path.with_extension("db-client_wal");
-        if client_wal.exists() {
-            std::fs::remove_file(&client_wal)
-                .context("Failed to remove sync metadata")?;
-        }
+        Self::remove_auxiliary_db_files();
         Ok(())
     }
 
     /// Orchestrates the local→sync transition:
-    /// 1. Open existing local db, export all data
-    /// 2. Rename dodo.db → dodo.db.pre-sync (safety backup)
-    /// 3. Clean up old WAL/SHM files
-    /// 4. Create fresh remote replica
-    /// 5. Import all exported data
-    /// 6. Sync to ensure durability
+    /// 1. Clean up any orphaned sync metadata from previous attempts
+    /// 2. Open existing local db, export all data
+    /// 3. Rename dodo.db → dodo.db.pre-sync (safety backup)
+    /// 4. Clean up all auxiliary files (WAL/SHM/metadata)
+    /// 5. Create fresh remote replica
+    /// 6. Import all exported data
+    /// 7. Sync to ensure durability
     pub fn migrate_to_sync(url: &str, token: &str) -> Result<Self> {
         let db_path = Self::db_path()?;
 
-        // 1. Open existing local db and export all data
+        // 1. Clean up any orphaned sync metadata from previous attempts
+        //    (safe before open — Builder::new_local ignores these files)
+        Self::remove_auxiliary_db_files();
+
+        // 2. Open existing local db and export all data
         eprintln!("Migrating local database to Turso sync...");
         let local_db = Self::open(&db_path)?;
         let (tasks, sessions) = local_db.export_all_data()?;
         drop(local_db);
 
-        // 2. Rename dodo.db → dodo.db.pre-sync (safety backup)
+        // 3. Rename dodo.db → dodo.db.pre-sync (safety backup)
         let backup_path = db_path.with_extension("db.pre-sync");
         std::fs::rename(&db_path, &backup_path)
             .context("Failed to rename database for migration")?;
 
-        // 3. Clean up old WAL/SHM files
-        let wal_path = db_path.with_extension("db-wal");
-        let shm_path = db_path.with_extension("db-shm");
-        let _ = std::fs::remove_file(&wal_path);
-        let _ = std::fs::remove_file(&shm_path);
+        // 4. Clean up all auxiliary files (WAL/SHM created by the export open)
+        Self::remove_auxiliary_db_files();
 
-        // 4. Create fresh remote replica
+        // 5. Create fresh remote replica
         let new_db = match Self::new_with_sync(url, token) {
             Ok(db) => db,
             Err(e) => {
                 // Rollback: restore the renamed file
                 eprintln!("Migration failed, restoring backup...");
+                Self::remove_auxiliary_db_files();
                 if let Err(restore_err) = std::fs::rename(&backup_path, &db_path) {
                     eprintln!(
                         "WARNING: Failed to restore backup. Your data is safe at: {}",
@@ -217,14 +270,13 @@ impl Database {
             }
         };
 
-        // 5. Import all data
+        // 6. Import all data
         if let Err(e) = new_db.import_all_data(&tasks, &sessions) {
             eprintln!("Migration failed during import, restoring backup...");
             drop(new_db);
             // Clean up the failed replica files
             let _ = std::fs::remove_file(&db_path);
-            let client_wal = db_path.with_extension("db-client_wal");
-            let _ = std::fs::remove_file(&client_wal);
+            Self::remove_auxiliary_db_files();
             if let Err(restore_err) = std::fs::rename(&backup_path, &db_path) {
                 eprintln!(
                     "WARNING: Failed to restore backup. Your data is safe at: {}",
@@ -235,7 +287,7 @@ impl Database {
             return Err(e).context("Failed to import data during migration");
         }
 
-        // 6. Sync to ensure durability
+        // 7. Sync to ensure durability
         if let Err(e) = new_db.sync() {
             eprintln!("Warning: post-migration sync failed: {e}");
         }
