@@ -137,6 +137,7 @@ fn sync_not_ready_when_disabled() {
         enabled: false,
         turso_url: Some("url".into()),
         turso_token: Some("token".into()),
+        ..Default::default()
     };
     assert!(!config.is_ready());
 }
@@ -147,6 +148,7 @@ fn sync_not_ready_without_url() {
         enabled: true,
         turso_url: None,
         turso_token: Some("token".into()),
+        ..Default::default()
     };
     assert!(!config.is_ready());
 }
@@ -157,6 +159,7 @@ fn sync_not_ready_without_token() {
         enabled: true,
         turso_url: Some("url".into()),
         turso_token: None,
+        ..Default::default()
     };
     assert!(!config.is_ready());
 }
@@ -167,6 +170,7 @@ fn sync_ready_when_all_set() {
         enabled: true,
         turso_url: Some("url".into()),
         turso_token: Some("token".into()),
+        ..Default::default()
     };
     assert!(config.is_ready());
 }
@@ -274,6 +278,7 @@ fn config_serialize_deserialize_roundtrip() {
             enabled: true,
             turso_url: Some("libsql://test.turso.io".into()),
             turso_token: Some("tok".into()),
+            ..Default::default()
         },
         backup: BackupConfig {
             enabled: true,

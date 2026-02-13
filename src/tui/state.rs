@@ -9,6 +9,15 @@ use dodo::task::{Area, Task, TaskStatus};
 use super::constants::*;
 use super::format::*;
 
+#[derive(Clone)]
+pub(super) enum SyncStatus {
+    Disabled,                        // sync not configured
+    Idle,                            // sync configured but no sync attempted yet
+    Syncing,                         // sync in progress
+    Synced(std::time::Instant),      // last successful sync timestamp
+    Error(String),                   // last sync failed
+}
+
 pub(super) struct PaneState {
     pub(super) tasks: Vec<Task>,
     pub(super) list_state: ListState,
@@ -227,6 +236,8 @@ pub(super) struct App<'a> {
     pub(super) backup_selected: usize,
     pub(super) backup_config: dodo::config::BackupConfig,
     pub(super) sync_config: dodo::config::SyncConfig,
+    pub(super) sync_status: SyncStatus,
+    pub(super) last_sync_tick: u64,
     pub(super) backup_status_msg: Option<String>,
     // Config editor
     pub(super) config_field_index: usize,
@@ -254,7 +265,7 @@ impl<'a> App<'a> {
             db,
             mode: AppMode::Normal,
             tab: TuiTab::Tasks,
-            report_range: ReportRange::Day,
+            report_range: ReportRange::Month,
             report: None,
             tick_count: 0,
             frame_count: 0,
@@ -280,12 +291,29 @@ impl<'a> App<'a> {
             backup_entries: Vec::new(),
             backup_selected: 0,
             backup_config: config.backup,
-            sync_config: config.sync,
+            sync_config: config.sync.clone(),
+            sync_status: if config.sync.is_ready() { SyncStatus::Idle } else { SyncStatus::Disabled },
+            last_sync_tick: 0,
             backup_status_msg: None,
             config_field_index: 0,
             config_field_values: Default::default(),
             config_field_input: String::new(),
             help_scroll: 0,
+        }
+    }
+
+    pub(super) fn sync_enabled(&self) -> bool {
+        !matches!(self.sync_status, SyncStatus::Disabled)
+    }
+
+    pub(super) fn trigger_sync(&mut self) {
+        if !self.sync_enabled() {
+            return;
+        }
+        self.sync_status = SyncStatus::Syncing;
+        match self.db.sync() {
+            Ok(()) => self.sync_status = SyncStatus::Synced(std::time::Instant::now()),
+            Err(e) => self.sync_status = SyncStatus::Error(format!("{}", e)),
         }
     }
 
@@ -863,11 +891,12 @@ impl<'a> App<'a> {
     pub(super) fn start_edit_config(&mut self) {
         self.config_field_index = 0;
         self.config_field_values = [
-            // Sync fields (0-2)
+            // Sync fields (0-3)
             if self.sync_config.enabled { "true".to_string() } else { "false".to_string() },
             self.sync_config.turso_url.clone().unwrap_or_default(),
             self.sync_config.turso_token.clone().unwrap_or_default(),
-            // Backup fields (3-11)
+            self.sync_config.sync_interval.to_string(),
+            // Backup fields (4-12)
             if self.backup_config.enabled { "true".to_string() } else { "false".to_string() },
             self.backup_config.endpoint.clone().unwrap_or_default(),
             self.backup_config.bucket.clone().unwrap_or_default(),
@@ -910,15 +939,16 @@ impl<'a> App<'a> {
             0 => self.sync_config.enabled = val == "true",
             1 => self.sync_config.turso_url = opt,
             2 => self.sync_config.turso_token = opt,
-            3 => self.backup_config.enabled = val == "true",
-            4 => self.backup_config.endpoint = opt,
-            5 => self.backup_config.bucket = opt,
-            6 => self.backup_config.prefix = if val.is_empty() { "dodo/".to_string() } else { val.clone() },
-            7 => self.backup_config.access_key = opt,
-            8 => self.backup_config.secret_key = opt,
-            9 => self.backup_config.region = opt,
-            10 => self.backup_config.schedule_days = val.parse().unwrap_or(7),
-            11 => self.backup_config.max_backups = val.parse().unwrap_or(10),
+            3 => self.sync_config.sync_interval = val.parse().unwrap_or(10),
+            4 => self.backup_config.enabled = val == "true",
+            5 => self.backup_config.endpoint = opt,
+            6 => self.backup_config.bucket = opt,
+            7 => self.backup_config.prefix = if val.is_empty() { "dodo/".to_string() } else { val.clone() },
+            8 => self.backup_config.access_key = opt,
+            9 => self.backup_config.secret_key = opt,
+            10 => self.backup_config.region = opt,
+            11 => self.backup_config.schedule_days = val.parse().unwrap_or(7),
+            12 => self.backup_config.max_backups = val.parse().unwrap_or(10),
             _ => {}
         }
     }
@@ -931,6 +961,12 @@ impl<'a> App<'a> {
         config.save()?;
         if self.backup_config.is_ready() {
             self.refresh_backups();
+        }
+        // Update sync status when config changes
+        if self.sync_config.is_ready() && matches!(self.sync_status, SyncStatus::Disabled) {
+            self.sync_status = SyncStatus::Idle;
+        } else if !self.sync_config.is_ready() {
+            self.sync_status = SyncStatus::Disabled;
         }
         Ok(())
     }

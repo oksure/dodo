@@ -31,10 +31,10 @@ pub(super) enum ConfigFieldType {
     Number,
 }
 
-pub(super) const CONFIG_FIELD_COUNT: usize = 12;
+pub(super) const CONFIG_FIELD_COUNT: usize = 13;
 
 pub(super) const CONFIG_FIELD_LABELS: [&str; CONFIG_FIELD_COUNT] = [
-    "Sync Enabled", "Turso URL", "Turso Token",
+    "Sync Enabled", "Turso URL", "Turso Token", "Sync Interval",
     "Backup Enabled", "Endpoint", "Bucket", "Prefix",
     "Access Key", "Secret Key", "Region", "Schedule Days", "Max Backups",
 ];
@@ -43,6 +43,7 @@ pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
     "Toggle sync on/off",
     "libsql://mydb.turso.io",
     "Your Turso auth token",
+    "Minutes between auto-syncs (default: 10)",
     "Toggle backup on/off",
     "https://s3.example.com",
     "my-bucket",
@@ -55,7 +56,7 @@ pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
 ];
 
 pub(super) const CONFIG_FIELD_TYPES: [ConfigFieldType; CONFIG_FIELD_COUNT] = [
-    ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::Sensitive,
+    ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::Sensitive, ConfigFieldType::Number,
     ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::String, ConfigFieldType::String,
     ConfigFieldType::Sensitive, ConfigFieldType::Sensitive, ConfigFieldType::String,
     ConfigFieldType::Number, ConfigFieldType::Number,

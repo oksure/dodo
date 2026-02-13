@@ -10,12 +10,29 @@ pub struct Config {
     pub backup: BackupConfig,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConfig {
     #[serde(default)]
     pub enabled: bool,
     pub turso_url: Option<String>,
     pub turso_token: Option<String>,
+    #[serde(default = "default_sync_interval")]
+    pub sync_interval: u32,
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            turso_url: None,
+            turso_token: None,
+            sync_interval: default_sync_interval(),
+        }
+    }
+}
+
+fn default_sync_interval() -> u32 {
+    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

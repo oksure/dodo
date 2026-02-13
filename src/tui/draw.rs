@@ -195,7 +195,7 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(0), Constraint::Length(legend_width)])
         .split(inner);
 
-    let left = Line::from(vec![
+    let mut left_spans = vec![
         Span::styled(
             " DODO ",
             Style::default()
@@ -203,7 +203,31 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(running_info, running_style),
-    ]);
+    ];
+
+    // Sync indicator
+    match &app.sync_status {
+        SyncStatus::Disabled => {} // no indicator for local-only users
+        SyncStatus::Idle | SyncStatus::Synced(_) => {
+            left_spans.push(Span::styled(" \u{25CF} ", Style::default().fg(ACCENT_GREEN)));
+            left_spans.push(Span::styled("synced ", Style::default().fg(ACCENT_GREEN)));
+            left_spans.push(Span::styled("y", Style::default().fg(FG_TEXT).bg(BG_SURFACE)));
+            left_spans.push(Span::styled(":sync", Style::default().fg(FG_OVERLAY)));
+        }
+        SyncStatus::Syncing => {
+            let icon = if app.tick_count % 2 == 0 { "\u{21BB}" } else { "\u{21BA}" };
+            left_spans.push(Span::styled(format!(" {} ", icon), Style::default().fg(ACCENT_YELLOW)));
+            left_spans.push(Span::styled("syncing", Style::default().fg(ACCENT_YELLOW)));
+        }
+        SyncStatus::Error(_) => {
+            left_spans.push(Span::styled(" \u{26A0} ", Style::default().fg(ACCENT_RED)));
+            left_spans.push(Span::styled("sync err ", Style::default().fg(ACCENT_RED)));
+            left_spans.push(Span::styled("y", Style::default().fg(FG_TEXT).bg(BG_SURFACE)));
+            left_spans.push(Span::styled(":retry", Style::default().fg(FG_OVERLAY)));
+        }
+    }
+
+    let left = Line::from(left_spans);
     f.render_widget(Paragraph::new(left), cols[0]);
     f.render_widget(Paragraph::new(legend).alignment(Alignment::Right), cols[1]);
 }
@@ -260,7 +284,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         ],
         TuiTab::Backup => match app.mode {
             AppMode::EditConfig => vec![
-                ("j/k", "navigate"),
+                ("j/k \u{2193}\u{2191}", "navigate"),
                 ("\u{21B5}", "edit"),
                 ("Esc", "close"),
             ],
@@ -269,10 +293,11 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("Esc", "cancel"),
             ],
             _ => vec![
-                ("j/k", "navigate"),
+                ("j/k \u{2193}\u{2191}", "navigate"),
                 ("u", "upload"),
                 ("r", "restore"),
                 ("d", "delete"),
+                ("s", "sync"),
                 ("e", "config"),
                 ("?", "help"),
                 ("q", "quit"),
@@ -910,6 +935,45 @@ pub(super) fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> L
     Line::from(result)
 }
 
+fn build_sync_status_line(app: &App) -> Line<'static> {
+    let url = app.sync_config.turso_url.clone().unwrap_or_default();
+    match &app.sync_status {
+        SyncStatus::Disabled => Line::from(vec![
+            Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled("\u{25CB} not configured", Style::default().fg(FG_OVERLAY)),
+        ]),
+        SyncStatus::Idle => Line::from(vec![
+            Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled("\u{25CF} ", Style::default().fg(ACCENT_GREEN)),
+            Span::styled("enabled  ", Style::default().fg(ACCENT_GREEN)),
+            Span::styled(url, Style::default().fg(ACCENT_TEAL)),
+        ]),
+        SyncStatus::Syncing => Line::from(vec![
+            Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled("\u{21BB} syncing...", Style::default().fg(ACCENT_YELLOW)),
+        ]),
+        SyncStatus::Synced(instant) => {
+            let elapsed = instant.elapsed().as_secs();
+            let time_str = if elapsed < 60 {
+                format!("{}s ago", elapsed)
+            } else {
+                format!("{}m ago", elapsed / 60)
+            };
+            Line::from(vec![
+                Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
+                Span::styled("\u{25CF} ", Style::default().fg(ACCENT_GREEN)),
+                Span::styled("enabled  ", Style::default().fg(ACCENT_GREEN)),
+                Span::styled(url, Style::default().fg(ACCENT_TEAL)),
+                Span::styled(format!("  ({})", time_str), Style::default().fg(FG_SUBTEXT)),
+            ])
+        }
+        SyncStatus::Error(msg) => Line::from(vec![
+            Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled(format!("\u{26A0} error: {}", msg), Style::default().fg(ACCENT_RED)),
+        ]),
+    }
+}
+
 pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
@@ -957,35 +1021,7 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
             Line::from(""),
         ];
         // Sync status in unconfigured backup view
-        if app.sync_config.is_ready() {
-            let url = app.sync_config.turso_url.as_deref().unwrap_or("");
-            msg.push(Line::from(vec![
-                Span::styled("Turso sync: ", Style::default().fg(FG_SUBTEXT)),
-                Span::styled("\u{25CF} ", Style::default().fg(ACCENT_GREEN)),
-                Span::styled("enabled  ", Style::default().fg(ACCENT_GREEN)),
-                Span::styled(url, Style::default().fg(ACCENT_TEAL)),
-            ]));
-        } else {
-            msg.push(Line::from(vec![
-                Span::styled("Turso sync: ", Style::default().fg(FG_SUBTEXT)),
-                Span::styled("\u{25CB} not configured", Style::default().fg(FG_OVERLAY)),
-            ]));
-            msg.push(Line::from(Span::styled(
-                "Add a [sync] section to enable:",
-                Style::default().fg(FG_SUBTEXT),
-            )));
-            msg.push(Line::from(""));
-            msg.push(Line::from(Span::styled("  [sync]", Style::default().fg(FG_TEXT))));
-            msg.push(Line::from(Span::styled("  enabled = true", Style::default().fg(FG_TEXT))));
-            msg.push(Line::from(Span::styled(
-                "  turso_url = \"libsql://mydb.turso.io\"",
-                Style::default().fg(FG_TEXT),
-            )));
-            msg.push(Line::from(Span::styled(
-                "  turso_token = \"your-token\"",
-                Style::default().fg(FG_TEXT),
-            )));
-        }
+        msg.push(build_sync_status_line(app));
         f.render_widget(Paragraph::new(msg), inner);
         return;
     }
@@ -1001,21 +1037,7 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
         .split(inner);
 
     // Sync status line
-    let sync_line = if app.sync_config.is_ready() {
-        let url = app.sync_config.turso_url.as_deref().unwrap_or("");
-        Line::from(vec![
-            Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled("\u{25CF} ", Style::default().fg(ACCENT_GREEN)),
-            Span::styled("enabled  ", Style::default().fg(ACCENT_GREEN)),
-            Span::styled(url, Style::default().fg(ACCENT_TEAL)),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled("\u{25CB} not configured", Style::default().fg(FG_OVERLAY)),
-        ])
-    };
-    f.render_widget(Paragraph::new(sync_line), chunks[0]);
+    f.render_widget(Paragraph::new(build_sync_status_line(app)), chunks[0]);
 
     // Status message
     if let Some(ref msg) = app.backup_status_msg {
@@ -1568,7 +1590,7 @@ pub(super) fn draw_edit_modal(f: &mut Frame, app: &App) {
     let help_text = if app.mode == AppMode::EditTaskField {
         " Enter:save  Esc:cancel "
     } else {
-        " j/k:navigate  Enter:edit  Esc:close "
+        " j/k \u{2193}\u{2191}:navigate  Enter:edit  Esc:close "
     };
 
     let block = Block::bordered()
@@ -1789,7 +1811,7 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
     let help_text = if app.mode == AppMode::EditConfigField {
         " Enter:save  Esc:cancel "
     } else {
-        " j/k:navigate  Enter:edit  Esc:close "
+        " j/k \u{2193}\u{2191}:navigate  Enter:edit  Esc:close "
     };
 
     let block = Block::bordered()
@@ -1820,7 +1842,7 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
             Style::default().fg(FG_OVERLAY),
         )));
         for i in 0..CONFIG_FIELD_COUNT {
-            if i == 3 {
+            if i == 4 {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "\u{2500}\u{2500} Backup \u{2500}\u{2500}",
@@ -1871,7 +1893,7 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
             Style::default().fg(FG_OVERLAY),
         )));
         for i in 0..CONFIG_FIELD_COUNT {
-            if i == 3 {
+            if i == 4 {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "\u{2500}\u{2500} Backup \u{2500}\u{2500}",
@@ -1920,7 +1942,7 @@ pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
     let help_text = if app.note_editing {
         " Enter:save  Alt+Enter:newline  Esc:cancel "
     } else {
-        " j/k:navigate  e:edit  a:add  d:delete  Esc:back "
+        " j/k \u{2193}\u{2191}:navigate  e:edit  a:add  d:delete  Esc:back "
     };
 
     let block = Block::bordered()
@@ -2015,7 +2037,7 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ))
         .title_bottom(Span::styled(
-            " j/k:scroll  Esc:close ",
+            " j/k \u{2193}\u{2191}:scroll  Esc:close ",
             Style::default().fg(FG_OVERLAY),
         ))
         .border_type(BorderType::Rounded)
@@ -2048,6 +2070,7 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
         help_key("c", "Recurring tab"),
         help_key("r", "Report tab"),
         help_key("b", "Backup tab"),
+        help_key("y", "Sync now (when sync enabled)"),
         help_key("?", "Toggle this help"),
         help_key("q / Esc", "Quit"),
         Line::from(""),
@@ -2095,7 +2118,7 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
         TuiTab::Recurring => {
             lines.push(Line::from(Span::styled("RECURRING", section_style)));
             lines.push(Line::from(""));
-            lines.push(help_key("j / k", "Navigate templates"));
+            lines.push(help_key("j/k \u{2193}\u{2191}", "Navigate templates"));
             lines.push(help_key("a", "Add template (*daily, *weekly, ...)"));
             lines.push(help_key("e / Enter", "Edit template"));
             lines.push(help_key("d / Del", "Delete template"));
@@ -2116,10 +2139,11 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
         TuiTab::Backup => {
             lines.push(Line::from(Span::styled("BACKUP", section_style)));
             lines.push(Line::from(""));
-            lines.push(help_key("j / k", "Navigate backups"));
+            lines.push(help_key("j/k \u{2193}\u{2191}", "Navigate backups"));
             lines.push(help_key("u", "Upload new backup"));
             lines.push(help_key("r", "Restore selected backup"));
             lines.push(help_key("d / Del", "Delete selected backup"));
+            lines.push(help_key("s", "Trigger manual sync"));
             lines.push(help_key("e", "Edit config"));
         }
     }

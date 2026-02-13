@@ -49,7 +49,7 @@ where
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
-                        KeyCode::Char('b') if app.tab != TuiTab::Tasks => {
+                        KeyCode::Char('b') => {
                             app.tab = TuiTab::Backup;
                             app.refresh_backups();
                             app.count_prefix = None;
@@ -100,6 +100,11 @@ where
                         KeyCode::Char('?') => {
                             app.help_scroll = 0;
                             app.mode = AppMode::Help;
+                        }
+                        KeyCode::Char('y') => {
+                            if app.sync_enabled() {
+                                app.trigger_sync();
+                            }
                         }
                         _ => {
                             if app.tab == TuiTab::Tasks {
@@ -452,6 +457,16 @@ where
 
         if last_data_refresh.elapsed() >= data_refresh_rate {
             app.tick_count = app.tick_count.wrapping_add(1);
+
+            // Periodic sync based on configured interval
+            let sync_interval_ticks = app.sync_config.sync_interval as u64 * 60;
+            if app.sync_enabled() && sync_interval_ticks > 0
+                && app.tick_count.wrapping_sub(app.last_sync_tick) >= sync_interval_ticks
+            {
+                app.trigger_sync();
+                app.last_sync_tick = app.tick_count;
+            }
+
             match app.tab {
                 TuiTab::Tasks => { let _ = app.refresh_all(); }
                 TuiTab::Recurring => { let _ = app.refresh_templates(); }
@@ -649,6 +664,18 @@ pub(super) fn handle_backup_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('e') => {
             app.start_edit_config();
+        }
+        KeyCode::Char('s') => {
+            if app.sync_enabled() {
+                app.trigger_sync();
+                app.backup_status_msg = Some(match &app.sync_status {
+                    SyncStatus::Synced(_) => "Sync completed successfully".to_string(),
+                    SyncStatus::Error(e) => format!("Sync failed: {}", e),
+                    _ => "Sync triggered".to_string(),
+                });
+            } else {
+                app.backup_status_msg = Some("Sync not configured".to_string());
+            }
         }
         _ => {}
     }
