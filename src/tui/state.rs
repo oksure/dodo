@@ -248,6 +248,7 @@ pub(super) struct App<'a> {
     pub(super) config_field_index: usize,
     pub(super) config_field_values: [String; CONFIG_FIELD_COUNT],
     pub(super) config_field_input: String,
+    pub(super) config_scroll: usize,
     // Help modal
     pub(super) help_scroll: usize,
     // Tasks view mode
@@ -270,6 +271,26 @@ pub(super) struct App<'a> {
     pub(super) calendar_tasks_by_date: HashMap<NaiveDate, Vec<Task>>,
     // Preferences
     pub(super) preferences: PreferencesConfig,
+    // Email config
+    pub(super) email_config: dodo::config::EmailConfig,
+}
+
+/// Split note text into entries grouped by timestamp.
+/// Each entry starts with a `[YYYY-MM-DD` timestamp line.
+/// Continuation lines (without a timestamp prefix) are grouped with the previous entry.
+pub(super) fn split_note_entries(text: &str) -> Vec<String> {
+    let mut entries: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with('[') && line.len() >= 11 && line[1..5].chars().all(|c| c.is_ascii_digit()) {
+            entries.push(line.to_string());
+        } else if let Some(last) = entries.last_mut() {
+            last.push('\n');
+            last.push_str(line);
+        } else {
+            entries.push(line.to_string());
+        }
+    }
+    entries
 }
 
 impl<'a> App<'a> {
@@ -334,6 +355,7 @@ impl<'a> App<'a> {
             config_field_index: 0,
             config_field_values: Default::default(),
             config_field_input: String::new(),
+            config_scroll: 0,
             help_scroll: 0,
             tasks_view: initial_view,
             daily_entries: Vec::new(),
@@ -353,6 +375,7 @@ impl<'a> App<'a> {
             calendar_task_counts: HashMap::new(),
             calendar_tasks_by_date: HashMap::new(),
             preferences: config.preferences,
+            email_config: config.email,
         }
     }
 
@@ -364,6 +387,30 @@ impl<'a> App<'a> {
             let task_id = task.id.clone();
             let _ = self.db.update_task_scheduled(&task_id, new_date);
             let _ = self.refresh_current_view();
+            // Follow cursor — same pattern as done()
+            if self.tasks_view == TasksView::Panes {
+                for pane_idx in 0..4 {
+                    if let Some(pos) = self.panes[pane_idx]
+                        .tasks
+                        .iter()
+                        .position(|t| t.id == task_id)
+                    {
+                        self.active_pane = pane_idx;
+                        self.panes[pane_idx].list_state.select(Some(pos));
+                        break;
+                    }
+                }
+            }
+            if self.tasks_view == TasksView::Daily {
+                for (i, entry) in self.daily_entries.iter().enumerate() {
+                    if let DailyEntry::Task(ref t) = entry {
+                        if t.id == task_id {
+                            self.daily_cursor = i;
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -881,7 +928,7 @@ impl<'a> App<'a> {
                 self.mode = AppMode::EditTaskField;
             } else {
                 // Has notes — enter NoteView for browsing/editing
-                self.note_lines = notes.lines().map(|l| l.to_string()).collect();
+                self.note_lines = split_note_entries(notes);
                 self.note_selected = 0;
                 self.note_editing = false;
                 self.mode = AppMode::NoteView;
@@ -1044,7 +1091,7 @@ impl<'a> App<'a> {
                 self.mode = AppMode::EditTaskField;
             } else {
                 // Has notes — enter NoteView
-                self.note_lines = notes.lines().map(|l| l.to_string()).collect();
+                self.note_lines = split_note_entries(notes);
                 self.note_selected = 0;
                 self.note_editing = false;
                 self.mode = AppMode::NoteView;
@@ -1169,10 +1216,7 @@ impl<'a> App<'a> {
         }
         // After appending a note, return to NoteView so the user sees the updated list
         if idx == 8 && !self.edit_field_values[8].is_empty() {
-            self.note_lines = self.edit_field_values[8]
-                .lines()
-                .map(|l| l.to_string())
-                .collect();
+            self.note_lines = split_note_entries(&self.edit_field_values[8]);
             self.note_selected = self.note_lines.len().saturating_sub(1);
             self.note_editing = false;
             self.mode = AppMode::NoteView;
@@ -1184,6 +1228,7 @@ impl<'a> App<'a> {
 
     pub(super) fn start_edit_config(&mut self) {
         self.config_field_index = 0;
+        self.config_scroll = 0;
         self.config_field_values = [
             // Sync fields (0-3)
             if self.sync_config.enabled { "true".to_string() } else { "false".to_string() },
@@ -1209,6 +1254,12 @@ impl<'a> App<'a> {
             self.preferences.timer_sound_interval.to_string(),
             self.preferences.default_view.clone(),
             self.preferences.default_estimate.to_string(),
+            // Email fields (18-22)
+            if self.email_config.enabled { "true".to_string() } else { "false".to_string() },
+            self.email_config.api_key.clone().unwrap_or_default(),
+            self.email_config.from.clone().unwrap_or_default(),
+            self.email_config.to.clone().unwrap_or_default(),
+            self.email_config.digest_time.clone(),
         ];
         self.mode = AppMode::EditConfig;
     }
@@ -1263,7 +1314,35 @@ impl<'a> App<'a> {
             15 => self.preferences.timer_sound_interval = val.parse().unwrap_or(10),
             16 => self.preferences.default_view = val.clone(),
             17 => self.preferences.default_estimate = val.parse().unwrap_or(60),
+            18 => self.email_config.enabled = val == "true",
+            19 => self.email_config.api_key = opt,
+            20 => self.email_config.from = opt,
+            21 => self.email_config.to = opt,
+            22 => self.email_config.digest_time = if val.is_empty() { "07:00".to_string() } else { val.clone() },
             _ => {}
+        }
+    }
+
+    pub(super) fn auto_scroll_config(&mut self, visible_height: usize) {
+        // Compute the line offset for the selected field.
+        // Layout: "── Sync ──" header (1 line), then fields 0-3 (2 lines each),
+        // blank + "── Backup ──" before field 4, fields 4-12 (2 lines each),
+        // blank + "── Preferences ──" before field 13, fields 13-17 (2 lines each),
+        // blank + "── Email ──" before field 18, fields 18+ (2 lines each).
+        let mut field_line: usize = 1; // "── Sync ──" header
+        for i in 0..self.config_field_index {
+            if i == 4 || i == 13 || i == 18 {
+                field_line += 2; // blank + section header
+            }
+            field_line += 2; // label line + hint/blank line
+        }
+        if self.config_field_index == 4 || self.config_field_index == 13 || self.config_field_index == 18 {
+            field_line += 2; // section header for current field's section
+        }
+        if field_line < self.config_scroll {
+            self.config_scroll = field_line;
+        } else if field_line + 2 > self.config_scroll + visible_height {
+            self.config_scroll = (field_line + 2).saturating_sub(visible_height);
         }
     }
 
@@ -1272,6 +1351,7 @@ impl<'a> App<'a> {
             sync: self.sync_config.clone(),
             backup: self.backup_config.clone(),
             preferences: self.preferences.clone(),
+            email: self.email_config.clone(),
         };
         config.save()?;
         if self.backup_config.is_ready() {

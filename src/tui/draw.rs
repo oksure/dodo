@@ -3,8 +3,9 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Clear, Gauge, LineGauge, List, ListItem, ListState, Padding,
-        Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Sparkline, Tabs, Wrap,
+        Bar, BarChart, BarGroup, Block, BorderType, Borders, Clear, Gauge, LineGauge, List,
+        ListItem, ListState, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Tabs, Wrap,
     },
     Frame,
 };
@@ -1272,18 +1273,17 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(all_spans)), layout[0]);
 
-    // Report body
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+    // 3-row layout: summary cards, charts, lists
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(5),      // Row 1: compact summary
+            Constraint::Percentage(45), // Row 2: bar charts
+            Constraint::Min(0),         // Row 3: project + done lists
+        ])
         .split(layout[1]);
 
-    let left_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(14), Constraint::Min(0)])
-        .split(cols[0]);
-
-    // Summary stats with Gauge
+    // ── Row 1: Compact Summary Cards ──────────────────────────────────
     let avg_per_task = if report.tasks_done > 0 {
         report.total_seconds / report.tasks_done
     } else {
@@ -1294,6 +1294,19 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     } else {
         0
     };
+
+    let best_hour_str = report
+        .by_hour
+        .iter()
+        .max_by_key(|(_, s)| *s)
+        .map(|(h, _)| format!("{:02}:00", h))
+        .unwrap_or_else(|| "-".to_string());
+    let best_day_str = report
+        .by_weekday
+        .iter()
+        .max_by_key(|(_, s)| *s)
+        .map(|(d, _)| DAY_NAMES.get(*d as usize).unwrap_or(&"?").to_string())
+        .unwrap_or_else(|| "-".to_string());
 
     let summary_block = Block::bordered()
         .title(Span::styled(
@@ -1306,15 +1319,14 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(FG_OVERLAY))
         .padding(Padding::horizontal(1));
 
-    let summary_inner = summary_block.inner(left_layout[0]);
-    f.render_widget(summary_block, left_layout[0]);
+    let summary_inner = summary_block.inner(rows[0]);
+    f.render_widget(summary_block, rows[0]);
 
-    let summary_chunks = Layout::default()
+    let summary_cols = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(1)])
+        .constraints([Constraint::Length(2), Constraint::Length(1)])
         .split(summary_inner);
 
-    // Streak color
     let streak_style = if report.streak >= 7 {
         Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
     } else if report.streak >= 3 {
@@ -1323,63 +1335,62 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(FG_SUBTEXT)
     };
 
-    // Completion rate
-    let completion_str = if report.total_tasks > 0 {
-        let pct = (report.tasks_done as f64 / report.total_tasks as f64 * 100.0) as u64;
-        format!("{}/{} ({}%)", report.tasks_done, report.total_tasks, pct)
-    } else {
-        format!("{}", report.tasks_done)
-    };
+    let summary_line1 = Line::from(vec![
+        Span::styled(
+            format!(" \u{2713}{} done", report.tasks_done),
+            Style::default()
+                .fg(ACCENT_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("\u{23F1} {}", format_dur(report.total_seconds)),
+            Style::default()
+                .fg(ACCENT_GREEN)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("{} active", report.active_days),
+            Style::default().fg(ACCENT_YELLOW),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!(
+                "{} day{}",
+                report.streak,
+                if report.streak == 1 { "" } else { "s" }
+            ),
+            streak_style,
+        ),
+    ]);
+    let summary_line2 = Line::from(vec![
+        Span::styled(
+            format!(" avg/task: {}", format_dur(avg_per_task)),
+            Style::default().fg(FG_SUBTEXT),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("avg/day: {}", format_dur(avg_per_day)),
+            Style::default().fg(FG_SUBTEXT),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("best hour: {}", best_hour_str),
+            Style::default().fg(FG_SUBTEXT),
+        ),
+        Span::styled("  ", Style::default()),
+        Span::styled(
+            format!("best day: {}", best_day_str),
+            Style::default().fg(FG_SUBTEXT),
+        ),
+    ]);
+    f.render_widget(
+        Paragraph::new(vec![summary_line1, summary_line2]),
+        summary_cols[0],
+    );
 
-    let summary_lines = vec![
-        Line::from(vec![
-            Span::styled("  Tasks done:    ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(
-                format!("{}", report.tasks_done),
-                Style::default()
-                    .fg(ACCENT_BLUE)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Total time:    ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(
-                format_dur(report.total_seconds),
-                Style::default()
-                    .fg(ACCENT_GREEN)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Active days:   ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(
-                format!("{}", report.active_days),
-                Style::default().fg(ACCENT_YELLOW),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Streak:        ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(
-                format!("{} day{}", report.streak, if report.streak == 1 { "" } else { "s" }),
-                streak_style,
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("  Completion:    ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(completion_str, Style::default().fg(FG_TEXT)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Avg/task:      ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(format_dur(avg_per_task), Style::default().fg(FG_TEXT)),
-        ]),
-        Line::from(vec![
-            Span::styled("  Avg/day:       ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(format_dur(avg_per_day), Style::default().fg(FG_TEXT)),
-        ]),
-    ];
-    f.render_widget(Paragraph::new(summary_lines), summary_chunks[0]);
-
-    // Completion Gauge with real ratio
+    // Completion Gauge
     let done_ratio = if report.total_tasks > 0 {
         (report.tasks_done as f64 / report.total_tasks as f64).min(1.0)
     } else {
@@ -1388,151 +1399,115 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     let done_gauge = Gauge::default()
         .gauge_style(Style::default().fg(ACCENT_GREEN).bg(Color::Rgb(40, 42, 54)))
         .ratio(done_ratio)
-        .label(format!("{}/{} done", report.tasks_done, report.total_tasks))
-        .use_unicode(true);
-    f.render_widget(done_gauge, summary_chunks[1]);
-
-    // Productivity section with Sparkline
-    let prod_block = Block::bordered()
-        .title(Span::styled(
-            " Productivity ",
-            Style::default()
-                .fg(ACCENT_YELLOW)
-                .add_modifier(Modifier::BOLD),
+        .label(format!(
+            "{}/{} done",
+            report.tasks_done, report.total_tasks
         ))
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(FG_OVERLAY))
-        .padding(Padding::horizontal(1));
+        .use_unicode(true);
+    f.render_widget(done_gauge, summary_cols[1]);
 
-    let prod_inner = prod_block.inner(left_layout[1]);
-    f.render_widget(prod_block, left_layout[1]);
+    // ── Row 2: BarChart widgets ───────────────────────────────────────
+    let chart_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(rows[1]);
 
-    let mut prod_lines: Vec<Line> = vec![];
-
-    if let Some((hour, secs)) = report.by_hour.iter().max_by_key(|(_h, s)| *s) {
-        prod_lines.push(Line::from(vec![
-            Span::styled("  Best hour:     ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(
-                format!("{:02}:00", hour),
-                Style::default()
-                    .fg(ACCENT_YELLOW)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("  ({})", format_dur(*secs)),
-                Style::default().fg(FG_OVERLAY),
-            ),
-        ]));
-    }
-
-    if let Some((dow, secs)) = report.by_weekday.iter().max_by_key(|(_d, s)| *s) {
-        let day_name = DAY_NAMES.get(*dow as usize).unwrap_or(&"?");
-        prod_lines.push(Line::from(vec![
-            Span::styled("  Best day:      ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(
-                day_name.to_string(),
-                Style::default()
-                    .fg(ACCENT_YELLOW)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                format!("  ({})", format_dur(*secs)),
-                Style::default().fg(FG_OVERLAY),
-            ),
-        ]));
-    }
-
-    // Weekday activity bars
-    if !report.by_weekday.is_empty() {
-        prod_lines.push(Line::from(""));
-        prod_lines.push(Line::from(Span::styled(
-            "  Weekly activity:",
-            Style::default().fg(FG_SUBTEXT),
-        )));
-        let mut weekday_data = vec![0i64; 7];
-        for (dow, secs) in &report.by_weekday {
-            if (*dow as usize) < 7 {
-                weekday_data[*dow as usize] = *secs;
-            }
+    // Left: Weekly Activity BarChart
+    let mut weekday_data = vec![0u64; 7];
+    for (dow, secs) in &report.by_weekday {
+        if (*dow as usize) < 7 {
+            weekday_data[*dow as usize] = *secs as u64;
         }
-        let max_secs = weekday_data.iter().copied().max().unwrap_or(1).max(1);
-        let bar_max_width = 20usize;
-        for (i, &secs) in weekday_data.iter().enumerate() {
-            let bar_len = if max_secs > 0 {
-                (secs as f64 / max_secs as f64 * bar_max_width as f64) as usize
+    }
+    let weekly_bars: Vec<Bar> = weekday_data
+        .iter()
+        .enumerate()
+        .map(|(i, &secs)| {
+            let mins = secs / 60;
+            let label = if mins >= 60 {
+                format!("{}h", mins / 60)
+            } else if mins > 0 {
+                format!("{}m", mins)
             } else {
-                0
+                String::new()
             };
-            let bar: String = "\u{2588}".repeat(bar_len);
-            let day_name = DAY_NAMES[i];
-            prod_lines.push(Line::from(vec![
-                Span::styled(format!("  {:<4}", day_name), Style::default().fg(FG_SUBTEXT)),
-                Span::styled(bar, Style::default().fg(ACCENT_TEAL)),
-                if secs > 0 {
-                    Span::styled(format!(" {}", format_dur(secs)), Style::default().fg(FG_OVERLAY))
-                } else {
-                    Span::raw("")
-                },
-            ]));
+            Bar::default()
+                .value(secs)
+                .label(Line::from(DAY_NAMES[i]))
+                .text_value(label)
+                .style(Style::default().fg(ACCENT_TEAL))
+        })
+        .collect();
+
+    let weekly_chart = BarChart::default()
+        .block(
+            Block::bordered()
+                .title(Span::styled(
+                    " Weekly Activity ",
+                    Style::default()
+                        .fg(ACCENT_TEAL)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(FG_OVERLAY)),
+        )
+        .data(BarGroup::default().bars(&weekly_bars))
+        .bar_width(3)
+        .bar_gap(1)
+        .bar_style(Style::default().fg(ACCENT_TEAL))
+        .value_style(Style::default().fg(FG_SUBTEXT));
+    f.render_widget(weekly_chart, chart_cols[0]);
+
+    // Right: Hourly Distribution BarChart
+    let mut hour_data = vec![0u64; 24];
+    for (hour, secs) in &report.by_hour {
+        if (*hour as usize) < 24 {
+            hour_data[*hour as usize] = *secs as u64;
         }
     }
+    let hourly_bars: Vec<Bar> = hour_data
+        .iter()
+        .enumerate()
+        .map(|(i, &secs)| {
+            let label = if i % 4 == 0 {
+                format!("{}", i)
+            } else {
+                String::new()
+            };
+            Bar::default()
+                .value(secs)
+                .label(Line::from(label))
+                .text_value(String::new())
+                .style(Style::default().fg(ACCENT_PEACH))
+        })
+        .collect();
 
-    // Sparkline for hours worked distribution
-    if !report.by_hour.is_empty() {
-        prod_lines.push(Line::from(""));
-        prod_lines.push(Line::from(Span::styled(
-            "  Hours worked:",
-            Style::default().fg(FG_SUBTEXT),
-        )));
+    let hourly_chart = BarChart::default()
+        .block(
+            Block::bordered()
+                .title(Span::styled(
+                    " Hours of Day ",
+                    Style::default()
+                        .fg(ACCENT_PEACH)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(FG_OVERLAY)),
+        )
+        .data(BarGroup::default().bars(&hourly_bars))
+        .bar_width(1)
+        .bar_gap(0)
+        .bar_style(Style::default().fg(ACCENT_PEACH))
+        .value_style(Style::default().fg(FG_SUBTEXT));
+    f.render_widget(hourly_chart, chart_cols[1]);
 
-        // Build 24-hour sparkline data
-        let mut hour_data = vec![0u64; 24];
-        for (hour, secs) in &report.by_hour {
-            if (*hour as usize) < 24 {
-                hour_data[*hour as usize] = *secs as u64;
-            }
-        }
+    // ── Row 3: Project list + Done tasks ──────────────────────────────
+    let list_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(rows[2]);
 
-        // Render text stats first, then sparkline
-        let prod_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(prod_lines.len() as u16),
-                Constraint::Length(3),
-                Constraint::Min(0),
-            ])
-            .split(prod_inner);
-
-        f.render_widget(Paragraph::new(prod_lines), prod_chunks[0]);
-
-        let sparkline = Sparkline::default()
-            .data(&hour_data)
-            .style(Style::default().fg(ACCENT_TEAL));
-        f.render_widget(sparkline, prod_chunks[1]);
-
-        // Hour labels below sparkline
-        let hour_labels = Line::from(vec![
-            Span::styled("  0", Style::default().fg(FG_OVERLAY)),
-            Span::styled("     6", Style::default().fg(FG_OVERLAY)),
-            Span::styled("      12", Style::default().fg(FG_OVERLAY)),
-            Span::styled("     18", Style::default().fg(FG_OVERLAY)),
-            Span::styled("    23", Style::default().fg(FG_OVERLAY)),
-        ]);
-        if prod_chunks[2].height > 0 {
-            let label_area = Rect::new(prod_chunks[2].x, prod_chunks[2].y, prod_chunks[2].width, 1);
-            f.render_widget(Paragraph::new(hour_labels), label_area);
-        }
-    } else {
-        f.render_widget(Paragraph::new(prod_lines), prod_inner);
-    }
-
-    // Right column
-    let right_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(cols[1]);
-
-    // Time by project
+    // Left: Time by Project with inline bars
     let mut proj_lines: Vec<Line> = vec![];
     for (project, secs) in &report.by_project {
         let pct = if report.total_seconds > 0 {
@@ -1540,16 +1515,26 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
         } else {
             0
         };
+        let bar_width = 12usize;
+        let filled = if report.total_seconds > 0 {
+            (*secs as f64 / report.total_seconds as f64 * bar_width as f64) as usize
+        } else {
+            0
+        };
+        let bar_filled: String = "\u{2588}".repeat(filled);
+        let bar_empty: String = "\u{2591}".repeat(bar_width.saturating_sub(filled));
         proj_lines.push(Line::from(vec![
             Span::styled(
-                format!("  +{:<14}", project),
+                format!("  +{:<10}", project),
                 Style::default().fg(ACCENT_MAUVE),
             ),
+            Span::styled(bar_filled, Style::default().fg(ACCENT_MAUVE)),
+            Span::styled(bar_empty, Style::default().fg(Color::Rgb(60, 62, 80))),
             Span::styled(
-                format!("{:>8}", format_dur(*secs)),
+                format!(" {:>6}", format_dur(*secs)),
                 Style::default().fg(FG_TEXT),
             ),
-            Span::styled(format!("  {:>3}%", pct), Style::default().fg(FG_OVERLAY)),
+            Span::styled(format!(" {:>3}%", pct), Style::default().fg(FG_OVERLAY)),
         ]));
     }
     if proj_lines.is_empty() {
@@ -1571,9 +1556,9 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
             .border_style(Style::default().fg(FG_OVERLAY))
             .padding(Padding::horizontal(1)),
     );
-    f.render_widget(proj, right_layout[0]);
+    f.render_widget(proj, list_cols[0]);
 
-    // Done tasks
+    // Right: Done tasks
     let mut done_lines: Vec<Line> = vec![];
     for (title, secs) in &report.done_tasks {
         done_lines.push(Line::from(vec![
@@ -1604,7 +1589,7 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
             .border_style(Style::default().fg(FG_OVERLAY))
             .padding(Padding::horizontal(1)),
     );
-    f.render_widget(done, right_layout[1]);
+    f.render_widget(done, list_cols[1]);
 }
 
 // ── Pane Drawing ─────────────────────────────────────────────────────
@@ -2439,6 +2424,23 @@ pub(super) fn draw_delete_modal(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(text), inner);
 }
 
+fn build_multiline_input(input: &str, style: Style) -> Vec<Line<'static>> {
+    let parts: Vec<&str> = input.split('\n').collect();
+    let last = parts.len() - 1;
+    parts
+        .iter()
+        .enumerate()
+        .map(|(i, line)| {
+            let prefix = if i == 0 { "\u{276F} " } else { "  " };
+            let suffix = if i == last { "\u{2588}" } else { "" };
+            Line::from(Span::styled(
+                format!("{}{}{}", prefix, line, suffix),
+                style,
+            ))
+        })
+        .collect()
+}
+
 pub(super) const EDIT_FIELD_HINTS: [&str; 9] = [
     "Task name (plain text)",
     "Project name (no + prefix needed)",
@@ -2489,9 +2491,11 @@ pub(super) fn draw_edit_modal(f: &mut Frame, app: &App) {
     if app.mode == AppMode::EditTaskField {
         if on_notes_field {
             // Editing Notes: show existing notes above, input below
+            let input_line_count = app.edit_field_input.split('\n').count();
+            let input_area_height = (input_line_count as u16 + 2).max(4).min(8);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([Constraint::Min(1), Constraint::Length(4)])
+                .constraints([Constraint::Min(1), Constraint::Length(input_area_height)])
                 .split(inner);
 
             let content = if notes_content.is_empty() {
@@ -2508,17 +2512,17 @@ pub(super) fn draw_edit_modal(f: &mut Frame, app: &App) {
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(ACCENT_YELLOW))
                 .border_type(BorderType::Rounded);
-            let input_lines = vec![
+            let mut input_lines = vec![
                 Line::from(Span::styled(
                     format!("  {}", EDIT_FIELD_HINTS[8]),
                     Style::default().fg(FG_OVERLAY),
                 )),
                 Line::from(""),
-                Line::from(Span::styled(
-                    format!("\u{276F} {}\u{2588}", app.edit_field_input),
-                    Style::default().fg(FG_TEXT),
-                )),
             ];
+            input_lines.extend(build_multiline_input(
+                &app.edit_field_input,
+                Style::default().fg(FG_TEXT),
+            ));
             let input_widget = Paragraph::new(input_lines).block(input_block);
             f.render_widget(input_widget, chunks[1]);
         } else {
@@ -2731,6 +2735,13 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                     Style::default().fg(FG_OVERLAY),
                 )));
             }
+            if i == 18 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "\u{2500}\u{2500} Email \u{2500}\u{2500}",
+                    Style::default().fg(FG_OVERLAY),
+                )));
+            }
             let (display, _) = format_config_display_value(
                 &app.config_field_values[i],
                 CONFIG_FIELD_TYPES[i],
@@ -2800,6 +2811,13 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                     Style::default().fg(FG_OVERLAY),
                 )));
             }
+            if i == 18 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "\u{2500}\u{2500} Email \u{2500}\u{2500}",
+                    Style::default().fg(FG_OVERLAY),
+                )));
+            }
             let is_selected = i == app.config_field_index;
             let (display, display_style) = format_config_display_value(
                 &app.config_field_values[i],
@@ -2830,7 +2848,10 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                 lines.push(Line::from(""));
             }
         }
-        f.render_widget(Paragraph::new(lines), nav_chunks[0]);
+        f.render_widget(
+            Paragraph::new(lines).scroll((app.config_scroll as u16, 0)),
+            nav_chunks[0],
+        );
 
         // Test result display
         if let Some(ref result) = app.config_test_result {
@@ -2893,14 +2914,17 @@ pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
 
     if app.note_editing {
         // Notes above, input below
+        let input_line_count = app.edit_field_input.split('\n').count();
+        let input_area_height = (input_line_count as u16 + 2).max(4).min(8);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(4)])
+            .constraints([Constraint::Min(1), Constraint::Length(input_area_height)])
             .split(inner);
 
         let mut lines: Vec<Line> = Vec::new();
-        for (i, line) in app.note_lines.iter().enumerate() {
-            let style = if i == app.note_selected {
+        for (i, note_entry) in app.note_lines.iter().enumerate() {
+            let is_selected = i == app.note_selected;
+            let base_style = if is_selected {
                 Style::default()
                     .fg(FG_TEXT)
                     .bg(ACCENT_BLUE)
@@ -2908,7 +2932,13 @@ pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
             } else {
                 Style::default().fg(FG_SUBTEXT)
             };
-            lines.push(Line::from(Span::styled(format!("  {}", line), style)));
+            for (j, sub_line) in note_entry.split('\n').enumerate() {
+                let prefix = if j == 0 { "  " } else { "      " };
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", prefix, sub_line),
+                    base_style,
+                )));
+            }
         }
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), chunks[0]);
 
@@ -2916,30 +2946,37 @@ pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
             .borders(Borders::TOP)
             .border_style(Style::default().fg(ACCENT_YELLOW))
             .border_type(BorderType::Rounded);
-        let input_lines = vec![
+        let mut input_lines = vec![
             Line::from(Span::styled(
                 "  Editing note. Alt+Enter for newline",
                 Style::default().fg(FG_OVERLAY),
             )),
             Line::from(""),
-            Line::from(Span::styled(
-                format!("\u{276F} {}\u{2588}", app.edit_field_input),
-                Style::default().fg(FG_TEXT),
-            )),
         ];
+        input_lines.extend(build_multiline_input(
+            &app.edit_field_input,
+            Style::default().fg(FG_TEXT),
+        ));
         f.render_widget(Paragraph::new(input_lines).block(input_block), chunks[1]);
     } else {
-        // List of note lines with selection highlight
+        // List of note entries with selection highlight (multiline entries indented)
         let mut lines: Vec<Line> = Vec::new();
-        for (i, line) in app.note_lines.iter().enumerate() {
-            let style = if i == app.note_selected {
+        for (i, note_entry) in app.note_lines.iter().enumerate() {
+            let is_selected = i == app.note_selected;
+            let style = if is_selected {
                 Style::default()
                     .fg(FG_TEXT)
                     .bg(Color::Rgb(65, 75, 120))
             } else {
                 Style::default().fg(FG_SUBTEXT)
             };
-            lines.push(Line::from(Span::styled(format!("  {}", line), style)));
+            for (j, sub_line) in note_entry.split('\n').enumerate() {
+                let prefix = if j == 0 { "  " } else { "      " };
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", prefix, sub_line),
+                    style,
+                )));
+            }
         }
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }

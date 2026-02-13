@@ -57,6 +57,39 @@ fn default_estimate() -> u32 {
     60
 }
 
+fn default_digest_time() -> String {
+    "07:00".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmailConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub api_key: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+    #[serde(default = "default_digest_time")]
+    pub digest_time: String,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            api_key: None,
+            from: None,
+            to: None,
+            digest_time: default_digest_time(),
+        }
+    }
+}
+
+impl EmailConfig {
+    pub fn is_ready(&self) -> bool {
+        self.enabled && self.api_key.is_some() && self.from.is_some() && self.to.is_some()
+    }
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
@@ -65,6 +98,8 @@ pub struct Config {
     pub backup: BackupConfig,
     #[serde(default)]
     pub preferences: PreferencesConfig,
+    #[serde(default)]
+    pub email: EmailConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,6 +203,11 @@ impl Config {
         if config.backup.secret_key.is_none() {
             if let Ok(val) = std::env::var("DODO_S3_SECRET_KEY") {
                 config.backup.secret_key = Some(val);
+            }
+        }
+        if config.email.api_key.is_none() {
+            if let Ok(val) = std::env::var("DODO_RESEND_API_KEY") {
+                config.email.api_key = Some(val);
             }
         }
 

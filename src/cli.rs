@@ -72,6 +72,9 @@ pub enum Commands {
     /// Manage S3 backups
     Backup(BackupArgs),
 
+    /// Send email digest
+    Email(EmailArgs),
+
     /// Open TUI
     #[command(visible_alias = "t")]
     Tui,
@@ -397,5 +400,21 @@ impl ReportRange {
             ReportRange::All => ReportRange::Year,
         }
     }
+}
+
+#[derive(Parser)]
+pub struct EmailArgs {
+    #[command(subcommand)]
+    pub action: EmailAction,
+}
+
+#[derive(Subcommand)]
+pub enum EmailAction {
+    /// Send today's digest email now
+    Digest,
+    /// Show crontab entry for scheduling
+    Cron,
+    /// Send a test email to verify configuration
+    Test,
 }
 

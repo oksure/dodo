@@ -56,5 +56,11 @@ aws-sdk-s3 = "1.47"
 # Compression for backups
 flate2 = "1.0"
 
+# HTTP client for Resend email API
+ureq = "3"
+
+# JSON serialization
+serde_json = "1.0"
+
 [dev-dependencies]
 tempfile = "3.12"

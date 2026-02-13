@@ -2,6 +2,7 @@ pub mod backup;
 pub mod cli;
 pub mod config;
 pub mod db;
+pub mod email;
 pub mod fuzzy;
 pub mod notation;
 pub mod session;

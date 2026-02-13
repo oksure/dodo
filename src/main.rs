@@ -7,7 +7,7 @@ use std::io::{self, BufRead};
 mod tui;
 
 use dodo::backup;
-use dodo::cli::{BackupAction, Cli, Commands, RecurringAction, SyncAction};
+use dodo::cli::{BackupAction, Cli, Commands, EmailAction, RecurringAction, SyncAction};
 use dodo::config::Config;
 use dodo::db::Database;
 use dodo::notation::{parse_notation, prepare_task};
@@ -59,6 +59,7 @@ fn main() -> Result<()> {
         Some(Commands::Report(args)) => cmd_report(&db, args),
         Some(Commands::Sync(args)) => cmd_sync(&db, args),
         Some(Commands::Backup(args)) => cmd_backup(args),
+        Some(Commands::Email(args)) => cmd_email(&db, args),
         Some(Commands::Tui) => tui::run_tui(&db),
     }
 }
@@ -945,4 +946,28 @@ fn format_estimate(minutes: i64) -> String {
     } else {
         format!("{}m", mins)
     }
+}
+
+fn cmd_email(db: &Database, args: dodo::cli::EmailArgs) -> Result<()> {
+    let config = Config::load().unwrap_or_default();
+    match args.action {
+        EmailAction::Digest => {
+            if !config.email.is_ready() {
+                anyhow::bail!("Email not configured. Run 'dodo tui' and edit Settings > Email section.");
+            }
+            dodo::email::send_digest(&config.email, db)?;
+            println!("Digest email sent successfully.");
+        }
+        EmailAction::Cron => {
+            dodo::email::print_cron_entry(&config.email);
+        }
+        EmailAction::Test => {
+            if !config.email.is_ready() {
+                anyhow::bail!("Email not configured. Run 'dodo tui' and edit Settings > Email section.");
+            }
+            dodo::email::send_test(&config.email)?;
+            println!("Test email sent successfully.");
+        }
+    }
+    Ok(())
 }

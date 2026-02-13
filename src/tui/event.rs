@@ -456,6 +456,7 @@ where
                         KeyCode::Char('j') | KeyCode::Down => {
                             app.config_field_index = (app.config_field_index + 1) % CONFIG_FIELD_COUNT;
                             app.config_test_result = None;
+                            app.auto_scroll_config(20); // approximate visible height
                         }
                         KeyCode::Char('k') | KeyCode::Up => {
                             app.config_field_index = if app.config_field_index == 0 {
@@ -464,6 +465,7 @@ where
                                 app.config_field_index - 1
                             };
                             app.config_test_result = None;
+                            app.auto_scroll_config(20); // approximate visible height
                         }
                         KeyCode::Enter => {
                             app.enter_config_field();

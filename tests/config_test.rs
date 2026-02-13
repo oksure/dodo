@@ -1,4 +1,4 @@
-use dodo::config::{BackupConfig, Config, PreferencesConfig, SyncConfig, WeekStart};
+use dodo::config::{BackupConfig, Config, EmailConfig, PreferencesConfig, SyncConfig, WeekStart};
 
 // ── Default values ──────────────────────────────────────────────────
 
@@ -292,6 +292,7 @@ fn config_serialize_deserialize_roundtrip() {
             max_backups: 20,
         },
         preferences: PreferencesConfig::default(),
+        ..Default::default()
     };
 
     let serialized = toml::to_string_pretty(&config).unwrap();
@@ -348,6 +349,7 @@ fn preferences_roundtrip() {
             week_start: WeekStart::Monday,
             ..Default::default()
         },
+        ..Default::default()
     };
     let serialized = toml::to_string_pretty(&config).unwrap();
     let deserialized: Config = toml::from_str(&serialized).unwrap();
@@ -446,6 +448,7 @@ fn preferences_full_roundtrip() {
             default_view: "calendar".to_string(),
             default_estimate: 45,
         },
+        ..Default::default()
     };
     let serialized = toml::to_string_pretty(&config).unwrap();
     let deserialized: Config = toml::from_str(&serialized).unwrap();
@@ -454,4 +457,133 @@ fn preferences_full_roundtrip() {
     assert_eq!(deserialized.preferences.timer_sound_interval, 15);
     assert_eq!(deserialized.preferences.default_view, "calendar");
     assert_eq!(deserialized.preferences.default_estimate, 45);
+}
+
+// ── Email config ────────────────────────────────────────────────────
+
+#[test]
+fn email_default_has_disabled() {
+    let config = Config::default();
+    assert!(!config.email.enabled);
+    assert!(config.email.api_key.is_none());
+    assert!(config.email.from.is_none());
+    assert!(config.email.to.is_none());
+    assert_eq!(config.email.digest_time, "07:00");
+}
+
+#[test]
+fn email_default_digest_time() {
+    let config: EmailConfig = toml::from_str("").unwrap();
+    assert_eq!(config.digest_time, "07:00");
+}
+
+#[test]
+fn email_not_ready_when_disabled() {
+    let config = EmailConfig {
+        enabled: false,
+        api_key: Some("key".into()),
+        from: Some("from@test.com".into()),
+        to: Some("to@test.com".into()),
+        ..Default::default()
+    };
+    assert!(!config.is_ready());
+}
+
+#[test]
+fn email_not_ready_without_api_key() {
+    let config = EmailConfig {
+        enabled: true,
+        api_key: None,
+        from: Some("from@test.com".into()),
+        to: Some("to@test.com".into()),
+        ..Default::default()
+    };
+    assert!(!config.is_ready());
+}
+
+#[test]
+fn email_not_ready_without_from() {
+    let config = EmailConfig {
+        enabled: true,
+        api_key: Some("key".into()),
+        from: None,
+        to: Some("to@test.com".into()),
+        ..Default::default()
+    };
+    assert!(!config.is_ready());
+}
+
+#[test]
+fn email_not_ready_without_to() {
+    let config = EmailConfig {
+        enabled: true,
+        api_key: Some("key".into()),
+        from: Some("from@test.com".into()),
+        to: None,
+        ..Default::default()
+    };
+    assert!(!config.is_ready());
+}
+
+#[test]
+fn email_ready_when_all_set() {
+    let config = EmailConfig {
+        enabled: true,
+        api_key: Some("key".into()),
+        from: Some("from@test.com".into()),
+        to: Some("to@test.com".into()),
+        ..Default::default()
+    };
+    assert!(config.is_ready());
+}
+
+#[test]
+fn parse_email_config_from_toml() {
+    let toml = r#"
+[email]
+enabled = true
+api_key = "re_123abc"
+from = "Dodo <dodo@example.com>"
+to = "user@example.com"
+digest_time = "08:30"
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert!(config.email.enabled);
+    assert_eq!(config.email.api_key.unwrap(), "re_123abc");
+    assert_eq!(config.email.from.unwrap(), "Dodo <dodo@example.com>");
+    assert_eq!(config.email.to.unwrap(), "user@example.com");
+    assert_eq!(config.email.digest_time, "08:30");
+}
+
+#[test]
+fn email_roundtrip() {
+    let config = Config {
+        email: EmailConfig {
+            enabled: true,
+            api_key: Some("re_key".into()),
+            from: Some("Dodo <d@x.com>".into()),
+            to: Some("u@x.com".into()),
+            digest_time: "09:00".into(),
+        },
+        ..Default::default()
+    };
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let deserialized: Config = toml::from_str(&serialized).unwrap();
+    assert!(deserialized.email.enabled);
+    assert_eq!(deserialized.email.api_key.unwrap(), "re_key");
+    assert_eq!(deserialized.email.from.unwrap(), "Dodo <d@x.com>");
+    assert_eq!(deserialized.email.to.unwrap(), "u@x.com");
+    assert_eq!(deserialized.email.digest_time, "09:00");
+}
+
+#[test]
+fn config_without_email_section_has_defaults() {
+    let toml = r#"
+[sync]
+enabled = false
+"#;
+    let config: Config = toml::from_str(toml).unwrap();
+    assert!(!config.email.enabled);
+    assert!(config.email.api_key.is_none());
+    assert_eq!(config.email.digest_time, "07:00");
 }
