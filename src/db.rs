@@ -1492,6 +1492,44 @@ impl Database {
         })
     }
 
+    pub fn report_streak(&self) -> Result<i64> {
+        self.rt.block_on(async {
+            let mut rows = self.conn.query(
+                "SELECT DISTINCT date(started) as d FROM sessions WHERE ended IS NOT NULL ORDER BY d DESC LIMIT 365",
+                (),
+            ).await?;
+            let today = chrono::Local::now().date_naive();
+            let mut streak: i64 = 0;
+            let mut expected = today;
+            while let Some(row) = rows.next().await? {
+                let date_str = val_string(&row, 0)?;
+                if let Ok(d) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
+                    if d == expected {
+                        streak += 1;
+                        expected = expected - chrono::Duration::days(1);
+                    } else if d < expected {
+                        break;
+                    }
+                    // d > expected: skip future dates
+                }
+            }
+            Ok(streak)
+        })
+    }
+
+    pub fn report_total_tasks(&self, from: &str, to: &str) -> Result<i64> {
+        self.rt.block_on(async {
+            let mut rows = self.conn.query(
+                "SELECT COUNT(*) FROM tasks WHERE is_template = 0 AND created >= ?1 AND created < ?2",
+                params![from, to],
+            ).await?;
+            match rows.next().await? {
+                Some(row) => val_i64(&row, 0),
+                None => Ok(0),
+            }
+        })
+    }
+
     // ── Recurring Templates ─────────────────────────────────────────
 
     #[allow(clippy::too_many_arguments)]

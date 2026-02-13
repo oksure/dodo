@@ -177,7 +177,21 @@ where
                                     }
                                 }
                             } else if app.tab == TuiTab::Recurring {
-                                handle_recurring_key(app, key.code);
+                                if app.pending_g {
+                                    app.pending_g = false;
+                                    if key.code == KeyCode::Char('g') {
+                                        // gg → jump to first template
+                                        app.template_selected = 0;
+                                    } else {
+                                        // g followed by non-g → generate, then handle key
+                                        let _ = app.db.generate_instances();
+                                        let _ = app.refresh_templates();
+                                        let _ = app.refresh_all();
+                                        handle_recurring_key(app, key.code);
+                                    }
+                                } else {
+                                    handle_recurring_key(app, key.code);
+                                }
                             } else if app.tab == TuiTab::Settings {
                                 handle_backup_key(app, key.code);
                             } else {
@@ -204,6 +218,9 @@ where
                         }
                         KeyCode::Backspace => {
                             app.add_input.pop();
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                            app.add_input.clear();
                         }
                         KeyCode::Char(c) => {
                             app.add_input.push(c);
@@ -269,6 +286,9 @@ where
                         KeyCode::Backspace => {
                             app.edit_field_input.pop();
                         }
+                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                            app.edit_field_input.clear();
+                        }
                         KeyCode::Char(c) => {
                             app.edit_field_input.push(c);
                         }
@@ -283,6 +303,10 @@ where
                         }
                         KeyCode::Backspace => {
                             app.search_input.pop();
+                            let _ = app.refresh_all();
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                            app.search_input.clear();
                             let _ = app.refresh_all();
                         }
                         KeyCode::Char(c) => {
@@ -318,6 +342,9 @@ where
                         }
                         KeyCode::Backspace => {
                             app.rec_add_input.pop();
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                            app.rec_add_input.clear();
                         }
                         KeyCode::Char(c) => {
                             app.rec_add_input.push(c);
@@ -359,6 +386,9 @@ where
                                 }
                                 KeyCode::Backspace => {
                                     app.edit_field_input.pop();
+                                }
+                                KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                                    app.edit_field_input.clear();
                                 }
                                 KeyCode::Char(c) => {
                                     app.edit_field_input.push(c);
@@ -483,6 +513,9 @@ where
                         KeyCode::Backspace => {
                             app.config_field_input.pop();
                         }
+                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                            app.config_field_input.clear();
+                        }
                         KeyCode::Char(c) => {
                             app.config_field_input.push(c);
                         }
@@ -593,6 +626,14 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Backspace | KeyCode::Delete => {
             app.start_delete();
+            return;
+        }
+        KeyCode::Char('+') | KeyCode::Char('=') => {
+            app.adjust_selected_date(1);
+            return;
+        }
+        KeyCode::Char('-') => {
+            app.adjust_selected_date(-1);
             return;
         }
         _ => {}
@@ -982,10 +1023,13 @@ pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
                 let _ = app.refresh_templates();
             }
         }
+        KeyCode::Char('G') => {
+            if !app.templates.is_empty() {
+                app.template_selected = app.templates.len() - 1;
+            }
+        }
         KeyCode::Char('g') => {
-            let _ = app.db.generate_instances();
-            let _ = app.refresh_templates();
-            let _ = app.refresh_all();
+            app.pending_g = true;
         }
         KeyCode::Char('e') | KeyCode::Enter => {
             // Open edit modal for the selected template

@@ -18,7 +18,7 @@ use super::state::*;
 
 pub(super) fn draw_ui(f: &mut Frame, app: &App) {
     let search_height = if app.tab == TuiTab::Tasks { 3 } else { 0 };
-    let view_selector_height = if app.tab == TuiTab::Tasks { 1 } else { 0 };
+    let view_selector_height = if app.tab == TuiTab::Tasks { 2 } else { 0 };
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -255,20 +255,20 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ],
             AppMode::Search => vec![
                 ("type", "filter"),
-                ("Enter/Esc", "done"),
+                ("Enter/Esc", "close"),
             ],
             _ => match app.tasks_view {
                 TasksView::Panes => vec![
                     ("a", "add"),
-                    ("</>", "move"),
-                    ("\u{21B5}", "detail"),
-                    ("\u{232B}", "del"),
                     ("s", "start"),
                     ("d", "done"),
                     ("n", "note"),
+                    ("\u{21B5}", "edit"),
+                    ("\u{232B}", "del"),
+                    ("+/-", "day"),
                     ("o", "sort"),
                     ("v", "view"),
-                    ("/", "search"),
+                    ("/", "find"),
                     ("?", "help"),
                     ("q", "quit"),
                 ],
@@ -277,9 +277,11 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                     ("s", "start"),
                     ("d", "done"),
                     ("n", "note"),
+                    ("+/-", "day"),
                     ("t", "today"),
+                    ("o", "sort"),
                     ("v", "view"),
-                    ("/", "search"),
+                    ("/", "find"),
                     ("?", "help"),
                     ("q", "quit"),
                 ],
@@ -287,30 +289,33 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                     ("a", "add"),
                     ("s", "start"),
                     ("d", "done"),
-                    ("h/l", "tile"),
+                    ("+/-", "day"),
+                    ("h/l", "day"),
                     ("[/]", "week"),
                     ("t", "today"),
                     ("v", "view"),
-                    ("/", "search"),
+                    ("/", "find"),
                     ("?", "help"),
                     ("q", "quit"),
                 ],
                 TasksView::Calendar => match app.calendar_focus {
                     CalendarFocus::Grid => vec![
-                        ("hjkl", "navigate"),
+                        ("hjkl", "day"),
                         ("[/]", "month"),
                         ("t", "today"),
-                        ("Tab", "tasks"),
+                        ("Tab", "list"),
                         ("v", "view"),
+                        ("/", "find"),
                         ("?", "help"),
                         ("q", "quit"),
                     ],
                     CalendarFocus::TaskList => vec![
-                        ("j/k", "tasks"),
+                        ("j/k", "task"),
                         ("s", "start"),
                         ("d", "done"),
                         ("n", "note"),
-                        ("Esc/Tab", "grid"),
+                        ("\u{21B5}", "edit"),
+                        ("Esc", "grid"),
                         ("v", "view"),
                         ("?", "help"),
                         ("q", "quit"),
@@ -329,6 +334,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("d", "del"),
                 ("p", "pause"),
                 ("g", "generate"),
+                ("G", "last"),
                 ("?", "help"),
                 ("q", "quit"),
             ],
@@ -495,10 +501,39 @@ pub(super) fn build_task_list_item(
         }
     };
 
+    // Marquee scroll for truncated titles
+    let prefix_width = 7; // " NNN " (5) + "X " (2)
+    let available_title_width = (width as usize).saturating_sub(prefix_width + 2); // 2 for border
+    let full_title = format!("{}{}{}", task.title, recur_mark, notes_mark);
+    let title_chars: Vec<char> = full_title.chars().collect();
+
+    let display_title = if is_selected && is_active && !is_neon && title_chars.len() > available_title_width {
+        // Marquee scroll: pause at start and end, then scroll
+        let pause_frames: u64 = 30;
+        let scroll_len = title_chars.len() - available_title_width;
+        let total_cycle = pause_frames + scroll_len as u64 + pause_frames;
+        let pos_in_cycle = (frame_count / 4) % total_cycle;
+        let offset = if pos_in_cycle < pause_frames {
+            0 // pause at start
+        } else if pos_in_cycle < pause_frames + scroll_len as u64 {
+            (pos_in_cycle - pause_frames) as usize
+        } else {
+            scroll_len // pause at end
+        };
+        title_chars[offset..offset + available_title_width].iter().collect::<String>()
+    } else if !is_selected && title_chars.len() > available_title_width && available_title_width > 1 {
+        // Truncated with ellipsis
+        let mut s: String = title_chars[..available_title_width.saturating_sub(1)].iter().collect();
+        s.push('\u{2026}');
+        s
+    } else {
+        full_title
+    };
+
     let line1 = Line::from(vec![
         Span::styled(format!(" {:>3} ", num), num_style),
         Span::styled(format!("{} ", status_icon), status_style),
-        Span::styled(format!("{}{}{}", task.title, recur_mark, notes_mark), title_style),
+        Span::styled(display_title, title_style),
     ]);
 
     let meta_spans = build_compact_meta(task, today);
@@ -741,14 +776,22 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
     ]);
     f.render_widget(Paragraph::new(title_line), layout[0]);
 
-    // Day-of-week headers
-    let dow_labels = ["  Sun  ", "  Mon  ", "  Tue  ", "  Wed  ", "  Thu  ", "  Fri  ", "  Sat  "];
-    let dow_spans: Vec<Span> = dow_labels.iter().map(|d| {
-        Span::styled(*d, Style::default().fg(FG_SUBTEXT).add_modifier(Modifier::BOLD))
-    }).collect();
-    // Pad to fill width
-    let dow_line = Line::from(dow_spans);
-    f.render_widget(Paragraph::new(dow_line), layout[1]);
+    // Day-of-week headers aligned with grid columns
+    let dow_labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    let header_cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Ratio(1, 7); 7])
+        .split(layout[1]);
+    for (i, label) in dow_labels.iter().enumerate() {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                *label,
+                Style::default().fg(FG_SUBTEXT).add_modifier(Modifier::BOLD),
+            ))
+            .alignment(Alignment::Center),
+            header_cols[i],
+        );
+    }
 
     // Compute calendar grid
     let first_of_month = chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, 1)
@@ -844,13 +887,19 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
             let date_area = Rect::new(inner.x, inner.y, inner.width, 1);
             f.render_widget(Paragraph::new(date_line), date_area);
 
-            // Lines 2+: compact task entries
-            if is_selected && !app.calendar_tasks.is_empty() {
-                let max_tasks = (inner.height as usize).saturating_sub(1);
-                let show_count = app.calendar_tasks.len().min(max_tasks);
-                let has_more = app.calendar_tasks.len() > max_tasks;
+            // Lines 2+: task entries (shown in ALL cells, not just selected)
+            let cell_tasks: Option<&Vec<Task>> = if is_selected {
+                if app.calendar_tasks.is_empty() { None } else { Some(&app.calendar_tasks) }
+            } else {
+                app.calendar_tasks_by_date.get(&cell_date)
+            };
 
-                for (ti, task) in app.calendar_tasks.iter().take(if has_more { max_tasks.saturating_sub(1) } else { max_tasks }).enumerate() {
+            if let Some(tasks) = cell_tasks {
+                let max_tasks = (inner.height as usize).saturating_sub(1);
+                let has_more = tasks.len() > max_tasks;
+                let show = if has_more { max_tasks.saturating_sub(1) } else { max_tasks };
+
+                for (ti, task) in tasks.iter().take(show).enumerate() {
                     let y_offset = 1 + ti as u16;
                     if y_offset >= inner.height {
                         break;
@@ -866,15 +915,14 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
                     let max_title_len = (inner.width as usize).saturating_sub(2);
                     let title: String = task.title.chars().take(max_title_len).collect();
 
-                    let is_task_selected = app.calendar_focus == CalendarFocus::TaskList
+                    let is_task_selected = is_selected
+                        && app.calendar_focus == CalendarFocus::TaskList
                         && ti == app.calendar_task_selected;
 
-                    let style = if task.status == TaskStatus::Running {
-                        Style::default().fg(ACCENT_GREEN)
-                    } else if is_task_selected {
+                    let style = if is_task_selected {
                         Style::default().fg(FG_TEXT).bg(Color::Rgb(65, 75, 120))
                     } else {
-                        Style::default().fg(FG_SUBTEXT)
+                        calendar_task_style(task, today)
                     };
 
                     let task_line = Line::from(Span::styled(
@@ -885,9 +933,9 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
                     f.render_widget(Paragraph::new(task_line), task_area);
                 }
 
-                if has_more && show_count > 0 {
-                    let remaining = app.calendar_tasks.len() - (max_tasks - 1);
-                    let more_y = inner.y + max_tasks as u16;
+                if has_more {
+                    let remaining = tasks.len() - show;
+                    let more_y = inner.y + 1 + show as u16;
                     if more_y < inner.y + inner.height {
                         let more_line = Line::from(Span::styled(
                             format!("+{} more", remaining),
@@ -897,23 +945,25 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
                         f.render_widget(Paragraph::new(more_line), more_area);
                     }
                 }
+            }
+        }
+    }
+}
+
+fn calendar_task_style(task: &Task, today: chrono::NaiveDate) -> Style {
+    match task.status {
+        TaskStatus::Running => Style::default().fg(ACCENT_GREEN),
+        TaskStatus::Done => Style::default().fg(ACCENT_TEAL).add_modifier(Modifier::DIM),
+        TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
+        TaskStatus::Pending => {
+            if task.deadline.map(|d| d < today).unwrap_or(false) {
+                Style::default().fg(ACCENT_RED)
+            } else if task.priority.unwrap_or(0) >= 3 {
+                Style::default().fg(ACCENT_RED)
+            } else if task.priority.unwrap_or(0) >= 2 {
+                Style::default().fg(ACCENT_YELLOW)
             } else {
-                // Non-selected cell: show compact task icons
-                let max_tasks = (inner.height as usize).saturating_sub(1);
-                if task_count > 0 && max_tasks > 0 {
-                    let dots = if task_count <= max_tasks {
-                        "\u{25CF}".repeat(task_count)
-                    } else {
-                        format!("{}\u{25CF}+{}", "\u{25CF}".repeat(max_tasks.saturating_sub(1)), task_count - max_tasks + 1)
-                    };
-                    if inner.height > 1 {
-                        let dots_area = Rect::new(inner.x, inner.y + 1, inner.width, 1);
-                        f.render_widget(
-                            Paragraph::new(Span::styled(dots, Style::default().fg(FG_OVERLAY))),
-                            dots_area,
-                        );
-                    }
-                }
+                Style::default().fg(FG_SUBTEXT)
             }
         }
     }
@@ -1182,7 +1232,7 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
 
     let left_layout = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(12), Constraint::Min(0)])
+        .constraints([Constraint::Length(14), Constraint::Min(0)])
         .split(cols[0]);
 
     // Summary stats with Gauge
@@ -1216,6 +1266,23 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(0), Constraint::Length(1)])
         .split(summary_inner);
 
+    // Streak color
+    let streak_style = if report.streak >= 7 {
+        Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+    } else if report.streak >= 3 {
+        Style::default().fg(ACCENT_YELLOW)
+    } else {
+        Style::default().fg(FG_SUBTEXT)
+    };
+
+    // Completion rate
+    let completion_str = if report.total_tasks > 0 {
+        let pct = (report.tasks_done as f64 / report.total_tasks as f64 * 100.0) as u64;
+        format!("{}/{} ({}%)", report.tasks_done, report.total_tasks, pct)
+    } else {
+        format!("{}", report.tasks_done)
+    };
+
     let summary_lines = vec![
         Line::from(vec![
             Span::styled("  Tasks done:    ", Style::default().fg(FG_SUBTEXT)),
@@ -1243,6 +1310,17 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
             ),
         ]),
         Line::from(vec![
+            Span::styled("  Streak:        ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled(
+                format!("{} day{}", report.streak, if report.streak == 1 { "" } else { "s" }),
+                streak_style,
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("  Completion:    ", Style::default().fg(FG_SUBTEXT)),
+            Span::styled(completion_str, Style::default().fg(FG_TEXT)),
+        ]),
+        Line::from(vec![
             Span::styled("  Avg/task:      ", Style::default().fg(FG_SUBTEXT)),
             Span::styled(format_dur(avg_per_task), Style::default().fg(FG_TEXT)),
         ]),
@@ -1253,12 +1331,16 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     ];
     f.render_widget(Paragraph::new(summary_lines), summary_chunks[0]);
 
-    // Productivity Gauge: tasks done ratio (capped at 100%)
-    let done_ratio = if report.tasks_done > 0 { 1.0_f64.min(report.tasks_done as f64 / (report.tasks_done as f64 + 1.0)) } else { 0.0 };
+    // Completion Gauge with real ratio
+    let done_ratio = if report.total_tasks > 0 {
+        (report.tasks_done as f64 / report.total_tasks as f64).min(1.0)
+    } else {
+        0.0
+    };
     let done_gauge = Gauge::default()
         .gauge_style(Style::default().fg(ACCENT_GREEN).bg(Color::Rgb(40, 42, 54)))
         .ratio(done_ratio)
-        .label(format!("{} done", report.tasks_done))
+        .label(format!("{}/{} done", report.tasks_done, report.total_tasks))
         .use_unicode(true);
     f.render_widget(done_gauge, summary_chunks[1]);
 
@@ -1310,6 +1392,41 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(FG_OVERLAY),
             ),
         ]));
+    }
+
+    // Weekday activity bars
+    if !report.by_weekday.is_empty() {
+        prod_lines.push(Line::from(""));
+        prod_lines.push(Line::from(Span::styled(
+            "  Weekly activity:",
+            Style::default().fg(FG_SUBTEXT),
+        )));
+        let mut weekday_data = vec![0i64; 7];
+        for (dow, secs) in &report.by_weekday {
+            if (*dow as usize) < 7 {
+                weekday_data[*dow as usize] = *secs;
+            }
+        }
+        let max_secs = weekday_data.iter().copied().max().unwrap_or(1).max(1);
+        let bar_max_width = 20usize;
+        for (i, &secs) in weekday_data.iter().enumerate() {
+            let bar_len = if max_secs > 0 {
+                (secs as f64 / max_secs as f64 * bar_max_width as f64) as usize
+            } else {
+                0
+            };
+            let bar: String = "\u{2588}".repeat(bar_len);
+            let day_name = DAY_NAMES[i];
+            prod_lines.push(Line::from(vec![
+                Span::styled(format!("  {:<4}", day_name), Style::default().fg(FG_SUBTEXT)),
+                Span::styled(bar, Style::default().fg(ACCENT_TEAL)),
+                if secs > 0 {
+                    Span::styled(format!(" {}", format_dur(secs)), Style::default().fg(FG_OVERLAY))
+                } else {
+                    Span::raw("")
+                },
+            ]));
+        }
     }
 
     // Sparkline for hours worked distribution

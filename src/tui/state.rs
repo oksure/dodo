@@ -183,6 +183,8 @@ pub(super) struct ReportData {
     pub(super) by_weekday: Vec<(i64, i64)>,
     pub(super) by_project: Vec<(String, i64)>,
     pub(super) done_tasks: Vec<(String, i64)>,
+    pub(super) streak: i64,
+    pub(super) total_tasks: i64,
 }
 
 pub(super) struct App<'a> {
@@ -258,6 +260,7 @@ pub(super) struct App<'a> {
     pub(super) calendar_tasks: Vec<Task>,
     pub(super) calendar_task_selected: usize,
     pub(super) calendar_task_counts: HashMap<NaiveDate, usize>,
+    pub(super) calendar_tasks_by_date: HashMap<NaiveDate, Vec<Task>>,
     // Preferences
     pub(super) preferences: PreferencesConfig,
 }
@@ -334,7 +337,19 @@ impl<'a> App<'a> {
             calendar_tasks: Vec::new(),
             calendar_task_selected: 0,
             calendar_task_counts: HashMap::new(),
+            calendar_tasks_by_date: HashMap::new(),
             preferences: config.preferences,
+        }
+    }
+
+    pub(super) fn adjust_selected_date(&mut self, days: i64) {
+        if let Some(task) = self.current_selected_task() {
+            let today = chrono::Local::now().date_naive();
+            let current = task.scheduled.unwrap_or(today);
+            let new_date = current + chrono::Duration::days(days);
+            let task_id = task.id.clone();
+            let _ = self.db.update_task_scheduled(&task_id, new_date);
+            let _ = self.refresh_current_view();
         }
     }
 
@@ -557,6 +572,8 @@ impl<'a> App<'a> {
             by_weekday: self.db.report_by_weekday(&from, &to)?,
             by_project: self.db.report_by_project(&from, &to)?,
             done_tasks: self.db.report_done_tasks(&from, &to, 20)?,
+            streak: self.db.report_streak()?,
+            total_tasks: self.db.report_total_tasks(&from, &to)?,
         });
         Ok(())
     }
@@ -697,9 +714,17 @@ impl<'a> App<'a> {
         let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
         let today = chrono::Local::now().date_naive();
 
-        // Compute task counts per date for the displayed month
+        // Compute task counts per date and build tasks-by-date map
         self.calendar_task_counts.clear();
+        self.calendar_tasks_by_date.clear();
         let mut selected_tasks = Vec::new();
+
+        let status_order = |s: &TaskStatus| match s {
+            TaskStatus::Running => 0,
+            TaskStatus::Paused => 1,
+            TaskStatus::Pending => 2,
+            TaskStatus::Done => 3,
+        };
 
         for task in all_tasks {
             if !self.matches_search(&task) {
@@ -707,19 +732,22 @@ impl<'a> App<'a> {
             }
             let task_date = task.scheduled.unwrap_or(today);
             *self.calendar_task_counts.entry(task_date).or_insert(0) += 1;
+            self.calendar_tasks_by_date.entry(task_date).or_default().push(task.clone());
             if task_date == self.calendar_selected {
                 selected_tasks.push(task);
             }
         }
 
+        // Sort tasks by status priority within each date
+        for tasks in self.calendar_tasks_by_date.values_mut() {
+            tasks.sort_by(|a, b| {
+                status_order(&a.status).cmp(&status_order(&b.status))
+                    .then(a.created.cmp(&b.created))
+            });
+        }
+
         // Sort selected tasks by status then created
         selected_tasks.sort_by(|a, b| {
-            let status_order = |s: &TaskStatus| match s {
-                TaskStatus::Running => 0,
-                TaskStatus::Paused => 1,
-                TaskStatus::Pending => 2,
-                TaskStatus::Done => 3,
-            };
             status_order(&a.status).cmp(&status_order(&b.status))
                 .then(a.created.cmp(&b.created))
         });
@@ -1077,6 +1105,7 @@ impl<'a> App<'a> {
                         parsed.deadline = Some(date);
                         self.db
                             .update_task_fields_by_id(task_id, &parsed, None)?;
+                        self.edit_field_values[5] = date.format("%Y-%m-%d").to_string();
                     }
                 }
                 6 => {
@@ -1086,6 +1115,7 @@ impl<'a> App<'a> {
                         parsed.scheduled = Some(date);
                         self.db
                             .update_task_fields_by_id(task_id, &parsed, None)?;
+                        self.edit_field_values[6] = date.format("%Y-%m-%d").to_string();
                     }
                 }
                 7 => {
