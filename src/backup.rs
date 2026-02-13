@@ -4,6 +4,7 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::io::{Read, Write};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 
 use crate::config::BackupConfig;
@@ -14,6 +15,22 @@ fn new_runtime() -> Result<tokio::runtime::Runtime> {
         .enable_all()
         .build()
         .context("Failed to create tokio runtime")
+}
+
+/// Run an async block on a tokio runtime, catching any panics (e.g. from invalid AWS SDK config)
+fn block_on_safe<F, T>(rt: &tokio::runtime::Runtime, fut: F) -> Result<T>
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    std::panic::catch_unwind(AssertUnwindSafe(|| rt.block_on(fut)))
+        .unwrap_or_else(|e| {
+            let msg = e
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| e.downcast_ref::<&str>().copied())
+                .unwrap_or("unknown error");
+            Err(anyhow::anyhow!("Backup operation failed: {}", msg))
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -46,7 +63,7 @@ pub fn create_backup(config: &BackupConfig) -> Result<String> {
     // Upload
     let rt = new_runtime()?;
 
-    rt.block_on(async {
+    block_on_safe(&rt, async {
         let s3_client = build_s3_client(config).await?;
         let bucket = config.bucket.as_deref().context("No bucket configured")?;
 
@@ -76,7 +93,7 @@ pub fn create_backup(config: &BackupConfig) -> Result<String> {
 pub fn list_backups(config: &BackupConfig) -> Result<Vec<BackupEntry>> {
     let rt = new_runtime()?;
 
-    rt.block_on(async {
+    block_on_safe(&rt, async {
         let s3_client = build_s3_client(config).await?;
         let bucket = config.bucket.as_deref().context("No bucket configured")?;
 
@@ -127,7 +144,7 @@ pub fn restore_backup(config: &BackupConfig, key: &str) -> Result<()> {
     // Download from S3
     let rt = new_runtime()?;
 
-    let compressed = rt.block_on(async {
+    let compressed = block_on_safe(&rt, async {
         let s3_client = build_s3_client(config).await?;
         let bucket = config.bucket.as_deref().context("No bucket configured")?;
 
@@ -168,7 +185,7 @@ pub fn restore_backup(config: &BackupConfig, key: &str) -> Result<()> {
 pub fn delete_backup(config: &BackupConfig, key: &str) -> Result<()> {
     let rt = new_runtime()?;
 
-    rt.block_on(async {
+    block_on_safe(&rt, async {
         let s3_client = build_s3_client(config).await?;
         let bucket = config.bucket.as_deref().context("No bucket configured")?;
 
@@ -275,6 +292,7 @@ async fn build_s3_client(config: &BackupConfig) -> Result<aws_sdk_s3::Client> {
     );
 
     let s3_config = aws_sdk_s3::Config::builder()
+        .behavior_version_latest()
         .endpoint_url(endpoint)
         .region(aws_sdk_s3::config::Region::new(region.to_string()))
         .credentials_provider(creds)
