@@ -10,7 +10,7 @@ use dodo::backup;
 use dodo::cli::{BackupAction, Cli, Commands, RecurringAction, SyncAction};
 use dodo::config::Config;
 use dodo::db::Database;
-use dodo::notation::parse_notation;
+use dodo::notation::{parse_notation, prepare_task};
 use dodo::task::{Area, Task, TaskStatus};
 
 const DONE_DISPLAY_LIMIT: usize = 5;
@@ -59,13 +59,16 @@ fn main() -> Result<()> {
         Some(Commands::Add(args)) => cmd_add(&db, args),
         Some(Commands::List(args)) => cmd_list(&db, args),
         Some(Commands::Start(args)) => cmd_start(&db, args),
-        Some(Commands::Done) => cmd_done(&db),
+        Some(Commands::Done(args)) => cmd_done(&db, args),
         Some(Commands::Status) => cmd_status(&db),
         Some(Commands::Remove(args)) => cmd_remove(&db, args),
+        Some(Commands::Move(args)) => cmd_move(&db, args),
         Some(Commands::Edit(args)) => cmd_edit(&db, args),
         Some(Commands::Note(args)) => cmd_note(&db, args),
         Some(Commands::Recurring(args)) => cmd_recurring(&db, args),
-        Some(Commands::Sync(args)) => cmd_sync(args),
+        Some(Commands::Config(args)) => cmd_config(args),
+        Some(Commands::Report(args)) => cmd_report(&db, args),
+        Some(Commands::Sync(args)) => cmd_sync(&db, args),
         Some(Commands::Backup(args)) => cmd_backup(args),
         Some(Commands::Tui) => tui::run_tui(&db),
     }
@@ -73,53 +76,58 @@ fn main() -> Result<()> {
 
 fn cmd_add(db: &Database, args: dodo::cli::AddArgs) -> Result<()> {
     let raw_input = args.title.join(" ");
-    let parsed = parse_notation(&raw_input);
+    let mut prep = prepare_task(&raw_input);
 
-    let project = parsed.project.or(args.project);
-    let context = if !parsed.contexts.is_empty() {
-        Some(parsed.contexts.join(","))
-    } else {
-        args.context
-    };
-    let estimate = parsed.estimate_minutes.or(args.estimate).or(Some(60));
-    let deadline = parsed.deadline.or_else(|| {
-        args.deadline
+    // CLI flag overrides (notation tokens take priority via prepare_task,
+    // but CLI flags fill in when notation didn't provide a value)
+    if prep.project.is_none() {
+        prep.project = args.project;
+    }
+    if prep.context.is_none() {
+        prep.context = args.context;
+    }
+    if let Some(est) = args.estimate {
+        if prep.estimate_minutes == Some(60) {
+            // Only override if prepare_task used the default
+            prep.estimate_minutes = Some(est);
+        }
+    }
+    if prep.deadline.is_none() {
+        prep.deadline = args.deadline
+            .as_ref()
+            .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+    }
+    if prep.scheduled == Some(chrono::Local::now().date_naive()) {
+        // Only override scheduled if prepare_task used the default (today)
+        if let Some(sched) = args.scheduled
             .as_ref()
             .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-    });
-    let scheduled = parsed
-        .scheduled
-        .or_else(|| {
-            args.scheduled
-                .as_ref()
-                .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-        })
-        .or_else(|| Some(chrono::Local::now().date_naive()));
-    let tags = if !parsed.tags.is_empty() {
-        Some(parsed.tags.join(","))
-    } else {
-        args.tags
-    };
-    let priority = parsed.priority;
-
-    let title = if parsed.title.is_empty() {
-        raw_input.clone()
-    } else {
-        parsed.title
-    };
+        {
+            prep.scheduled = Some(sched);
+        }
+    }
+    if prep.tags.is_none() {
+        prep.tags = args.tags;
+    }
 
     let num_id = db.add_task(
-        &title, args.area, project, context, estimate, deadline, scheduled, tags, priority,
+        &prep.title, args.area, prep.project, prep.context,
+        prep.estimate_minutes, prep.deadline, prep.scheduled,
+        prep.tags, prep.priority,
     )?;
-    println!("Added: {} [#{}]", title, num_id);
+    println!("Added: {} [#{}]", prep.title, num_id);
     Ok(())
 }
 
 fn cmd_list(db: &Database, args: dodo::cli::ListArgs) -> Result<()> {
+    let today = chrono::Local::now().date_naive();
     let mut filter_area: Option<Area> = None;
     let mut filter_project: Option<String> = args.project.clone();
     let mut filter_context: Option<String> = None;
     let mut filter_tag: Option<String> = None;
+    let mut filter_priority: Option<i64> = None;
+    let mut filter_deadline_days: Option<i64> = None;
+    let mut filter_scheduled_days: Option<i64> = None;
 
     for arg in &args.args {
         if let Some(proj) = arg.strip_prefix('+') {
@@ -128,6 +136,12 @@ fn cmd_list(db: &Database, args: dodo::cli::ListArgs) -> Result<()> {
             filter_context = Some(ctx.to_string());
         } else if let Some(tag) = arg.strip_prefix('#') {
             filter_tag = Some(tag.to_string());
+        } else if let Some(rest) = arg.strip_prefix("^<") {
+            filter_deadline_days = dodo::notation::parse_filter_days(rest);
+        } else if let Some(rest) = arg.strip_prefix("=<") {
+            filter_scheduled_days = dodo::notation::parse_filter_days(rest);
+        } else if arg.starts_with('!') && arg.chars().all(|c| c == '!') && !arg.is_empty() {
+            filter_priority = Some(arg.len() as i64);
         } else {
             match arg.to_lowercase().as_str() {
                 "today" => filter_area = Some(Area::Today),
@@ -139,10 +153,40 @@ fn cmd_list(db: &Database, args: dodo::cli::ListArgs) -> Result<()> {
         }
     }
 
+    let load_and_filter = |tasks: Vec<Task>| -> Vec<Task> {
+        let tasks_ref: Vec<&Task> = tasks.iter().collect();
+        let filtered = apply_filters(&tasks_ref, filter_context.as_deref(), filter_tag.as_deref());
+        let mut result: Vec<Task> = filtered.into_iter().filter(|task| {
+            if let Some(min_pri) = filter_priority {
+                if task.priority.unwrap_or(0) < min_pri {
+                    return false;
+                }
+            }
+            if let Some(days) = filter_deadline_days {
+                let cutoff = today + chrono::Duration::days(days);
+                match task.deadline {
+                    Some(dl) if dl <= cutoff => {}
+                    _ => return false,
+                }
+            }
+            if let Some(days) = filter_scheduled_days {
+                let cutoff = today + chrono::Duration::days(days);
+                match task.scheduled {
+                    Some(sc) if sc <= cutoff => {}
+                    _ => return false,
+                }
+            }
+            true
+        }).cloned().collect();
+        if args.desc {
+            result.reverse();
+        }
+        result
+    };
+
     if let Some(ref project) = filter_project {
         let tasks = db.list_tasks_by_project(project, args.sort)?;
-        let tasks_ref: Vec<&Task> = tasks.iter().collect();
-        let tasks = apply_filters(&tasks_ref, filter_context.as_deref(), filter_tag.as_deref());
+        let tasks = load_and_filter(tasks);
         if tasks.is_empty() {
             println!("No tasks found.");
         } else {
@@ -152,8 +196,7 @@ fn cmd_list(db: &Database, args: dodo::cli::ListArgs) -> Result<()> {
         }
     } else if let Some(area) = filter_area {
         let tasks = db.list_tasks_sorted(Some(area), args.sort)?;
-        let tasks_ref: Vec<&Task> = tasks.iter().collect();
-        let tasks = apply_filters(&tasks_ref, filter_context.as_deref(), filter_tag.as_deref());
+        let tasks = load_and_filter(tasks);
         if tasks.is_empty() {
             println!("No tasks found.");
         } else {
@@ -166,24 +209,23 @@ fn cmd_list(db: &Database, args: dodo::cli::ListArgs) -> Result<()> {
         if all.is_empty() {
             println!("No tasks found.");
         } else {
-            let all_ref: Vec<&Task> = all.iter().collect();
-            let filtered = apply_filters(&all_ref, filter_context.as_deref(), filter_tag.as_deref());
+            let filtered = load_and_filter(all);
 
-            let mut today = vec![];
+            let mut today_tasks = vec![];
             let mut week = vec![];
             let mut long = vec![];
             let mut done = vec![];
             for task in &filtered {
                 match task.effective_area() {
-                    Area::Today => today.push(*task),
-                    Area::ThisWeek => week.push(*task),
-                    Area::LongTerm => long.push(*task),
-                    Area::Completed => done.push(*task),
+                    Area::Today => today_tasks.push(task),
+                    Area::ThisWeek => week.push(task),
+                    Area::LongTerm => long.push(task),
+                    Area::Completed => done.push(task),
                 }
             }
 
             let sections: Vec<(&str, Vec<&Task>)> = vec![
-                ("TODAY", today),
+                ("TODAY", today_tasks),
                 ("THIS WEEK", week),
                 ("LONG TERM", long),
                 ("DONE", done),
@@ -229,11 +271,28 @@ fn cmd_start(db: &Database, args: dodo::cli::StartArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_done(db: &Database) -> Result<()> {
-    if let Some((task, duration)) = db.complete_task()? {
-        println!("Completed: {} ({})", task, format_duration(duration));
+fn cmd_done(db: &Database, args: dodo::cli::DoneArgs) -> Result<()> {
+    let query = args.task.join(" ");
+
+    if args.undo {
+        if query.is_empty() {
+            anyhow::bail!("--undo requires a task identifier (numeric ID or text)");
+        }
+        let task = db.resolve_done_task(&query)?;
+        db.uncomplete_task_by_id(&task.id)?;
+        let num = task.num_id.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
+        println!("Reopened: {} [#{}]", task.title, num);
+    } else if !query.is_empty() {
+        let task = db.resolve_task(&query)?;
+        db.complete_task_by_id(&task.id)?;
+        let num = task.num_id.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
+        println!("Completed: {} [#{}]", task.title, num);
     } else {
-        println!("No running task to complete.");
+        if let Some((task, duration)) = db.complete_task()? {
+            println!("Completed: {} ({})", task, format_duration(duration));
+        } else {
+            println!("No running task to complete.");
+        }
     }
     Ok(())
 }
@@ -256,6 +315,16 @@ fn cmd_remove(db: &Database, args: dodo::cli::RemoveArgs) -> Result<()> {
     let query = args.task.join(" ");
     let (title, num_id) = db.delete_task(&query)?;
     println!("Deleted: {} [#{}]", title, num_id);
+    Ok(())
+}
+
+fn cmd_move(db: &Database, args: dodo::cli::MoveArgs) -> Result<()> {
+    let query = args.task.join(" ");
+    let task = db.resolve_task(&query)?;
+    let date = args.to.to_scheduled_date();
+    db.update_task_scheduled(&task.id, date)?;
+    let num = task.num_id.map(|n| n.to_string()).unwrap_or_else(|| "?".into());
+    println!("Moved: {} [#{}] → {}", task.title, num, args.to.as_str());
     Ok(())
 }
 
@@ -284,11 +353,45 @@ fn cmd_note(db: &Database, args: dodo::cli::NoteArgs) -> Result<()> {
     if args.clear {
         let title = db.clear_notes(&query)?;
         println!("Cleared notes for: {}", title);
+    } else if let Some(line_num) = args.delete_line {
+        let task = db.resolve_task(&query)?;
+        let notes = db.get_task_notes_by_id(&task.id)?
+            .context("Task has no notes")?;
+        let mut lines: Vec<&str> = notes.lines().collect();
+        if line_num == 0 || line_num > lines.len() {
+            anyhow::bail!("Line {} out of range (1-{})", line_num, lines.len());
+        }
+        lines.remove(line_num - 1);
+        let joined = lines.join("\n");
+        db.update_notes_by_id(&task.id, &joined)?;
+        println!("Deleted line {} from: {}", line_num, task.title);
+    } else if let Some(line_num) = args.edit_line {
+        let task = db.resolve_task(&query)?;
+        let notes = db.get_task_notes_by_id(&task.id)?
+            .context("Task has no notes")?;
+        let mut lines: Vec<String> = notes.lines().map(|l| l.to_string()).collect();
+        if line_num == 0 || line_num > lines.len() {
+            anyhow::bail!("Line {} out of range (1-{})", line_num, lines.len());
+        }
+        println!("Current: {}", lines[line_num - 1]);
+        println!("Enter replacement (Ctrl+D to finish):");
+        let stdin = io::stdin();
+        let input: Vec<String> = stdin.lock().lines().map_while(Result::ok).collect();
+        if !input.is_empty() {
+            lines[line_num - 1] = input.join("\n");
+            let joined = lines.join("\n");
+            db.update_notes_by_id(&task.id, &joined)?;
+            println!("Updated line {} in: {}", line_num, task.title);
+        }
     } else if args.show {
         let (title, notes) = db.get_task_notes(&query)?;
         println!("Notes for: {}", title);
         match notes {
-            Some(text) => println!("{}", text),
+            Some(text) => {
+                for (i, line) in text.lines().enumerate() {
+                    println!("  {}: {}", i + 1, line);
+                }
+            }
             None => println!("(no notes)"),
         }
     } else {
@@ -344,38 +447,23 @@ fn cmd_recurring(db: &Database, args: dodo::cli::RecurringArgs) -> Result<()> {
         }
         Some(RecurringAction::Add(add_args)) => {
             let raw_input = add_args.title.join(" ");
-            let parsed = parse_notation(&raw_input);
+            let prep = prepare_task(&raw_input);
 
-            let recurrence = match parsed.recurrence {
+            let recurrence = match prep.recurrence {
                 Some(r) => r,
                 None => anyhow::bail!("Recurrence pattern required (e.g., *daily, *3d, *weekly, *mon,wed,fri). Use * prefix."),
             };
 
-            let title = if parsed.title.is_empty() {
+            if prep.title == raw_input && prep.title.starts_with('*') {
                 anyhow::bail!("Title is required");
-            } else {
-                parsed.title
-            };
-            let context = if !parsed.contexts.is_empty() {
-                Some(parsed.contexts.join(","))
-            } else {
-                None
-            };
-            let tags = if !parsed.tags.is_empty() {
-                Some(parsed.tags.join(","))
-            } else {
-                None
-            };
-            let estimate = parsed.estimate_minutes.or(Some(60));
-            let scheduled = parsed
-                .scheduled
-                .or_else(|| Some(chrono::Local::now().date_naive()));
+            }
 
             let num_id = db.add_template(
-                &title, &recurrence, parsed.project, context,
-                estimate, parsed.deadline, scheduled, tags, parsed.priority,
+                &prep.title, &recurrence, prep.project, prep.context,
+                prep.estimate_minutes, prep.deadline, prep.scheduled,
+                prep.tags, prep.priority,
             )?;
-            println!("Created recurring: {} [#{}] (*{})", title, num_id, recurrence);
+            println!("Created recurring: {} [#{}] (*{})", prep.title, num_id, recurrence);
         }
         Some(RecurringAction::Edit(edit_args)) => {
             let raw_input = edit_args.args.join(" ");
@@ -443,9 +531,102 @@ fn cmd_recurring(db: &Database, args: dodo::cli::RecurringArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_sync(args: dodo::cli::SyncArgs) -> Result<()> {
+fn cmd_config(args: dodo::cli::ConfigArgs) -> Result<()> {
+    use dodo::cli::ConfigAction;
+    match args.action {
+        None | Some(ConfigAction::Show) => {
+            let config = Config::load()?;
+            let toml_str = toml::to_string_pretty(&config)
+                .context("Failed to serialize config")?;
+            println!("{}", toml_str);
+        }
+        Some(ConfigAction::Path) => {
+            let path = Config::config_path()?;
+            println!("{}", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn cmd_report(db: &Database, args: dodo::cli::ReportArgs) -> Result<()> {
+    let (from, to) = args.range.date_range();
+
+    let tasks_done = db.report_tasks_done(&from, &to)?;
+    let total_seconds = db.report_total_seconds(&from, &to)?;
+    let active_days = db.report_active_days(&from, &to)?;
+    let by_project = db.report_by_project(&from, &to)?;
+    let by_weekday = db.report_by_weekday(&from, &to)?;
+    let done_tasks = db.report_done_tasks(&from, &to, 10)?;
+
+    // Header
+    println!(
+        "{}",
+        format!("Report: {}", args.range.label()).cyan().bold()
+    );
+    println!();
+
+    // Summary
+    let total_h = total_seconds / 3600;
+    let total_m = (total_seconds % 3600) / 60;
+    println!("  Tasks completed:  {}", tasks_done);
+    println!("  Total tracked:    {}h {}m", total_h, total_m);
+    println!("  Active days:      {}", active_days);
+
+    // By project
+    if !by_project.is_empty() {
+        println!();
+        println!("{}", "  By project:".bold());
+        let max_secs = by_project.iter().map(|(_, s)| *s).max().unwrap_or(1).max(1);
+        for (project, secs) in &by_project {
+            let h = secs / 3600;
+            let m = (secs % 3600) / 60;
+            let bar_len = (*secs as f64 / max_secs as f64 * 20.0) as usize;
+            let bar = "\u{2588}".repeat(bar_len);
+            println!("    {:<16} {:>2}h {:>2}m  {}", project, h, m, bar.green());
+        }
+    }
+
+    // By weekday
+    if !by_weekday.is_empty() {
+        println!();
+        println!("{}", "  By weekday:".bold());
+        let day_names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        let max_secs = by_weekday.iter().map(|(_, s)| *s).max().unwrap_or(1).max(1);
+        for (dow, secs) in &by_weekday {
+            let name = day_names.get(*dow as usize).unwrap_or(&"???");
+            let h = secs / 3600;
+            let m = (secs % 3600) / 60;
+            let bar_len = (*secs as f64 / max_secs as f64 * 20.0) as usize;
+            let bar = "\u{2588}".repeat(bar_len);
+            println!("    {}  {:>2}h {:>2}m  {}", name, h, m, bar.cyan());
+        }
+    }
+
+    // Recent completions
+    if !done_tasks.is_empty() {
+        println!();
+        println!("{}", "  Recent completions:".bold());
+        for (title, secs) in &done_tasks {
+            let h = secs / 3600;
+            let m = (secs % 3600) / 60;
+            println!("    {:<32} {:>2}h {:>2}m", title, h, m);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_sync(db: &Database, args: dodo::cli::SyncArgs) -> Result<()> {
     let config = Config::load()?;
     match args.action {
+        Some(SyncAction::Now) => {
+            if !config.sync.is_ready() {
+                anyhow::bail!("Sync not configured. Run: dodo sync enable");
+            }
+            db.sync()?;
+            println!("Synced.");
+            return Ok(());
+        }
         None | Some(SyncAction::Status) => {
             if config.sync.enabled {
                 println!("Sync: {}", "enabled".green());

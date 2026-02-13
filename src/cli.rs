@@ -30,9 +30,9 @@ pub enum Commands {
     #[command(visible_alias = "s")]
     Start(StartArgs),
 
-    /// Complete the running task
+    /// Complete a task (default: running task)
     #[command(visible_alias = "d")]
-    Done,
+    Done(DoneArgs),
 
     /// Show running task status
     #[command(visible_alias = "st")]
@@ -41,6 +41,10 @@ pub enum Commands {
     /// Delete a task
     #[command(visible_alias = "rm")]
     Remove(RemoveArgs),
+
+    /// Move a task to a different area
+    #[command(visible_alias = "mv")]
+    Move(MoveArgs),
 
     /// Edit a task's metadata
     #[command(visible_alias = "e")]
@@ -53,6 +57,14 @@ pub enum Commands {
     /// Manage recurring tasks
     #[command(visible_alias = "rec")]
     Recurring(RecurringArgs),
+
+    /// View or update configuration
+    #[command(visible_alias = "cfg")]
+    Config(ConfigArgs),
+
+    /// Show productivity reports
+    #[command(visible_alias = "rp")]
+    Report(ReportArgs),
 
     /// Manage Turso sync
     Sync(SyncArgs),
@@ -102,13 +114,17 @@ pub struct AddArgs {
 
 #[derive(Parser)]
 pub struct ListArgs {
-    /// Filters: area (today/week/long/done), +project, @context, #tag
+    /// Filters: area (today/week/long/done), +project, @context, #tag, !! (priority), ^<3d (deadline), =<1w (scheduled)
     #[arg(trailing_var_arg = true)]
     pub args: Vec<String>,
 
     /// Sort order
     #[arg(long, value_enum, default_value = "created")]
     pub sort: SortBy,
+
+    /// Sort in descending order
+    #[arg(long)]
+    pub desc: bool,
 
     /// Filter by project
     #[arg(short, long)]
@@ -132,6 +148,28 @@ pub struct StartArgs {
     /// Task to start (numeric ID or fuzzy text). No args = pause running task.
     #[arg(trailing_var_arg = true)]
     pub task: Vec<String>,
+}
+
+#[derive(Parser)]
+pub struct DoneArgs {
+    /// Task to complete (numeric ID or fuzzy text). Omit to complete running task.
+    #[arg(trailing_var_arg = true)]
+    pub task: Vec<String>,
+
+    /// Reopen a completed task
+    #[arg(long)]
+    pub undo: bool,
+}
+
+#[derive(Parser)]
+pub struct MoveArgs {
+    /// Task to move (numeric ID or fuzzy text)
+    #[arg(trailing_var_arg = true, required = true)]
+    pub task: Vec<String>,
+
+    /// Target area
+    #[arg(long, value_enum)]
+    pub to: Area,
 }
 
 #[derive(Parser)]
@@ -165,6 +203,14 @@ pub struct NoteArgs {
     /// Show notes without prompting for new input
     #[arg(long)]
     pub show: bool,
+
+    /// Delete a specific note line (1-indexed)
+    #[arg(long)]
+    pub delete_line: Option<usize>,
+
+    /// Edit a specific note line (1-indexed, replacement read from stdin)
+    #[arg(long)]
+    pub edit_line: Option<usize>,
 }
 
 #[derive(Parser)]
@@ -232,6 +278,8 @@ pub enum SyncAction {
     Enable,
     /// Disable Turso sync
     Disable,
+    /// Trigger a sync now
+    Now,
 }
 
 #[derive(Parser)]
@@ -262,5 +310,92 @@ pub struct BackupDeleteArgs {
     /// Backup name to delete
     #[arg(required = true)]
     pub name: String,
+}
+
+#[derive(Parser)]
+pub struct ConfigArgs {
+    #[command(subcommand)]
+    pub action: Option<ConfigAction>,
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Show current configuration
+    Show,
+    /// Print config file path
+    Path,
+}
+
+#[derive(Parser)]
+pub struct ReportArgs {
+    /// Time range
+    #[arg(value_enum, default_value = "month")]
+    pub range: ReportRange,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, ValueEnum)]
+pub enum ReportRange {
+    Day,
+    Week,
+    Month,
+    Year,
+    All,
+}
+
+impl ReportRange {
+    pub fn label(self) -> &'static str {
+        match self {
+            ReportRange::Day => "DAY",
+            ReportRange::Week => "WEEK",
+            ReportRange::Month => "MONTH",
+            ReportRange::Year => "YEAR",
+            ReportRange::All => "ALL",
+        }
+    }
+
+    pub fn date_range(self) -> (String, String) {
+        let now = chrono::Local::now();
+        let today = now.date_naive();
+        let to = (today + chrono::Duration::days(1))
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Utc)
+            .unwrap()
+            .to_rfc3339();
+        let from_date = match self {
+            ReportRange::Day => today,
+            ReportRange::Week => today - chrono::Duration::days(7),
+            ReportRange::Month => today - chrono::Duration::days(30),
+            ReportRange::Year => today - chrono::Duration::days(365),
+            ReportRange::All => chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+        };
+        let from = from_date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(chrono::Utc)
+            .unwrap()
+            .to_rfc3339();
+        (from, to)
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            ReportRange::Day => ReportRange::Week,
+            ReportRange::Week => ReportRange::Month,
+            ReportRange::Month => ReportRange::Year,
+            ReportRange::Year => ReportRange::All,
+            ReportRange::All => ReportRange::Day,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            ReportRange::Day => ReportRange::All,
+            ReportRange::Week => ReportRange::Day,
+            ReportRange::Month => ReportRange::Week,
+            ReportRange::Year => ReportRange::Month,
+            ReportRange::All => ReportRange::Year,
+        }
+    }
 }
 

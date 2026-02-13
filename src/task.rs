@@ -231,6 +231,18 @@ impl fmt::Display for Task {
 }
 
 impl Area {
+    /// Map an area to a scheduled date for move operations.
+    /// Used by both CLI `move` command and TUI move actions.
+    pub fn to_scheduled_date(self) -> NaiveDate {
+        let today = Local::now().date_naive();
+        match self {
+            Area::Today => today,
+            Area::ThisWeek => today + chrono::Duration::days(1),
+            Area::LongTerm => today + chrono::Duration::days(8),
+            Area::Completed => today, // fallback, shouldn't be used for moves
+        }
+    }
+
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "long" | "longterm" => Some(Area::LongTerm),

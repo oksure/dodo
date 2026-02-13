@@ -347,6 +347,70 @@ fn parse_weekday_short(s: &str) -> Option<Weekday> {
     }
 }
 
+/// Task fields prepared from notation parsing with defaults applied.
+/// Shared between CLI and TUI add-task paths.
+#[derive(Debug)]
+pub struct PreparedTask {
+    pub title: String,
+    pub project: Option<String>,
+    pub context: Option<String>,
+    pub estimate_minutes: Option<i64>,
+    pub deadline: Option<NaiveDate>,
+    pub scheduled: Option<NaiveDate>,
+    pub tags: Option<String>,
+    pub priority: Option<i64>,
+    pub recurrence: Option<String>,
+}
+
+/// Parse raw input with notation, apply defaults (1h estimate, scheduled=today).
+/// Returns a PreparedTask with all fields resolved.
+pub fn prepare_task(raw_input: &str) -> PreparedTask {
+    let parsed = parse_notation(raw_input);
+    let title = if parsed.title.is_empty() {
+        raw_input.to_string()
+    } else {
+        parsed.title
+    };
+    let context = if !parsed.contexts.is_empty() {
+        Some(parsed.contexts.join(","))
+    } else {
+        None
+    };
+    let tags = if !parsed.tags.is_empty() {
+        Some(parsed.tags.join(","))
+    } else {
+        None
+    };
+    let estimate = parsed.estimate_minutes.or(Some(60));
+    let scheduled = parsed
+        .scheduled
+        .or_else(|| Some(Local::now().date_naive()));
+
+    PreparedTask {
+        title,
+        project: parsed.project,
+        context,
+        estimate_minutes: estimate,
+        deadline: parsed.deadline,
+        scheduled,
+        tags,
+        priority: parsed.priority,
+        recurrence: parsed.recurrence,
+    }
+}
+
+/// Parse a filter duration string like "3d", "2w", or a plain number (as days).
+/// Used by both CLI list filters and TUI search.
+pub fn parse_filter_days(s: &str) -> Option<i64> {
+    if let Some(num) = s.strip_suffix('d') {
+        num.parse::<i64>().ok()
+    } else if let Some(num) = s.strip_suffix('w') {
+        num.parse::<i64>().ok().map(|n| n * 7)
+    } else {
+        s.parse::<i64>().ok()
+    }
+}
+
 fn parse_relative_date(s: &str, today: NaiveDate) -> Option<NaiveDate> {
     let (negative, rest) = if let Some(stripped) = s.strip_prefix('-') {
         (true, stripped)

@@ -624,6 +624,38 @@ impl Database {
         })
     }
 
+    pub fn find_done_tasks(&self, query: &str) -> Result<Vec<Task>> {
+        self.rt.block_on(async {
+            let sql = format!(
+                "{} WHERE t.status = 'Done' AND COALESCE(t.is_template, 0) = 0 GROUP BY t.id",
+                Self::TASK_SELECT_WITH_ELAPSED
+            );
+            let mut rows = self.conn.query(&sql, ()).await?;
+            let mut tasks = Vec::new();
+            while let Some(row) = rows.next().await? {
+                tasks.push(row_to_task(&row)?);
+            }
+
+            let ranked = rank_matches(&tasks, query);
+            Ok(ranked.into_iter().cloned().collect())
+        })
+    }
+
+    pub fn resolve_done_task(&self, query: &str) -> Result<Task> {
+        if let Ok(num_id) = query.parse::<i64>() {
+            if let Some(task) = self.find_task_by_num_id(num_id)? {
+                if task.status == TaskStatus::Done {
+                    return Ok(task);
+                }
+            }
+        }
+        let tasks = self.find_done_tasks(query)?;
+        if let Some(best) = find_best_match(&tasks, query) {
+            return Ok(best.clone());
+        }
+        anyhow::bail!("No completed task found matching '{}'", query);
+    }
+
     pub fn start_timer(&self, query: &str) -> Result<(String, i64)> {
         // Pause any running task first
         self.pause_timer()?;

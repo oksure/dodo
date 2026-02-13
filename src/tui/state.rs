@@ -3,7 +3,7 @@ use ratatui::widgets::ListState;
 
 use dodo::cli::SortBy;
 use dodo::db::Database;
-use dodo::notation::{parse_date, parse_duration, parse_notation};
+use dodo::notation::{parse_date, parse_duration, parse_filter_days, prepare_task};
 use dodo::task::{Area, Task, TaskStatus};
 
 use super::constants::*;
@@ -116,71 +116,8 @@ pub(super) enum TuiTab {
     Backup,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum ReportRange {
-    Day,
-    Week,
-    Month,
-    Year,
-    All,
-}
-
-impl ReportRange {
-    pub(super) fn label(self) -> &'static str {
-        match self {
-            ReportRange::Day => "DAY",
-            ReportRange::Week => "WEEK",
-            ReportRange::Month => "MONTH",
-            ReportRange::Year => "YEAR",
-            ReportRange::All => "ALL",
-        }
-    }
-
-    pub(super) fn next(self) -> Self {
-        match self {
-            ReportRange::Day => ReportRange::Week,
-            ReportRange::Week => ReportRange::Month,
-            ReportRange::Month => ReportRange::Year,
-            ReportRange::Year => ReportRange::All,
-            ReportRange::All => ReportRange::Day,
-        }
-    }
-
-    pub(super) fn prev(self) -> Self {
-        match self {
-            ReportRange::Day => ReportRange::All,
-            ReportRange::Week => ReportRange::Day,
-            ReportRange::Month => ReportRange::Week,
-            ReportRange::Year => ReportRange::Month,
-            ReportRange::All => ReportRange::Year,
-        }
-    }
-
-    pub(super) fn date_range(self) -> (String, String) {
-        let now = chrono::Local::now();
-        let today = now.date_naive();
-        let to = (today + chrono::Duration::days(1))
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_local_timezone(chrono::Utc)
-            .unwrap()
-            .to_rfc3339();
-        let from_date = match self {
-            ReportRange::Day => today,
-            ReportRange::Week => today - chrono::Duration::days(7),
-            ReportRange::Month => today - chrono::Duration::days(30),
-            ReportRange::Year => today - chrono::Duration::days(365),
-            ReportRange::All => chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
-        };
-        let from = from_date
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_local_timezone(chrono::Utc)
-            .unwrap()
-            .to_rfc3339();
-        (from, to)
-    }
-}
+// ReportRange imported from dodo::cli, re-exported for draw.rs
+pub(super) use dodo::cli::ReportRange;
 
 pub(super) struct ReportData {
     pub(super) tasks_done: i64,
@@ -587,37 +524,17 @@ impl<'a> App<'a> {
 
     pub(super) fn confirm_add_task(&mut self) -> Result<()> {
         if !self.add_input.is_empty() {
-            let parsed = parse_notation(&self.add_input);
-            let title = if parsed.title.is_empty() {
-                self.add_input.clone()
-            } else {
-                parsed.title
-            };
-            let context = if !parsed.contexts.is_empty() {
-                Some(parsed.contexts.join(","))
-            } else {
-                None
-            };
-            let tags = if !parsed.tags.is_empty() {
-                Some(parsed.tags.join(","))
-            } else {
-                None
-            };
-            let estimate = parsed.estimate_minutes.or(Some(60));
-            let scheduled = parsed
-                .scheduled
-                .or_else(|| Some(chrono::Local::now().date_naive()));
-
+            let prep = prepare_task(&self.add_input);
             self.db.add_task(
-                &title,
+                &prep.title,
                 Area::Today,
-                parsed.project,
-                context,
-                estimate,
-                parsed.deadline,
-                scheduled,
-                tags,
-                parsed.priority,
+                prep.project,
+                prep.context,
+                prep.estimate_minutes,
+                prep.deadline,
+                prep.scheduled,
+                prep.tags,
+                prep.priority,
             )?;
             self.refresh_all()?;
         }
@@ -656,13 +573,12 @@ impl<'a> App<'a> {
 
     pub(super) fn confirm_move_task(&mut self) -> Result<()> {
         if let Some(ref task_id) = self.move_task_id {
-            let today = chrono::Local::now().date_naive();
-            let date = match self.move_target {
-                0 => today + chrono::Duration::days(8), // LONG TERM
-                1 => today + chrono::Duration::days(1), // THIS WEEK (tomorrow)
-                _ => today,                             // TODAY
+            let area = match self.move_target {
+                0 => Area::LongTerm,
+                1 => Area::ThisWeek,
+                _ => Area::Today,
             };
-            self.db.update_task_scheduled(task_id, date)?;
+            self.db.update_task_scheduled(task_id, area.to_scheduled_date())?;
             self.refresh_all()?;
         }
         self.mode = AppMode::Normal;
@@ -682,13 +598,12 @@ impl<'a> App<'a> {
                 return Ok(());
             }
             let task_id = task.id.clone();
-            let today = chrono::Local::now().date_naive();
-            let date = match target {
-                0 => today + chrono::Duration::days(8),
-                1 => today + chrono::Duration::days(1),
-                _ => today,
+            let area = match target {
+                0 => Area::LongTerm,
+                1 => Area::ThisWeek,
+                _ => Area::Today,
             };
-            self.db.update_task_scheduled(&task_id, date)?;
+            self.db.update_task_scheduled(&task_id, area.to_scheduled_date())?;
             self.refresh_all()?;
             self.active_pane = target;
             if let Some(pos) = self.panes[target].tasks.iter().position(|t| t.id == task_id) {

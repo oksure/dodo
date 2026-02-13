@@ -14,12 +14,12 @@ cargo test
 
 - `src/lib.rs` — library crate root, re-exports all modules
 - `src/main.rs` — binary entry point with `cmd_*` handler functions per command, output formatting
-- `src/cli.rs` — clap command/argument definitions; re-exports `Area` from `task.rs`
+- `src/cli.rs` — clap command/argument definitions; re-exports `Area` from `task.rs`; `ReportRange` enum (shared between CLI and TUI)
 - `src/db.rs` — SQLite database (libsql), migrations, all queries, session lifecycle
-- `src/task.rs` — `Task` struct, `Area` enum (single source of truth, with `ValueEnum`), `TaskStatus` enum, `Display` impl
+- `src/task.rs` — `Task` struct, `Area` enum (single source of truth, with `ValueEnum`, `to_scheduled_date()`), `TaskStatus` enum, `Display` impl
 - `src/session.rs` — `Session` struct with `elapsed_seconds()`, `stop()`, `is_running()`
 - `src/fuzzy.rs` — fuzzy matching with scored ranking (`score()`, `find_best_match()`, `rank_matches()`)
-- `src/notation.rs` — inline notation parser (`parse_notation()`, `parse_duration()`, `parse_date()`)
+- `src/notation.rs` — inline notation parser (`parse_notation()`, `parse_duration()`, `parse_date()`, `prepare_task()`, `parse_filter_days()`)
 - `src/config.rs` — config file parsing (`~/.config/dodo/config.toml`) for sync and backup settings
 - `src/backup.rs` — S3-compatible backup operations (create, list, restore, delete, prune, age check)
 - `src/tui/` — ratatui terminal UI (binary-only, not in lib), split into modules:
@@ -38,7 +38,7 @@ cargo test
 ## Key Patterns
 
 - **Lib/bin split**: `src/lib.rs` exposes `backup`, `cli`, `config`, `db`, `fuzzy`, `notation`, `session`, `task` as public modules. `src/main.rs` is the binary that also owns `tui/` (since it depends on ratatui/crossterm). Integration tests import via `dodo::`.
-- **main.rs command dispatch**: `main()` is a clean dispatch table calling `cmd_add()`, `cmd_list()`, `cmd_start()`, `cmd_done()`, `cmd_status()`, `cmd_remove()`, `cmd_edit()`, `cmd_note()`, `cmd_recurring()`, `cmd_sync()`, `cmd_backup()`. The `DONE_DISPLAY_LIMIT` constant controls how many done tasks `cmd_list` shows.
+- **main.rs command dispatch**: `main()` is a clean dispatch table calling `cmd_add()`, `cmd_list()`, `cmd_start()`, `cmd_done()`, `cmd_status()`, `cmd_remove()`, `cmd_move()`, `cmd_edit()`, `cmd_note()`, `cmd_recurring()`, `cmd_config()`, `cmd_report()`, `cmd_sync()`, `cmd_backup()`. The `DONE_DISPLAY_LIMIT` constant controls how many done tasks `cmd_list` shows.
 - **Area enum**: Single definition in `task.rs` with `#[derive(ValueEnum)]` for clap integration. `cli.rs` re-exports it via `pub use crate::task::Area`. No more duplicate enum or `CliArea` alias.
 - **TUI module structure**: `src/tui/` uses `pub(super)` visibility for all internal items. Only `run_tui()` in `mod.rs` is `pub`. Dependency graph (no cycles): `mod.rs → state, event`; `event → state, draw`; `draw → state, constants, format`; `state → constants, format`.
 - **Inline notation**: `notation.rs::parse_notation()` extracts 7 token types from input: `+project`, `@context` (multiple), `#tag` (multiple), `~duration`, `^deadline`, `=scheduled`, `!`–`!!!!` priority. Remaining text becomes the title. Single-value tokens use last-wins; multi-value tokens collect all. Tokens must be preceded by whitespace (e.g., `email@test` is not parsed).
@@ -53,6 +53,14 @@ cargo test
 - **Default command**: Running `dodo` with no subcommand launches the TUI. `dodo help` / `dodo h` shows CLI help.
 - **Date-based area grouping**: `Task::effective_area()` computes area from the `scheduled` date only (deadline is informational, not used for pane placement): ≤today=Today, ≤7days=ThisWeek, >7days=LongTerm, no scheduled date=Today, Done=Completed. `area_str()` delegates to `effective_area()`.
 - **Default task values**: New tasks default to 1h estimate (`or(Some(60))`) and `scheduled = today` if no dates specified.
+- **Done target + undo**: `dodo d` completes running task (default). `dodo d <query>` completes specific task by ID/fuzzy. `dodo d --undo <query>` reopens a completed task. `resolve_done_task()` in db.rs handles finding completed tasks.
+- **Move command**: `dodo mv --to <area> <query>` moves a task to TODAY/THIS WEEK/LONG TERM by adjusting its scheduled date. Uses `Area::to_scheduled_date()` shared helper (also used by TUI).
+- **Report command**: `dodo rp [day|week|month|year|all]` shows productivity reports. `ReportRange` enum lives in cli.rs (shared with TUI). Calls all 7 `db.report_*()` methods.
+- **Config command**: `dodo cfg show` prints current config as TOML, `dodo cfg path` prints config file path.
+- **Sync now**: `dodo sync now` triggers an immediate sync (in addition to existing status/enable/disable).
+- **List filters**: `dodo ls !! ^<3d =<1w --desc` supports priority minimum, deadline/scheduled range filters, and descending sort. `parse_filter_days()` moved to notation.rs (shared with TUI).
+- **Note line ops**: `dodo note --delete-line N <task>` removes a note line, `dodo note --edit-line N <task>` replaces one. `dodo note --show` numbers lines for reference.
+- **Shared task defaults**: `prepare_task()` in notation.rs centralizes notation parsing + defaults (1h estimate, scheduled=today). Used by `cmd_add`, `cmd_recurring Add`, TUI `confirm_add_task`, TUI `RecAddTemplate`.
 - **Start/stop toggle**: `dodo s` with no args pauses the running task. No separate `pause` command. In TUI, `s` toggles: if task is Running, pauses it; otherwise starts it.
 - **CLI grouped list**: `dodo ls` with no area shows all four groups (TODAY, THIS WEEK, LONG TERM, DONE) with section headers and counts. DONE is limited to 5 tasks. Specifying an area (`dodo ls today`) shows just that area. `--project` flag filters by project.
 - **Display format**: Tasks render as `[num_id] [status_icon] AREA title [*] !priority +project @context #tag ~estimate ^deadline =scheduled (elapsed/estimate) [running]`. The `*` appears after the title if the task has notes.
@@ -93,12 +101,12 @@ cargo test
 
 ## Testing
 
-- `cargo test` runs all 160 tests
+- `cargo test` runs all 169 tests
 - `src/backup.rs` (inline) — 25 unit tests for format_size, format_age, parse_backup_timestamp
 - `tests/config_test.rs` — 22 unit tests for config parsing, TOML deserialization, defaults, is_ready checks, serialize/deserialize roundtrip
 - `tests/fuzzy_test.rs` — 8 unit tests for fuzzy scoring (exact, prefix, substring, word-level, ranking)
 - `tests/notation_test.rs` — 61 unit tests for notation parsing (duration, dates, token extraction, title cleanup, edge cases, recurrence patterns, next occurrence computation)
-- `tests/workflow_test.rs` — 44 integration tests using `Database::in_memory()`, covering: simple daily list, Pomodoro start/pause/resume, GTD four horizons with contexts and projects, Eisenhower quadrants, freelance multi-project time tracking, numeric ID selection, fuzzy matching integration, academic multi-area workflow, session lifecycle, estimates, elapsed time, notes, edit command, multiple contexts, tags, deadlines, priority, recurring template CRUD, instance generation, pause/resume, history, update_notes_by_id, export/import roundtrip
+- `tests/workflow_test.rs` — 53 integration tests using `Database::in_memory()`, covering: simple daily list, Pomodoro start/pause/resume, GTD four horizons with contexts and projects, Eisenhower quadrants, freelance multi-project time tracking, numeric ID selection, fuzzy matching integration, academic multi-area workflow, session lifecycle, estimates, elapsed time, notes, edit command, multiple contexts, tags, deadlines, priority, recurring template CRUD, instance generation, pause/resume, history, update_notes_by_id, export/import roundtrip, done target/undo, move between areas, note line editing, reports
 
 ## Conventions
 

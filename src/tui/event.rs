@@ -3,7 +3,7 @@ use crossterm::event::{self, Event, KeyCode};
 use ratatui::backend::Backend;
 use ratatui::Terminal;
 
-use dodo::notation::parse_notation;
+use dodo::notation::prepare_task;
 use dodo::task::TaskStatus;
 
 use super::constants::*;
@@ -263,38 +263,18 @@ where
                         }
                         KeyCode::Enter => {
                             if !app.rec_add_input.is_empty() {
-                                let parsed = parse_notation(&app.rec_add_input);
-                                if let Some(ref recurrence) = parsed.recurrence {
-                                    let title = if parsed.title.is_empty() {
-                                        app.rec_add_input.clone()
-                                    } else {
-                                        parsed.title.clone()
-                                    };
-                                    let context = if !parsed.contexts.is_empty() {
-                                        Some(parsed.contexts.join(","))
-                                    } else {
-                                        None
-                                    };
-                                    let tags = if !parsed.tags.is_empty() {
-                                        Some(parsed.tags.join(","))
-                                    } else {
-                                        None
-                                    };
-                                    let estimate = parsed.estimate_minutes.or(Some(60));
-                                    let scheduled = parsed
-                                        .scheduled
-                                        .or_else(|| Some(chrono::Local::now().date_naive()));
-
+                                let prep = prepare_task(&app.rec_add_input);
+                                if let Some(ref recurrence) = prep.recurrence {
                                     let _ = app.db.add_template(
-                                        &title,
+                                        &prep.title,
                                         recurrence,
-                                        parsed.project,
-                                        context,
-                                        estimate,
-                                        parsed.deadline,
-                                        scheduled,
-                                        tags,
-                                        parsed.priority,
+                                        prep.project,
+                                        prep.context,
+                                        prep.estimate_minutes,
+                                        prep.deadline,
+                                        prep.scheduled,
+                                        prep.tags,
+                                        prep.priority,
                                     );
                                     let _ = app.refresh_templates();
                                     let _ = app.refresh_all();

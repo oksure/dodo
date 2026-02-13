@@ -13,15 +13,7 @@ pub(super) fn format_estimate_tui(minutes: i64) -> String {
     }
 }
 
-pub(super) fn parse_filter_days(s: &str) -> Option<i64> {
-    if let Some(num) = s.strip_suffix('d') {
-        num.parse::<i64>().ok()
-    } else if let Some(num) = s.strip_suffix('w') {
-        num.parse::<i64>().ok().map(|n| n * 7)
-    } else {
-        s.parse::<i64>().ok()
-    }
-}
+// parse_filter_days moved to dodo::notation
 
 pub(super) fn sort_tasks(a: &Task, b: &Task, sort: SortBy, ascending: bool) -> std::cmp::Ordering {
     let ord = match sort {

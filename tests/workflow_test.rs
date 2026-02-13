@@ -850,3 +850,152 @@ fn export_import_roundtrip_preserves_all_data() {
         assert_eq!(imported.manual_edit, orig.manual_edit);
     }
 }
+
+// ── Phase 1: Done target + undo ─────────────────────────────────────
+
+#[test]
+fn done_specific_task_by_id() {
+    let db = test_db();
+    db.add_task("Task A", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task("Task B", Area::Today, None, None, None, None, None, None, None).unwrap();
+
+    // Complete task 2 by numeric ID (not running)
+    db.complete_task_by_id(
+        &db.find_task_by_num_id(2).unwrap().unwrap().id
+    ).unwrap();
+
+    let task = db.find_task_by_num_id(2).unwrap().unwrap();
+    assert_eq!(task.status, TaskStatus::Done);
+
+    // Task 1 should still be pending
+    let task1 = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(task1.status, TaskStatus::Pending);
+}
+
+#[test]
+fn done_specific_task_by_fuzzy() {
+    let db = test_db();
+    db.add_task("Fix login bug", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task("Update docs", Area::Today, None, None, None, None, None, None, None).unwrap();
+
+    let task = db.resolve_task("login").unwrap();
+    db.complete_task_by_id(&task.id).unwrap();
+
+    let task = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(task.status, TaskStatus::Done);
+    assert_eq!(task.title, "Fix login bug");
+}
+
+#[test]
+fn undone_reopens_task() {
+    let db = test_db();
+    db.add_task("Write tests", Area::Today, None, None, None, None, None, None, None).unwrap();
+
+    // Complete it
+    let task = db.resolve_task("1").unwrap();
+    db.complete_task_by_id(&task.id).unwrap();
+    assert_eq!(db.find_task_by_num_id(1).unwrap().unwrap().status, TaskStatus::Done);
+
+    // Undo it
+    let done_task = db.resolve_done_task("1").unwrap();
+    db.uncomplete_task_by_id(&done_task.id).unwrap();
+    assert_eq!(db.find_task_by_num_id(1).unwrap().unwrap().status, TaskStatus::Pending);
+}
+
+// ── Phase 2: Move task between areas ────────────────────────────────
+
+#[test]
+fn move_task_to_week() {
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_task("Weekly review", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+
+    let task = db.resolve_task("1").unwrap();
+    let date = dodo::task::Area::ThisWeek.to_scheduled_date();
+    db.update_task_scheduled(&task.id, date).unwrap();
+
+    let task = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(task.effective_area(), Area::ThisWeek);
+}
+
+#[test]
+fn move_task_to_today() {
+    let db = test_db();
+    let future = chrono::Local::now().date_naive() + chrono::Duration::days(10);
+    db.add_task("Long term goal", Area::Today, None, None, None, None, Some(future), None, None).unwrap();
+
+    // Should be in LongTerm initially
+    let task = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(task.effective_area(), Area::LongTerm);
+
+    // Move to Today
+    let date = dodo::task::Area::Today.to_scheduled_date();
+    db.update_task_scheduled(&task.id, date).unwrap();
+
+    let task = db.find_task_by_num_id(1).unwrap().unwrap();
+    assert_eq!(task.effective_area(), Area::Today);
+}
+
+// ── Phase 3: Reports ────────────────────────────────────────────────
+
+#[test]
+fn report_empty_range() {
+    let db = test_db();
+    let range = dodo::cli::ReportRange::Month;
+    let (from, to) = range.date_range();
+
+    assert_eq!(db.report_tasks_done(&from, &to).unwrap(), 0);
+    assert_eq!(db.report_total_seconds(&from, &to).unwrap(), 0);
+    assert_eq!(db.report_active_days(&from, &to).unwrap(), 0);
+    assert!(db.report_by_project(&from, &to).unwrap().is_empty());
+}
+
+#[test]
+fn note_delete_line() {
+    let db = test_db();
+    db.add_task("Note task", Area::Today, None, None, None, None, None, None, None).unwrap();
+    let task = db.resolve_task("1").unwrap();
+    db.update_notes_by_id(&task.id, "line one\nline two\nline three").unwrap();
+
+    // Delete line 2
+    let notes = db.get_task_notes_by_id(&task.id).unwrap().unwrap();
+    let mut lines: Vec<&str> = notes.lines().collect();
+    lines.remove(1); // 0-indexed
+    db.update_notes_by_id(&task.id, &lines.join("\n")).unwrap();
+
+    let notes = db.get_task_notes_by_id(&task.id).unwrap().unwrap();
+    assert_eq!(notes, "line one\nline three");
+}
+
+#[test]
+fn note_edit_line() {
+    let db = test_db();
+    db.add_task("Note task", Area::Today, None, None, None, None, None, None, None).unwrap();
+    let task = db.resolve_task("1").unwrap();
+    db.update_notes_by_id(&task.id, "line one\nline two\nline three").unwrap();
+
+    // Edit line 2
+    let notes = db.get_task_notes_by_id(&task.id).unwrap().unwrap();
+    let mut lines: Vec<String> = notes.lines().map(|l| l.to_string()).collect();
+    lines[1] = "line TWO updated".to_string();
+    db.update_notes_by_id(&task.id, &lines.join("\n")).unwrap();
+
+    let notes = db.get_task_notes_by_id(&task.id).unwrap().unwrap();
+    assert_eq!(notes, "line one\nline TWO updated\nline three");
+}
+
+#[test]
+fn report_with_data() {
+    let db = test_db();
+    db.add_task("Report task", Area::Today, Some("backend".into()), None, None, None, None, None, None).unwrap();
+    db.start_timer("1").unwrap();
+    db.complete_task().unwrap();
+
+    let range = dodo::cli::ReportRange::All;
+    let (from, to) = range.date_range();
+
+    assert_eq!(db.report_tasks_done(&from, &to).unwrap(), 1);
+    let done = db.report_done_tasks(&from, &to, 10).unwrap();
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].0, "Report task");
+}
