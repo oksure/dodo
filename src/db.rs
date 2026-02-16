@@ -202,6 +202,15 @@ impl Database {
     pub fn merge_remote_data(&self, tasks: &[Task], sessions: &[Session]) -> Result<()> {
         self.rt.block_on(async {
             for remote_task in tasks {
+                // Skip tombstoned tasks (locally deleted, don't resurrect)
+                let mut del_rows = self.conn.query(
+                    "SELECT 1 FROM deleted_tasks WHERE id = ?1",
+                    params![remote_task.id.clone()],
+                ).await?;
+                if del_rows.next().await?.is_some() {
+                    continue;
+                }
+
                 // Check if task exists locally
                 let mut rows = self.conn.query(
                     "SELECT id, modified_at, created, num_id FROM tasks WHERE id = ?1",
@@ -464,6 +473,9 @@ impl Database {
             sync_database.merge_remote_data(&local_tasks, &local_sessions)?;
         }
 
+        // 6b. Propagate tombstones: delete locally-deleted tasks from sync DB
+        local_db.propagate_tombstones(&sync_database)?;
+
         // 7. Push to Turso
         sync_database.rt.block_on(async {
             sync_database.db.sync().await.context("Failed to push to Turso")?;
@@ -517,6 +529,28 @@ impl Database {
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
         result
+    }
+
+    /// Delete tombstoned tasks from another database (used during sync to propagate deletes).
+    fn propagate_tombstones(&self, target: &Database) -> Result<()> {
+        self.rt.block_on(async {
+            let mut rows = self.conn.query("SELECT id FROM deleted_tasks", ()).await?;
+            let mut ids = Vec::new();
+            while let Some(row) = rows.next().await? {
+                ids.push(val_string(&row, 0)?);
+            }
+            Ok::<Vec<String>, anyhow::Error>(ids)
+        })?.into_iter().try_for_each(|id| {
+            target.rt.block_on(async {
+                target.conn.execute(
+                    "DELETE FROM sessions WHERE task_id = ?1", params![id.clone()],
+                ).await?;
+                target.conn.execute(
+                    "DELETE FROM tasks WHERE id = ?1", params![id.clone()],
+                ).await?;
+                Ok::<(), anyhow::Error>(())
+            })
+        })
     }
 
     /// Export all tasks and sessions from the database.
@@ -687,6 +721,15 @@ impl Database {
             if self.conn.prepare("SELECT template_id FROM tasks LIMIT 0").await.is_err() {
                 self.conn.execute("ALTER TABLE tasks ADD COLUMN template_id TEXT", ()).await?;
             }
+
+            // Tombstone table for sync (tracks deleted task IDs so sync doesn't resurrect them)
+            self.conn.execute(
+                "CREATE TABLE IF NOT EXISTS deleted_tasks (
+                    id TEXT PRIMARY KEY,
+                    deleted_at TEXT NOT NULL
+                )",
+                (),
+            ).await?;
 
             // Indexes
             self.conn.execute(
@@ -1257,6 +1300,12 @@ impl Database {
 
     pub fn delete_task_by_id(&self, task_id: &str) -> Result<()> {
         self.rt.block_on(async {
+            // Record tombstone so sync doesn't resurrect this task
+            let now = Utc::now().to_rfc3339();
+            self.conn.execute(
+                "INSERT OR IGNORE INTO deleted_tasks (id, deleted_at) VALUES (?1, ?2)",
+                params![task_id, now.clone()],
+            ).await?;
             self.conn.execute(
                 "DELETE FROM sessions WHERE task_id = ?1", params![task_id],
             ).await?;
@@ -1638,6 +1687,17 @@ impl Database {
 
     pub fn delete_template(&self, template_id: &str) -> Result<()> {
         self.rt.block_on(async {
+            // Record tombstones for template and its active instances
+            let now = Utc::now().to_rfc3339();
+            self.conn.execute(
+                "INSERT OR IGNORE INTO deleted_tasks (id, deleted_at)
+                 SELECT id, ?2 FROM tasks WHERE template_id = ?1 AND status != 'Done'",
+                params![template_id, now.clone()],
+            ).await?;
+            self.conn.execute(
+                "INSERT OR IGNORE INTO deleted_tasks (id, deleted_at) VALUES (?1, ?2)",
+                params![template_id, now.clone()],
+            ).await?;
             self.conn.execute(
                 "DELETE FROM sessions WHERE task_id IN (SELECT id FROM tasks WHERE template_id = ?1 AND status != 'Done')",
                 params![template_id],

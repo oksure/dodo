@@ -14,6 +14,8 @@ mod draw;
 mod event;
 mod format;
 mod state;
+#[cfg(test)]
+mod tests;
 
 use event::run_app;
 use state::App;

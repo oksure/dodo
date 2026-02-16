@@ -22,7 +22,7 @@ pub(super) enum SyncStatus {
     Error(String),              // last sync failed
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum TasksView {
     Panes,
     Daily,

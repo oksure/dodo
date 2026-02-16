@@ -1168,3 +1168,135 @@ fn merge_sessions_ignore_duplicates() {
     assert_eq!(matching.len(), 1);
     assert_eq!(matching[0].duration, 300);
 }
+
+// ── Tombstone: deleted tasks not resurrected by sync ──────────────────
+
+#[test]
+fn deleted_task_not_resurrected_by_merge() {
+    use chrono::Utc;
+    use dodo::task::Task;
+
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+    db.add_task("Will be deleted", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+
+    let task = db.find_task_by_num_id(1).unwrap().unwrap();
+    let task_id = task.id.clone();
+
+    // Delete the task (records tombstone)
+    db.delete_task_by_id(&task_id).unwrap();
+    assert!(db.find_task_by_num_id(1).unwrap().is_none());
+
+    // Simulate sync: remote still has the task
+    let remote_task = Task {
+        id: task_id.clone(),
+        num_id: Some(1),
+        title: "Will be deleted".to_string(),
+        area: Area::Today,
+        project: None,
+        context: None,
+        status: TaskStatus::Pending,
+        created: Utc::now(),
+        completed: None,
+        estimate_minutes: Some(60),
+        elapsed_seconds: None,
+        deadline: None,
+        scheduled: Some(today),
+        tags: None,
+        notes: None,
+        priority: None,
+        modified_at: Some(Utc::now()),
+        recurrence: None,
+        is_template: false,
+        template_id: None,
+    };
+
+    // Merge should skip the tombstoned task
+    db.merge_remote_data(&[remote_task], &[]).unwrap();
+
+    // Task should NOT come back
+    assert!(db.find_task_by_num_id(1).unwrap().is_none());
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all.len(), 0);
+}
+
+#[test]
+fn deleted_template_instances_not_resurrected_by_merge() {
+    use chrono::Utc;
+    use dodo::task::Task;
+
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+
+    // Create a recurring template
+    db.add_template("Daily standup", "daily", Some("work".into()), None,
+        Some(60), None, Some(today), None, None).unwrap();
+
+    let templates = db.list_templates().unwrap();
+    assert_eq!(templates.len(), 1);
+    let template_id = templates[0].id.clone();
+
+    // Get the instance that was auto-created
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    let instance = all.iter().find(|t| t.template_id.as_deref() == Some(&template_id)).unwrap();
+    let instance_id = instance.id.clone();
+
+    // Delete the template (records tombstones for template + instances)
+    db.delete_template(&template_id).unwrap();
+    assert!(db.list_templates().unwrap().is_empty());
+
+    // Simulate sync: remote still has both
+    let remote_template = Task {
+        id: template_id.clone(),
+        num_id: Some(1),
+        title: "Daily standup".to_string(),
+        area: Area::Today,
+        project: Some("work".to_string()),
+        context: None,
+        status: TaskStatus::Pending,
+        created: Utc::now(),
+        completed: None,
+        estimate_minutes: Some(60),
+        elapsed_seconds: None,
+        deadline: None,
+        scheduled: Some(today),
+        tags: None,
+        notes: None,
+        priority: None,
+        modified_at: Some(Utc::now()),
+        recurrence: Some("*daily".to_string()),
+        is_template: true,
+        template_id: None,
+    };
+
+    let remote_instance = Task {
+        id: instance_id.clone(),
+        num_id: Some(2),
+        title: "Daily standup".to_string(),
+        area: Area::Today,
+        project: Some("work".to_string()),
+        context: None,
+        status: TaskStatus::Pending,
+        created: Utc::now(),
+        completed: None,
+        estimate_minutes: Some(60),
+        elapsed_seconds: None,
+        deadline: None,
+        scheduled: Some(today),
+        tags: None,
+        notes: None,
+        priority: None,
+        modified_at: Some(Utc::now()),
+        recurrence: None,
+        is_template: false,
+        template_id: Some(template_id.clone()),
+    };
+
+    // Merge should skip both tombstoned tasks
+    db.merge_remote_data(&[remote_template, remote_instance], &[]).unwrap();
+
+    // Neither should come back
+    assert!(db.list_templates().unwrap().is_empty());
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all.len(), 0);
+}

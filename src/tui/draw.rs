@@ -17,7 +17,7 @@ use super::constants::*;
 use super::format::*;
 use super::state::*;
 
-pub(super) fn draw_ui(f: &mut Frame, app: &App) {
+pub(super) fn draw_ui(f: &mut Frame, app: &mut App) {
     let search_height = if app.tab == TuiTab::Tasks { 3 } else { 0 };
     let view_selector_height = if app.tab == TuiTab::Tasks { 2 } else { 0 };
     let outer = Layout::default()
@@ -722,7 +722,7 @@ pub(super) fn build_task_list_item(
 
 // ── Daily View ──────────────────────────────────────────────────────
 
-pub(super) fn draw_tasks_daily(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_tasks_daily(f: &mut Frame, app: &mut App, area: Rect) {
     let today = chrono::Local::now().date_naive();
 
     let items: Vec<ListItem> = app
@@ -780,15 +780,26 @@ pub(super) fn draw_tasks_daily(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(Style::default().add_modifier(Modifier::BOLD))
         .highlight_symbol("\u{258C} ");
 
+    // Symmetric scroll: keep cursor within a margin of the viewport edges
+    let height = area.height as usize;
+    let margin = 3usize.min(height / 4);
+    let cursor = app.daily_cursor;
+    if cursor < app.daily_scroll + margin {
+        app.daily_scroll = cursor.saturating_sub(margin);
+    }
+    if cursor + margin >= app.daily_scroll + height {
+        app.daily_scroll = (cursor + margin + 1).saturating_sub(height);
+    }
+
     let mut list_state = ListState::default();
-    list_state.select(Some(app.daily_cursor));
+    *list_state.offset_mut() = app.daily_scroll;
+    list_state.select(Some(cursor));
     f.render_stateful_widget(list, area, &mut list_state);
 
     // Scrollbar
-    let visible = area.height as usize;
-    if app.daily_entries.len() > visible {
+    if app.daily_entries.len() > height {
         let mut scrollbar_state =
-            ScrollbarState::new(app.daily_entries.len()).position(app.daily_cursor);
+            ScrollbarState::new(app.daily_entries.len()).position(cursor);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(FG_OVERLAY));
         f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);

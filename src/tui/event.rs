@@ -820,7 +820,7 @@ fn handle_panes_nav(app: &mut App, code: KeyCode, count: usize) {
     }
 }
 
-fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
+pub(super) fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
     match code {
         KeyCode::Char('j') | KeyCode::Down => {
             // Skip headers, move to next Task entry
@@ -834,10 +834,6 @@ fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
                 }
                 if next < app.daily_entries.len() {
                     app.daily_cursor = next;
-                    // Auto-scroll to keep cursor visible (simple centering)
-                    if app.daily_cursor > 5 {
-                        app.daily_scroll = app.daily_cursor.saturating_sub(3);
-                    }
                 }
             }
         }
@@ -856,10 +852,6 @@ fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
                 }
                 if matches!(app.daily_entries.get(prev), Some(DailyEntry::Task(_))) {
                     app.daily_cursor = prev;
-                    // Auto-scroll to keep cursor visible
-                    if app.daily_cursor > 5 {
-                        app.daily_scroll = app.daily_cursor.saturating_sub(3);
-                    }
                 } else {
                     app.mode = AppMode::Search;
                     return;
@@ -871,8 +863,6 @@ fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
             for i in (0..app.daily_entries.len()).rev() {
                 if matches!(app.daily_entries[i], DailyEntry::Task(_)) {
                     app.daily_cursor = i;
-                    // Auto-scroll to bottom
-                    app.daily_scroll = app.daily_cursor.saturating_sub(3);
                     break;
                 }
             }
