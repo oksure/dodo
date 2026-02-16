@@ -38,7 +38,11 @@ where
             if let Event::Key(key) = event::read()? {
                 match app.mode {
                     AppMode::Normal => match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                        KeyCode::Char('q') | KeyCode::Esc => {
+                            app.save_last_view();
+                            let _ = app.save_config();
+                            return Ok(());
+                        }
                         KeyCode::Char('t') => {
                             if app.tab == TuiTab::Tasks {
                                 // Already on Tasks tab: jump to today
@@ -61,22 +65,30 @@ where
                             } else {
                                 app.tab = TuiTab::Tasks;
                             }
+                            app.save_last_view();
+                            let _ = app.save_config();
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
                         KeyCode::Char('c') => {
+                            app.save_last_view();
+                            let _ = app.save_config();
                             app.tab = TuiTab::Recurring;
                             let _ = app.refresh_templates();
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
                         KeyCode::Char('r') => {
+                            app.save_last_view();
+                            let _ = app.save_config();
                             app.tab = TuiTab::Report;
                             let _ = app.refresh_report();
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
                         KeyCode::Char(',') => {
+                            app.save_last_view();
+                            let _ = app.save_config();
                             app.tab = TuiTab::Settings;
                             app.refresh_backups();
                             app.count_prefix = None;
@@ -85,18 +97,26 @@ where
                         KeyCode::Tab => {
                             match app.tab {
                                 TuiTab::Tasks => {
+                                    app.save_last_view();
+                                    let _ = app.save_config();
                                     app.tab = TuiTab::Recurring;
                                     let _ = app.refresh_templates();
                                 }
                                 TuiTab::Recurring => {
+                                    app.save_last_view();
+                                    let _ = app.save_config();
                                     app.tab = TuiTab::Report;
                                     let _ = app.refresh_report();
                                 }
                                 TuiTab::Report => {
+                                    app.save_last_view();
+                                    let _ = app.save_config();
                                     app.tab = TuiTab::Settings;
                                     app.refresh_backups();
                                 }
                                 TuiTab::Settings => {
+                                    app.save_last_view();
+                                    let _ = app.save_config();
                                     app.tab = TuiTab::Tasks;
                                 }
                             }
@@ -140,17 +160,23 @@ where
                                     app.pending_g = false;
                                     if key.code == KeyCode::Char('g') {
                                         match app.tasks_view {
-                                            TasksView::Panes => app.panes[app.active_pane].jump_to_first(),
+                                            TasksView::Panes => {
+                                                app.panes[app.active_pane].jump_to_first()
+                                            }
                                             TasksView::Daily => {
                                                 // Jump to first Task entry
-                                                for (i, entry) in app.daily_entries.iter().enumerate() {
+                                                for (i, entry) in
+                                                    app.daily_entries.iter().enumerate()
+                                                {
                                                     if matches!(entry, DailyEntry::Task(_)) {
                                                         app.daily_cursor = i;
                                                         break;
                                                     }
                                                 }
                                             }
-                                            TasksView::Weekly => app.weekly_panes[app.weekly_active].jump_to_first(),
+                                            TasksView::Weekly => {
+                                                app.weekly_panes[app.weekly_active].jump_to_first()
+                                            }
                                             TasksView::Calendar => {} // no-op for calendar
                                         }
                                         app.count_prefix = None;
@@ -225,7 +251,9 @@ where
                         KeyCode::Backspace => {
                             app.add_input.pop();
                         }
-                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('u')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             app.add_input.clear();
                         }
                         KeyCode::Char(c) => {
@@ -272,7 +300,25 @@ where
                             }
                         }
                         KeyCode::Enter => {
-                            app.enter_edit_field();
+                            // If input is empty, enter edit mode; otherwise save
+                            if app.edit_field_input.is_empty() {
+                                app.enter_edit_field();
+                            } else {
+                                let _ = app.save_edit_field();
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            // Only allow backspace if we're in edit mode (field has input)
+                            if !app.edit_field_input.is_empty() {
+                                app.edit_field_input.pop();
+                            } else {
+                                app.enter_edit_field();
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            // Start typing to enter edit mode
+                            app.edit_field_input.push(c);
+                            app.mode = AppMode::EditTaskField;
                         }
                         _ => {}
                     },
@@ -292,7 +338,9 @@ where
                         KeyCode::Backspace => {
                             app.edit_field_input.pop();
                         }
-                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('u')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             app.edit_field_input.clear();
                         }
                         KeyCode::Char(c) => {
@@ -311,7 +359,9 @@ where
                             app.search_input.pop();
                             let _ = app.refresh_all();
                         }
-                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('u')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             app.search_input.clear();
                             let _ = app.refresh_all();
                         }
@@ -349,7 +399,9 @@ where
                         KeyCode::Backspace => {
                             app.rec_add_input.pop();
                         }
-                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('u')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             app.rec_add_input.clear();
                         }
                         KeyCode::Char(c) => {
@@ -393,7 +445,9 @@ where
                                 KeyCode::Backspace => {
                                     app.edit_field_input.pop();
                                 }
-                                KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                                KeyCode::Char('u')
+                                    if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                                {
                                     app.edit_field_input.clear();
                                 }
                                 KeyCode::Char(c) => {
@@ -454,7 +508,8 @@ where
                             app.mode = AppMode::Normal;
                         }
                         KeyCode::Char('j') | KeyCode::Down => {
-                            app.config_field_index = (app.config_field_index + 1) % CONFIG_FIELD_COUNT;
+                            app.config_field_index =
+                                (app.config_field_index + 1) % CONFIG_FIELD_COUNT;
                             app.config_test_result = None;
                             app.auto_scroll_config(20); // approximate visible height
                         }
@@ -476,34 +531,53 @@ where
                                 let url = app.config_field_values[1].clone();
                                 let token = app.config_field_values[2].clone();
                                 if url.is_empty() || token.is_empty() {
-                                    app.config_test_result = Some("\u{2717} URL and token are required".to_string());
-                                    app.set_backup_status("Error: Sync URL and token required".to_string());
+                                    app.config_test_result =
+                                        Some("\u{2717} URL and token are required".to_string());
+                                    app.set_backup_status(
+                                        "Error: Sync URL and token required".to_string(),
+                                    );
                                 } else {
                                     match dodo::db::Database::test_sync_connection(url, token) {
                                         Ok(()) => {
-                                            app.config_test_result = Some("\u{2713} Turso connection successful".to_string());
-                                            app.set_backup_status("\u{2713} Turso connection successful".to_string());
+                                            app.config_test_result = Some(
+                                                "\u{2713} Turso connection successful".to_string(),
+                                            );
+                                            app.set_backup_status(
+                                                "\u{2713} Turso connection successful".to_string(),
+                                            );
                                         }
                                         Err(e) => {
-                                            app.config_test_result = Some(format!("\u{2717} {}", e));
-                                            app.set_backup_status(format!("Error: Sync test failed: {}", e));
+                                            app.config_test_result =
+                                                Some(format!("\u{2717} {}", e));
+                                            app.set_backup_status(format!(
+                                                "Error: Sync test failed: {}",
+                                                e
+                                            ));
                                         }
                                     }
                                 }
                             } else {
                                 // Backup fields (4-12): test S3 connection
                                 if !app.backup_config.is_ready() {
-                                    app.config_test_result = Some("\u{2717} Backup config incomplete".to_string());
-                                    app.set_backup_status("Error: Backup config incomplete".to_string());
+                                    app.config_test_result =
+                                        Some("\u{2717} Backup config incomplete".to_string());
+                                    app.set_backup_status(
+                                        "Error: Backup config incomplete".to_string(),
+                                    );
                                 } else {
                                     match dodo::backup::test_connection(&app.backup_config) {
                                         Ok(msg) => {
-                                            app.config_test_result = Some(format!("\u{2713} {}", msg));
+                                            app.config_test_result =
+                                                Some(format!("\u{2713} {}", msg));
                                             app.set_backup_status(format!("\u{2713} {}", msg));
                                         }
                                         Err(e) => {
-                                            app.config_test_result = Some(format!("\u{2717} {}", e));
-                                            app.set_backup_status(format!("Error: Backup test failed: {}", e));
+                                            app.config_test_result =
+                                                Some(format!("\u{2717} {}", e));
+                                            app.set_backup_status(format!(
+                                                "Error: Backup test failed: {}",
+                                                e
+                                            ));
                                         }
                                     }
                                 }
@@ -521,7 +595,9 @@ where
                         KeyCode::Backspace => {
                             app.config_field_input.pop();
                         }
-                        KeyCode::Char('u') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('u')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
                             app.config_field_input.clear();
                         }
                         KeyCode::Char(c) => {
@@ -559,8 +635,12 @@ where
 
             // Auto-dismiss toast messages
             if let Some(at) = app.backup_status_msg_at {
-                let is_error = app.backup_status_msg.as_ref()
-                    .map(|m| m.starts_with("Error") || m.contains("failed") || m.starts_with("\u{2717}"))
+                let is_error = app
+                    .backup_status_msg
+                    .as_ref()
+                    .map(|m| {
+                        m.starts_with("Error") || m.contains("failed") || m.starts_with("\u{2717}")
+                    })
                     .unwrap_or(false);
                 let threshold = if is_error {
                     TOAST_ERROR_DURATION_SECS
@@ -575,7 +655,8 @@ where
 
             // Periodic sync based on configured interval
             let sync_interval_ticks = app.sync_config.sync_interval as u64 * 60;
-            if app.sync_enabled() && sync_interval_ticks > 0
+            if app.sync_enabled()
+                && sync_interval_ticks > 0
                 && app.tick_count.wrapping_sub(app.last_sync_tick) >= sync_interval_ticks
             {
                 app.trigger_sync();
@@ -583,10 +664,18 @@ where
             }
 
             match app.tab {
-                TuiTab::Tasks => { let _ = app.refresh_current_view(); }
-                TuiTab::Recurring => { let _ = app.refresh_templates(); }
-                TuiTab::Report => { let _ = app.refresh_report(); }
-                TuiTab::Settings => { app.refresh_backups(); }
+                TuiTab::Tasks => {
+                    let _ = app.refresh_current_view();
+                }
+                TuiTab::Recurring => {
+                    let _ = app.refresh_templates();
+                }
+                TuiTab::Report => {
+                    let _ = app.refresh_report();
+                }
+                TuiTab::Settings => {
+                    app.refresh_backups();
+                }
             }
 
             // Periodic ding while a task is running
@@ -612,6 +701,8 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
     // Common keys across all views
     match code {
         KeyCode::Char('v') => {
+            app.save_last_view();
+            let _ = app.save_config();
             app.tasks_view = app.tasks_view.next();
             let _ = app.refresh_current_view();
             if app.tasks_view == TasksView::Daily {
@@ -620,6 +711,8 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
             return;
         }
         KeyCode::Char('V') => {
+            app.save_last_view();
+            let _ = app.save_config();
             app.tasks_view = app.tasks_view.prev();
             let _ = app.refresh_current_view();
             if app.tasks_view == TasksView::Daily {
@@ -632,7 +725,8 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
             return;
         }
         KeyCode::Char('d') => {
-            let was_done = app.current_selected_task()
+            let was_done = app
+                .current_selected_task()
                 .map(|t| t.status == TaskStatus::Done)
                 .unwrap_or(true);
             let _ = app.done();
@@ -688,7 +782,10 @@ fn handle_panes_nav(app: &mut App, code: KeyCode, count: usize) {
             app.panes[app.active_pane].jump(count);
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            let sel = app.panes[app.active_pane].list_state.selected().unwrap_or(0);
+            let sel = app.panes[app.active_pane]
+                .list_state
+                .selected()
+                .unwrap_or(0);
             if sel == 0 {
                 app.mode = AppMode::Search;
             } else {
@@ -737,6 +834,10 @@ fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
                 }
                 if next < app.daily_entries.len() {
                     app.daily_cursor = next;
+                    // Auto-scroll to keep cursor visible (simple centering)
+                    if app.daily_cursor > 5 {
+                        app.daily_scroll = app.daily_cursor.saturating_sub(3);
+                    }
                 }
             }
         }
@@ -755,6 +856,10 @@ fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
                 }
                 if matches!(app.daily_entries.get(prev), Some(DailyEntry::Task(_))) {
                     app.daily_cursor = prev;
+                    // Auto-scroll to keep cursor visible
+                    if app.daily_cursor > 5 {
+                        app.daily_scroll = app.daily_cursor.saturating_sub(3);
+                    }
                 } else {
                     app.mode = AppMode::Search;
                     return;
@@ -766,6 +871,8 @@ fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
             for i in (0..app.daily_entries.len()).rev() {
                 if matches!(app.daily_entries[i], DailyEntry::Task(_)) {
                     app.daily_cursor = i;
+                    // Auto-scroll to bottom
+                    app.daily_scroll = app.daily_cursor.saturating_sub(3);
                     break;
                 }
             }
@@ -825,8 +932,13 @@ fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
                 let _ = app.refresh_daily();
             }
         }
-        KeyCode::Char('m') => {
-            app.start_move_task();
+        KeyCode::Char('z') => {
+            // zz: center cursor (vim-style)
+            // Only for Daily view
+            if app.tasks_view == TasksView::Daily {
+                // Center the cursor (simple centering)
+                app.daily_scroll = app.daily_cursor.saturating_sub(3);
+            }
         }
         _ => {}
     }
@@ -838,7 +950,10 @@ fn handle_weekly_nav(app: &mut App, code: KeyCode, count: usize) {
             app.weekly_panes[app.weekly_active].jump(count);
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            let sel = app.weekly_panes[app.weekly_active].list_state.selected().unwrap_or(0);
+            let sel = app.weekly_panes[app.weekly_active]
+                .list_state
+                .selected()
+                .unwrap_or(0);
             if sel == 0 {
                 app.mode = AppMode::Search;
             } else {
@@ -964,7 +1079,9 @@ fn handle_calendar_nav(app: &mut App, code: KeyCode, _count: usize) {
                 // Clamp selected day
                 let max_day = days_in_month(app.calendar_year, app.calendar_month);
                 let day = app.calendar_selected.day().min(max_day);
-                if let Some(d) = chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, day) {
+                if let Some(d) =
+                    chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, day)
+                {
                     app.calendar_selected = d;
                 }
                 let _ = app.refresh_calendar();
@@ -979,7 +1096,9 @@ fn handle_calendar_nav(app: &mut App, code: KeyCode, _count: usize) {
                 }
                 let max_day = days_in_month(app.calendar_year, app.calendar_month);
                 let day = app.calendar_selected.day().min(max_day);
-                if let Some(d) = chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, day) {
+                if let Some(d) =
+                    chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, day)
+                {
                     app.calendar_selected = d;
                 }
                 let _ = app.refresh_calendar();
@@ -994,7 +1113,9 @@ fn handle_calendar_nav(app: &mut App, code: KeyCode, _count: usize) {
         },
         CalendarFocus::TaskList => match code {
             KeyCode::Char('j') | KeyCode::Down => {
-                if !app.calendar_tasks.is_empty() && app.calendar_task_selected < app.calendar_tasks.len() - 1 {
+                if !app.calendar_tasks.is_empty()
+                    && app.calendar_task_selected < app.calendar_tasks.len() - 1
+                {
                     app.calendar_task_selected += 1;
                 }
             }
@@ -1075,10 +1196,19 @@ pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
                     template.project.clone().unwrap_or_default(),
                     template.context.clone().unwrap_or_default(),
                     template.tags.clone().unwrap_or_default(),
-                    template.estimate_minutes.map(|m| format_estimate_tui(m)).unwrap_or_default(),
+                    template
+                        .estimate_minutes
+                        .map(|m| format_estimate_tui(m))
+                        .unwrap_or_default(),
                     template.deadline.map(|d| d.to_string()).unwrap_or_default(),
-                    template.scheduled.map(|d| d.to_string()).unwrap_or_default(),
-                    template.priority.map(|p| "!".repeat(p.clamp(1, 4) as usize)).unwrap_or_default(),
+                    template
+                        .scheduled
+                        .map(|d| d.to_string())
+                        .unwrap_or_default(),
+                    template
+                        .priority
+                        .map(|p| "!".repeat(p.clamp(1, 4) as usize))
+                        .unwrap_or_default(),
                     template.recurrence.clone().unwrap_or_default(),
                 ];
                 app.edit_field_input.clear();

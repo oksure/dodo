@@ -1020,21 +1020,34 @@ impl Database {
 
     pub fn get_running_task(&self) -> Result<Option<(String, i64, Option<i64>)>> {
         self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT t.id, t.title, t.estimate_minutes FROM tasks t WHERE t.status = 'Running' LIMIT 1",
-                (),
-            ).await?;
+            // Use the same query as list_tasks to get total elapsed from all sessions
+            let query = format!(
+                "{} WHERE t.status = 'Running' GROUP BY t.id LIMIT 1",
+                Self::TASK_SELECT_WITH_ELAPSED
+            );
+            let mut rows = self.conn.query(&query, ()).await?;
 
             match rows.next().await? {
                 Some(row) => {
                     let task_id = val_string(&row, 0)?;
-                    let title = val_string(&row, 1)?;
-                    let estimate = val_opt_i64(&row, 2)?;
-                    let elapsed = match get_active_session(&self.conn, &task_id).await? {
-                        Some(session) => session.elapsed_seconds(),
-                        None => 0,
-                    };
-                    Ok(Some((title, elapsed, estimate)))
+                    let task_id_clone = task_id.clone();
+                    let title = val_string(&row, 2)?; // title is at index 2
+                    let estimate = val_opt_i64(&row, 9)?; // estimate_minutes is at index 9
+                    let elapsed = val_opt_i64(&row, 16)?; // elapsed_seconds is at index 16
+                    
+                    // Check if there's an active session for this running task
+                    let has_active_session = get_active_session(&self.conn, &task_id).await?.is_some();
+                    
+                    // If task is Running but has no active session, it's an orphaned task (terminal crash)
+                    // Reset it to Paused
+                    if !has_active_session {
+                        self.conn.execute(
+                            "UPDATE tasks SET status = 'Paused', modified_at = ?1 WHERE id = ?2",
+                            params![Utc::now().to_rfc3339(), task_id_clone],
+                        ).await?;
+                    }
+                    
+                    Ok(Some((title, elapsed.unwrap_or(0), estimate)))
                 }
                 None => Ok(None),
             }
@@ -1355,10 +1368,26 @@ impl Database {
             }
 
             let now = Utc::now().to_rfc3339();
-            tx.execute(
-                "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1 WHERE id = ?2",
-                params![now, task_id],
-            ).await?;
+            
+            // Check if this is a recurring instance and update its scheduled date to today
+            let is_template: Option<i64> = tx.query(
+                "SELECT is_template FROM tasks WHERE id = ?1",
+                params![task_id],
+            ).await?.next().await?.map(|r| val_i64(&r, 0)).transpose()?;
+            
+            if is_template == Some(0) {
+                // This is an instance (not a template), update scheduled to today
+                let today = chrono::Local::now().date_naive();
+                tx.execute(
+                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, scheduled = ?2, modified_at = ?1 WHERE id = ?3",
+                    params![now, today.to_string(), task_id],
+                ).await?;
+            } else {
+                tx.execute(
+                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1 WHERE id = ?2",
+                    params![now, task_id],
+                ).await?;
+            }
 
             tx.commit().await?;
             Ok::<(), anyhow::Error>(())

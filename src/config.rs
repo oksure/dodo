@@ -25,6 +25,8 @@ pub struct PreferencesConfig {
     pub timer_sound_interval: u32,
     #[serde(default = "default_view_str")]
     pub default_view: String,
+    #[serde(default = "default_last_view")]
+    pub last_view: String,
     #[serde(default = "default_estimate")]
     pub default_estimate: u32,
 }
@@ -36,6 +38,7 @@ impl Default for PreferencesConfig {
             sound_enabled: default_true(),
             timer_sound_interval: default_sound_interval(),
             default_view: default_view_str(),
+            last_view: default_last_view(),
             default_estimate: default_estimate(),
         }
     }
@@ -50,6 +53,10 @@ fn default_sound_interval() -> u32 {
 }
 
 fn default_view_str() -> String {
+    "panes".to_string()
+}
+
+fn default_last_view() -> String {
     "panes".to_string()
 }
 
@@ -174,8 +181,7 @@ fn default_max_backups() -> u32 {
 
 impl Config {
     pub fn config_path() -> Result<PathBuf> {
-        let dir = dirs::config_dir()
-            .context("Could not find config directory")?;
+        let dir = dirs::config_dir().context("Could not find config directory")?;
         Ok(dir.join("dodo").join("config.toml"))
     }
 
@@ -219,8 +225,7 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let contents = toml::to_string_pretty(self)
-            .context("Failed to serialize config")?;
+        let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
         std::fs::write(&path, contents)
             .with_context(|| format!("Failed to write config: {}", path.display()))?;
         Ok(())

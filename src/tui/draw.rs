@@ -23,12 +23,12 @@ pub(super) fn draw_ui(f: &mut Frame, app: &App) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(2),                  // Header [0]
-            Constraint::Length(1),                  // Tab bar [1]
-            Constraint::Length(search_height),       // Search bar [2]
+            Constraint::Length(2),                    // Header [0]
+            Constraint::Length(1),                    // Tab bar [1]
+            Constraint::Length(search_height),        // Search bar [2]
             Constraint::Length(view_selector_height), // View selector [3]
-            Constraint::Min(0),                     // Content [4]
-            Constraint::Length(1),                   // Footer [5]
+            Constraint::Min(0),                       // Content [4]
+            Constraint::Length(1),                    // Footer [5]
         ])
         .split(f.area());
 
@@ -57,9 +57,7 @@ pub(super) fn draw_ui(f: &mut Frame, app: &App) {
                     ),
                     Span::styled(
                         tab_keys[i],
-                        Style::default()
-                            .fg(FG_TEXT)
-                            .bg(Color::Rgb(30, 30, 46)),
+                        Style::default().fg(FG_TEXT).bg(Color::Rgb(30, 30, 46)),
                     ),
                     Span::raw(" "),
                 ])
@@ -164,9 +162,13 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 // Green when >50% left, yellow when <=50%
                 let pct = remaining as f64 / (est_min * 60) as f64;
                 let style = if pct > 0.5 {
-                    Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(ACCENT_GREEN)
+                        .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(ACCENT_YELLOW).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(ACCENT_YELLOW)
+                        .add_modifier(Modifier::BOLD)
                 };
                 (title_str, timer, style)
             } else {
@@ -180,18 +182,30 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 let style = if app.tick_count % 2 == 0 {
                     Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::Rgb(200, 80, 100)).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Rgb(200, 80, 100))
+                        .add_modifier(Modifier::BOLD)
                 };
                 (title_str, timer, style)
             }
         } else {
             let elapsed = info.elapsed_seconds as u64;
             let timer = if elapsed >= 3600 {
-                format!(" \u{23F1} {}h{:02}m ", elapsed / 3600, (elapsed % 3600) / 60)
+                format!(
+                    " \u{23F1} {}h{:02}m ",
+                    elapsed / 3600,
+                    (elapsed % 3600) / 60
+                )
             } else {
                 format!(" \u{23F1} {}m ", elapsed / 60)
             };
-            (title_str, timer, Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD))
+            (
+                title_str,
+                timer,
+                Style::default()
+                    .fg(ACCENT_GREEN)
+                    .add_modifier(Modifier::BOLD),
+            )
         }
     } else {
         (String::new(), String::new(), Style::default())
@@ -261,20 +275,36 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     match &app.sync_status {
         SyncStatus::Disabled => {} // no indicator for local-only users
         SyncStatus::Idle | SyncStatus::Synced(_) => {
-            left_spans.push(Span::styled(" \u{25CF} ", Style::default().fg(ACCENT_GREEN)));
+            left_spans.push(Span::styled(
+                " \u{25CF} ",
+                Style::default().fg(ACCENT_GREEN),
+            ));
             left_spans.push(Span::styled("synced ", Style::default().fg(ACCENT_GREEN)));
-            left_spans.push(Span::styled("y", Style::default().fg(FG_TEXT).bg(BG_SURFACE)));
+            left_spans.push(Span::styled(
+                "y",
+                Style::default().fg(FG_TEXT).bg(BG_SURFACE),
+            ));
             left_spans.push(Span::styled(":sync", Style::default().fg(FG_OVERLAY)));
         }
         SyncStatus::Syncing => {
-            let icon = if app.tick_count % 2 == 0 { "\u{21BB}" } else { "\u{21BA}" };
-            left_spans.push(Span::styled(format!(" {} ", icon), Style::default().fg(ACCENT_YELLOW)));
+            let icon = if app.tick_count % 2 == 0 {
+                "\u{21BB}"
+            } else {
+                "\u{21BA}"
+            };
+            left_spans.push(Span::styled(
+                format!(" {} ", icon),
+                Style::default().fg(ACCENT_YELLOW),
+            ));
             left_spans.push(Span::styled("syncing", Style::default().fg(ACCENT_YELLOW)));
         }
         SyncStatus::Error(_) => {
             left_spans.push(Span::styled(" \u{26A0} ", Style::default().fg(ACCENT_RED)));
             left_spans.push(Span::styled("sync err ", Style::default().fg(ACCENT_RED)));
-            left_spans.push(Span::styled("y", Style::default().fg(FG_TEXT).bg(BG_SURFACE)));
+            left_spans.push(Span::styled(
+                "y",
+                Style::default().fg(FG_TEXT).bg(BG_SURFACE),
+            ));
             left_spans.push(Span::styled(":retry", Style::default().fg(FG_OVERLAY)));
         }
     }
@@ -287,19 +317,9 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let keys: Vec<(&str, &str)> = match app.tab {
         TuiTab::Tasks => match app.mode {
-            AppMode::AddTask => vec![
-                ("Enter", "add"),
-                ("Esc", "cancel"),
-            ],
-            AppMode::MoveTask => vec![
-                ("h/l", "select"),
-                ("Enter", "move"),
-                ("Esc", "cancel"),
-            ],
-            AppMode::Search => vec![
-                ("type", "filter"),
-                ("Enter/Esc", "close"),
-            ],
+            AppMode::AddTask => vec![("Enter", "add"), ("Esc", "cancel")],
+            AppMode::MoveTask => vec![("h/l", "select"), ("Enter", "move"), ("Esc", "cancel")],
+            AppMode::Search => vec![("type", "filter"), ("Enter/Esc", "close")],
             _ => match app.tasks_view {
                 TasksView::Panes => vec![
                     ("a", "add"),
@@ -367,10 +387,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             },
         },
         TuiTab::Recurring => match app.mode {
-            AppMode::RecAddTemplate => vec![
-                ("Enter", "add"),
-                ("Esc", "cancel"),
-            ],
+            AppMode::RecAddTemplate => vec![("Enter", "add"), ("Esc", "cancel")],
             _ => vec![
                 ("a", "add"),
                 ("e", "edit"),
@@ -382,11 +399,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("q", "quit"),
             ],
         },
-        TuiTab::Report => vec![
-            ("h/l", "range"),
-            ("?", "help"),
-            ("q", "quit"),
-        ],
+        TuiTab::Report => vec![("h/l", "range"), ("?", "help"), ("q", "quit")],
         TuiTab::Settings => match app.mode {
             AppMode::EditConfig => vec![
                 ("j/k \u{2193}\u{2191}", "navigate"),
@@ -394,10 +407,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("t", "test"),
                 ("Esc", "close"),
             ],
-            AppMode::EditConfigField => vec![
-                ("\u{21B5}", "save"),
-                ("Esc", "cancel"),
-            ],
+            AppMode::EditConfigField => vec![("\u{21B5}", "save"), ("Esc", "cancel")],
             _ => vec![
                 ("j/k \u{2193}\u{2191}", "navigate"),
                 ("u", "upload"),
@@ -430,17 +440,25 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
 }
 
 pub(super) fn draw_view_selector(f: &mut Frame, app: &App, area: Rect) {
-    let views = [TasksView::Panes, TasksView::Daily, TasksView::Weekly, TasksView::Calendar];
+    let views = [
+        TasksView::Panes,
+        TasksView::Daily,
+        TasksView::Weekly,
+        TasksView::Calendar,
+    ];
     let mut left_spans: Vec<Span> = vec![Span::styled("  ", Style::default())];
-    for view in &views {
+    for (i, view) in views.iter().enumerate() {
+        if i > 0 {
+            left_spans.push(Span::styled(" | ", Style::default().fg(FG_OVERLAY)));
+        }
         if *view == app.tasks_view {
             left_spans.push(Span::styled(
-                format!("\u{25CF} {} ", view.label()),
+                format!("\u{25CF} {}  ", view.label()),
                 Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
             ));
         } else {
             left_spans.push(Span::styled(
-                format!("  {} ", view.label()),
+                format!("  {}  ", view.label()),
                 Style::default().fg(FG_OVERLAY),
             ));
         }
@@ -463,7 +481,11 @@ pub(super) fn draw_tasks_panes(f: &mut Frame, app: &App, area: Rect) {
 
     let headers = [
         "LONG TERM".to_string(),
-        format!("THIS WEEK \u{2014} {}\u{2013}{}", tomorrow.format("%b%d"), week_end.format("%b%d")),
+        format!(
+            "THIS WEEK \u{2014} {}\u{2013}{}",
+            tomorrow.format("%b%d"),
+            week_end.format("%b%d")
+        ),
         format!("TODAY \u{2014} {}", today.format("%b%d")),
         "DONE".to_string(),
     ];
@@ -481,9 +503,21 @@ pub(super) fn draw_tasks_panes(f: &mut Frame, app: &App, area: Rect) {
     for i in 0..4 {
         let is_active = i == app.active_pane;
         let sl = sort_label(SORT_MODES[app.panes[i].sort_index]);
-        let arrow = if app.panes[i].sort_ascending { "\u{2191}" } else { "\u{2193}" };
+        let arrow = if app.panes[i].sort_ascending {
+            "\u{2191}"
+        } else {
+            "\u{2193}"
+        };
         let sort_display = format!("{}{}", sl, arrow);
-        draw_pane(f, &app.panes[i], &headers[i], is_active, app.frame_count, &sort_display, pane_chunks[i]);
+        draw_pane(
+            f,
+            &app.panes[i],
+            &headers[i],
+            is_active,
+            app.frame_count,
+            &sort_display,
+            pane_chunks[i],
+        );
     }
 }
 
@@ -497,9 +531,7 @@ pub(super) fn build_task_list_item(
 ) -> ListItem<'static> {
     let is_running = task.status == TaskStatus::Running;
     let is_neon = is_running;
-    let is_overdue = !is_running
-        && task.status != TaskStatus::Done
-        && is_task_overdue(task, today);
+    let is_overdue = !is_running && task.status != TaskStatus::Done && is_task_overdue(task, today);
     let status_icon = match task.status {
         TaskStatus::Pending => "\u{25CB}",
         TaskStatus::Running => "\u{25B6}",
@@ -515,12 +547,25 @@ pub(super) fn build_task_list_item(
         Some(n) if !n.is_empty() => " *",
         _ => "",
     };
-    let recur_mark = if task.template_id.is_some() { " \u{21BB}" } else { "" };
+    let recur_mark = if task.is_template || task.template_id.is_some() {
+        Span::styled(
+            "\u{21BB} ",
+            Style::default()
+                .fg(ACCENT_GREEN)
+                .add_modifier(Modifier::REVERSED),
+        )
+    } else {
+        Span::raw("")
+    };
 
     let (num_style, title_style) = if is_running {
         (
-            Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD),
-            Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_GREEN)
+                .add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_GREEN)
+                .add_modifier(Modifier::BOLD),
         )
     } else if is_overdue {
         (
@@ -547,32 +592,45 @@ pub(super) fn build_task_list_item(
     // Marquee scroll for truncated titles
     let prefix_width = 7; // " NNN " (5) + "X " (2)
     let available_title_width = (width as usize).saturating_sub(prefix_width + 2); // 2 for border
-    let full_title = format!("{}{}{}", task.title, recur_mark, notes_mark);
+    let full_title = format!("{}{}{}", recur_mark.content, task.title, notes_mark);
     let title_chars: Vec<char> = full_title.chars().collect();
-
-    let display_title = if is_selected && is_active && !is_neon && title_chars.len() > available_title_width {
-        // Marquee scroll: pause at start and end, then scroll
-        let pause_frames: u64 = 30;
-        let scroll_len = title_chars.len() - available_title_width;
-        let total_cycle = pause_frames + scroll_len as u64 + pause_frames;
-        let pos_in_cycle = (frame_count / 4) % total_cycle;
-        let offset = if pos_in_cycle < pause_frames {
-            0 // pause at start
-        } else if pos_in_cycle < pause_frames + scroll_len as u64 {
-            (pos_in_cycle - pause_frames) as usize
+    let display_title = if is_selected && is_active && !is_neon && available_title_width > 1 {
+        // Marquee scroll: 3 second pause at start, brief pause at end, slower scrolling
+        let scroll_len = title_chars.len().saturating_sub(available_title_width);
+        if scroll_len > 0 {
+            let pause_start: u64 = 180; // 3 seconds at 60fps
+            let pause_end: u64 = 20;
+            let total_cycle = pause_start + scroll_len as u64 + pause_end;
+            let pos_in_cycle = (frame_count / 2) % total_cycle;
+            let offset = if pos_in_cycle < pause_start {
+                // Pause at start - show beginning of title
+                0
+            } else if pos_in_cycle < pause_start + scroll_len as u64 {
+                // Scrolling phase
+                (pos_in_cycle - pause_start) as usize
+            } else {
+                // Pause at end
+                scroll_len
+            };
+            title_chars[offset..offset + available_title_width]
+                .iter()
+                .collect::<String>()
         } else {
-            scroll_len // pause at end
-        };
-        title_chars[offset..offset + available_title_width].iter().collect::<String>()
-    } else if !is_selected && title_chars.len() > available_title_width && available_title_width > 1 {
+            // Show full title if it fits
+            full_title
+        }
+    } else if !is_selected && title_chars.len() > available_title_width && available_title_width > 1
+    {
         // Truncated with ellipsis
-        let mut s: String = title_chars[..available_title_width.saturating_sub(1)].iter().collect();
+        let mut s: String = title_chars[..available_title_width.saturating_sub(1)]
+            .iter()
+            .collect();
         s.push('\u{2026}');
         s
     } else {
         full_title
     };
-
+    // Build line1 with styled recur_mark
     let line1 = Line::from(vec![
         Span::styled(format!(" {:>3} ", num), num_style),
         Span::styled(format!("{} ", status_icon), status_style),
@@ -581,34 +639,81 @@ pub(super) fn build_task_list_item(
 
     let meta_spans = build_compact_meta(task, today);
 
+    // Apply marquee to metadata row if needed
+    let display_meta = if is_selected && is_active && !is_neon && !meta_spans.is_empty() {
+        let meta_width: u16 = meta_spans.iter().map(|s| s.content.len() as u16).sum();
+        let available_meta_width = width.saturating_sub(7);
+        if available_meta_width > 1 {
+            let scroll_len = meta_width.saturating_sub(available_meta_width);
+            if scroll_len > 0 {
+                let pause_frames: u64 = 20;
+                let total_cycle = pause_frames + scroll_len as u64;
+                let pos_in_cycle = (frame_count / 2) % total_cycle;
+                let offset = if pos_in_cycle < scroll_len as u64 {
+                    pos_in_cycle as usize
+                } else {
+                    scroll_len as usize
+                };
+                let mut result: Vec<Span> = Vec::new();
+                let mut char_offset: usize = 0;
+                for span in meta_spans.iter() {
+                    let span_content = &span.content;
+                    if char_offset + span_content.len() <= offset {
+                        char_offset += span_content.len();
+                        continue;
+                    } else if char_offset >= offset + available_meta_width as usize {
+                        break;
+                    } else {
+                        let start_in_span = (offset - char_offset).max(0) as usize;
+                        let end_in_span = ((offset + available_meta_width as usize) - char_offset)
+                            .min(span_content.len());
+                        if start_in_span < end_in_span {
+                            let clipped: String =
+                                span_content[start_in_span..end_in_span].to_string();
+                            result.push(Span::raw(clipped));
+                        }
+                        char_offset += span_content.len();
+                    }
+                }
+                result
+            } else {
+                meta_spans
+            }
+        } else {
+            meta_spans
+        }
+    } else {
+        meta_spans
+    };
+
     if is_neon {
         let neon_line1 = apply_neon(line1, frame_count, width);
-        if meta_spans.is_empty() {
+        if display_meta.is_empty() {
             ListItem::new(vec![neon_line1])
         } else {
             let mut line2_spans = vec![Span::raw("       ")];
-            line2_spans.extend(meta_spans);
+            line2_spans.extend(display_meta);
             let line2 = Line::from(line2_spans);
             let neon_line2 = apply_neon(line2, frame_count, width);
             ListItem::new(vec![neon_line1, neon_line2])
         }
     } else if is_selected && is_active {
         let bg = Color::Rgb(65, 75, 120);
-        let item = if meta_spans.is_empty() {
+        let item = if display_meta.is_empty() {
             ListItem::new(vec![line1])
         } else {
             let mut line2_spans = vec![Span::raw("       ")];
-            line2_spans.extend(meta_spans);
+            line2_spans.extend(display_meta);
             let line2 = Line::from(line2_spans);
             ListItem::new(vec![line1, line2])
         };
         item.style(Style::default().bg(bg))
     } else {
-        if meta_spans.is_empty() {
+        if display_meta.is_empty() {
             ListItem::new(vec![line1])
         } else {
             let mut line2_spans = vec![Span::raw("       ")];
-            line2_spans.extend(meta_spans);
+            line2_spans.extend(display_meta);
             let line2 = Line::from(line2_spans);
             ListItem::new(vec![line1, line2])
         }
@@ -624,45 +729,49 @@ pub(super) fn draw_tasks_daily(f: &mut Frame, app: &App, area: Rect) {
         .daily_entries
         .iter()
         .enumerate()
-        .map(|(idx, entry)| {
-            match entry {
-                DailyEntry::Header { date, task_count, is_today } => {
-                    let day_name = DAY_NAMES[date.weekday().num_days_from_sunday() as usize];
-                    let relative = if *is_today {
-                        "Today"
-                    } else if *date == today + chrono::Duration::days(1) {
-                        "Tomorrow"
-                    } else if *date == today - chrono::Duration::days(1) {
-                        "Yesterday"
-                    } else {
-                        ""
-                    };
+        .map(|(idx, entry)| match entry {
+            DailyEntry::Header {
+                date,
+                task_count,
+                is_today,
+            } => {
+                let day_name = DAY_NAMES[date.weekday().num_days_from_sunday() as usize];
+                let relative = if *is_today {
+                    "Today"
+                } else if *date == today + chrono::Duration::days(1) {
+                    "Tomorrow"
+                } else if *date == today - chrono::Duration::days(1) {
+                    "Yesterday"
+                } else {
+                    ""
+                };
 
-                    let date_str = date.format("%b %d").to_string();
-                    let label = if relative.is_empty() {
-                        format!("{} \u{00B7} {}", date_str, day_name)
-                    } else {
-                        format!("{} \u{00B7} {} \u{00B7} {}", date_str, relative, day_name)
-                    };
-                    let count_str = format!("  ({})", task_count);
+                let date_str = date.format("%b %d").to_string();
+                let label = if relative.is_empty() {
+                    format!("{} \u{00B7} {}", date_str, day_name)
+                } else {
+                    format!("{} \u{00B7} {} \u{00B7} {}", date_str, relative, day_name)
+                };
+                let count_str = format!("  ({})", task_count);
 
-                    let style = if *is_today {
-                        Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)
-                    } else if *date < today {
-                        Style::default().fg(FG_OVERLAY)
-                    } else {
-                        Style::default().fg(FG_SUBTEXT)
-                    };
+                let style = if *is_today {
+                    Style::default()
+                        .fg(ACCENT_BLUE)
+                        .add_modifier(Modifier::BOLD)
+                } else if *date < today {
+                    Style::default().fg(FG_OVERLAY)
+                } else {
+                    Style::default().fg(FG_SUBTEXT)
+                };
 
-                    ListItem::new(Line::from(vec![
-                        Span::styled(label, style),
-                        Span::styled(count_str, Style::default().fg(FG_OVERLAY)),
-                    ]))
-                }
-                DailyEntry::Task(task) => {
-                    let is_selected = idx == app.daily_cursor;
-                    build_task_list_item(task, is_selected, true, app.frame_count, area.width, today)
-                }
+                ListItem::new(Line::from(vec![
+                    Span::styled(label, style),
+                    Span::styled(count_str, Style::default().fg(FG_OVERLAY)),
+                ]))
+            }
+            DailyEntry::Task(task) => {
+                let is_selected = idx == app.daily_cursor;
+                build_task_list_item(task, is_selected, true, app.frame_count, area.width, today)
             }
         })
         .collect();
@@ -678,8 +787,8 @@ pub(super) fn draw_tasks_daily(f: &mut Frame, app: &App, area: Rect) {
     // Scrollbar
     let visible = area.height as usize;
     if app.daily_entries.len() > visible {
-        let mut scrollbar_state = ScrollbarState::new(app.daily_entries.len())
-            .position(app.daily_cursor);
+        let mut scrollbar_state =
+            ScrollbarState::new(app.daily_entries.len()).position(app.daily_cursor);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(FG_OVERLAY));
         f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
@@ -710,7 +819,15 @@ pub(super) fn draw_tasks_weekly(f: &mut Frame, app: &App, area: Rect) {
         let tile_date = app.week_start_date + chrono::Duration::days(i as i64);
         let is_today = tile_date == today;
         let is_active = i == app.weekly_active;
-        draw_day_tile(f, &app.weekly_panes[i], tile_date, is_today, is_active, app.frame_count, tiles[i]);
+        draw_day_tile(
+            f,
+            &app.weekly_panes[i],
+            tile_date,
+            is_today,
+            is_active,
+            app.frame_count,
+            tiles[i],
+        );
     }
 }
 
@@ -735,9 +852,13 @@ fn draw_day_tile(
     };
 
     let title_style = if is_active {
-        Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(ACCENT_BLUE)
+            .add_modifier(Modifier::BOLD)
     } else if is_today {
-        Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(ACCENT_GREEN)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(FG_SUBTEXT)
     };
@@ -763,7 +884,14 @@ fn draw_day_tile(
         .enumerate()
         .map(|(idx, task)| {
             let is_selected = is_active && selected_idx == Some(idx);
-            build_task_list_item(task, is_selected, is_active, frame_count, inner.width, today_date)
+            build_task_list_item(
+                task,
+                is_selected,
+                is_active,
+                frame_count,
+                inner.width,
+                today_date,
+            )
         })
         .collect();
 
@@ -780,8 +908,8 @@ fn draw_day_tile(
     // Scrollbar
     let visible = inner.height as usize / 2;
     if pane.tasks.len() > visible && inner.height > 0 {
-        let mut scrollbar_state = ScrollbarState::new(pane.tasks.len())
-            .position(pane.list_state.selected().unwrap_or(0));
+        let mut scrollbar_state =
+            ScrollbarState::new(pane.tasks.len()).position(pane.list_state.selected().unwrap_or(0));
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(FG_OVERLAY));
         f.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
@@ -798,14 +926,25 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
         .constraints([
             Constraint::Length(1), // Month/Year title
             Constraint::Length(1), // Day-of-week headers
-            Constraint::Min(0),   // Grid
+            Constraint::Min(0),    // Grid
         ])
         .split(area);
 
     // Title line — centered title with right-aligned hints
     let month_names = [
-        "", "January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December",
+        "",
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
     ];
     let month_name = month_names[app.calendar_month as usize];
     let title = format!("\u{25C4} {} {} \u{25BA}", month_name, app.calendar_year);
@@ -815,11 +954,28 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(hints_len)])
         .split(layout[0]);
+
+    // Center the month/year title above the weekday grid
+    // The weekday grid spans the full width minus border padding
+    let grid_width = layout[2].width;
+    let title_width = title.len() as u16;
+    let left_padding = (grid_width.saturating_sub(title_width)) / 2;
+
+    let title_line = Line::from(vec![
+        Span::raw(" ".repeat(left_padding as usize)),
+        Span::styled(
+            title,
+            Style::default()
+                .fg(ACCENT_BLUE)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
     f.render_widget(
-        Paragraph::new(Span::styled(title, Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)))
-            .alignment(Alignment::Center),
-        title_cols[0],
+        Paragraph::new(title_line).alignment(Alignment::Left),
+        layout[2],
     );
+
     f.render_widget(
         Paragraph::new(Span::styled(hints, Style::default().fg(FG_OVERLAY))),
         title_cols[1],
@@ -843,8 +999,8 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // Compute calendar grid
-    let first_of_month = chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, 1)
-        .unwrap_or(today);
+    let first_of_month =
+        chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, 1).unwrap_or(today);
     let start_weekday = first_of_month.weekday().num_days_from_sunday(); // 0=Sun
     let days_in = days_in_month_cal(app.calendar_year, app.calendar_month);
 
@@ -886,13 +1042,17 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
                 continue;
             }
 
-            let cell_date = chrono::NaiveDate::from_ymd_opt(
-                app.calendar_year, app.calendar_month, day_num
-            ).unwrap_or(today);
+            let cell_date =
+                chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, day_num)
+                    .unwrap_or(today);
 
             let is_cell_today = cell_date == today;
             let is_selected = cell_date == app.calendar_selected;
-            let task_count = app.calendar_task_counts.get(&cell_date).copied().unwrap_or(0);
+            let task_count = app
+                .calendar_task_counts
+                .get(&cell_date)
+                .copied()
+                .unwrap_or(0);
 
             let border_color = if is_selected && app.calendar_focus == CalendarFocus::TaskList {
                 ACCENT_MAUVE
@@ -917,9 +1077,13 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
 
             // Line 1: date number
             let date_style = if is_cell_today {
-                Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(ACCENT_GREEN)
+                    .add_modifier(Modifier::BOLD)
             } else if is_selected {
-                Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(ACCENT_BLUE)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(FG_SUBTEXT)
             };
@@ -938,7 +1102,11 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
 
             // Lines 2+: task entries (shown in ALL cells, not just selected)
             let cell_tasks: Option<&Vec<Task>> = if is_selected {
-                if app.calendar_tasks.is_empty() { None } else { Some(&app.calendar_tasks) }
+                if app.calendar_tasks.is_empty() {
+                    None
+                } else {
+                    Some(&app.calendar_tasks)
+                }
             } else {
                 app.calendar_tasks_by_date.get(&cell_date)
             };
@@ -946,7 +1114,11 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
             if let Some(tasks) = cell_tasks {
                 let max_tasks = (inner.height as usize).saturating_sub(1);
                 let has_more = tasks.len() > max_tasks;
-                let show = if has_more { max_tasks.saturating_sub(1) } else { max_tasks };
+                let show = if has_more {
+                    max_tasks.saturating_sub(1)
+                } else {
+                    max_tasks
+                };
 
                 for (ti, task) in tasks.iter().take(show).enumerate() {
                     let y_offset = 1 + ti as u16;
@@ -974,10 +1146,7 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
                         calendar_task_style(task, today)
                     };
 
-                    let task_line = Line::from(Span::styled(
-                        format!("{}{}", icon, title),
-                        style,
-                    ));
+                    let task_line = Line::from(Span::styled(format!("{}{}", icon, title), style));
                     let task_area = Rect::new(inner.x, inner.y + y_offset, inner.width, 1);
                     f.render_widget(Paragraph::new(task_line), task_area);
                 }
@@ -1002,7 +1171,9 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
 fn calendar_task_style(task: &Task, today: chrono::NaiveDate) -> Style {
     match task.status {
         TaskStatus::Running => Style::default().fg(ACCENT_GREEN),
-        TaskStatus::Done => Style::default().fg(ACCENT_TEAL).add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
+        TaskStatus::Done => Style::default()
+            .fg(ACCENT_TEAL)
+            .add_modifier(Modifier::DIM | Modifier::CROSSED_OUT),
         TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
         TaskStatus::Pending => {
             if task.deadline.map(|d| d < today).unwrap_or(false) {
@@ -1023,7 +1194,11 @@ fn days_in_month_cal(year: i32, month: u32) -> u32 {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
         2 => {
-            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 { 29 } else { 28 }
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
         }
         _ => 30,
     }
@@ -1187,9 +1362,7 @@ pub(super) fn draw_rec_delete_modal(f: &mut Frame, app: &App) {
     let block = Block::bordered()
         .title(Span::styled(
             " Delete Recurring ",
-            Style::default()
-                .fg(ACCENT_RED)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
         ))
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT_RED));
@@ -1215,18 +1388,14 @@ pub(super) fn draw_rec_delete_modal(f: &mut Frame, app: &App) {
             Span::styled(" cancel", Style::default().fg(FG_SUBTEXT)),
         ]),
     ];
-    f.render_widget(
-        Paragraph::new(text).alignment(Alignment::Center),
-        inner,
-    );
+    f.render_widget(Paragraph::new(text).alignment(Alignment::Center), inner);
 }
 
 pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     let report = match &app.report {
         Some(r) => r,
         None => {
-            let msg = Paragraph::new("Loading report...")
-                .style(Style::default().fg(FG_OVERLAY));
+            let msg = Paragraph::new("Loading report...").style(Style::default().fg(FG_OVERLAY));
             f.render_widget(msg, area);
             return;
         }
@@ -1261,10 +1430,7 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
             }
         })
         .collect();
-    let mut all_spans = vec![Span::styled(
-        "  Range: ",
-        Style::default().fg(FG_OVERLAY),
-    )];
+    let mut all_spans = vec![Span::styled("  Range: ", Style::default().fg(FG_OVERLAY))];
     for (i, s) in range_spans.into_iter().enumerate() {
         all_spans.push(s);
         if i < ranges.len() - 1 {
@@ -1328,7 +1494,9 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
         .split(summary_inner);
 
     let streak_style = if report.streak >= 7 {
-        Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(ACCENT_GREEN)
+            .add_modifier(Modifier::BOLD)
     } else if report.streak >= 3 {
         Style::default().fg(ACCENT_YELLOW)
     } else {
@@ -1399,10 +1567,7 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     let done_gauge = Gauge::default()
         .gauge_style(Style::default().fg(ACCENT_GREEN).bg(Color::Rgb(40, 42, 54)))
         .ratio(done_ratio)
-        .label(format!(
-            "{}/{} done",
-            report.tasks_done, report.total_tasks
-        ))
+        .label(format!("{}/{} done", report.tasks_done, report.total_tasks))
         .use_unicode(true);
     f.render_widget(done_gauge, summary_cols[1]);
 
@@ -1631,7 +1796,9 @@ pub(super) fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> L
             let d = x - wave_center;
             let intensity = (-0.5 * (d / sigma).powi(2)).exp();
             let hue = hue_offset + x / width as f64;
-            let Color::Rgb(pr, pg, pb) = pastel_from_hue(hue) else { unreachable!() };
+            let Color::Rgb(pr, pg, pb) = pastel_from_hue(hue) else {
+                unreachable!()
+            };
             let bg = Color::Rgb(
                 (80.0 + intensity * (pr as f64 - 80.0)) as u8,
                 (85.0 + intensity * (pg as f64 - 85.0)) as u8,
@@ -1647,7 +1814,9 @@ pub(super) fn apply_neon(line: Line<'static>, frame_count: u64, width: u16) -> L
         let d = x - wave_center;
         let intensity = (-0.5 * (d / sigma).powi(2)).exp();
         let hue = hue_offset + x / width as f64;
-        let Color::Rgb(pr, pg, pb) = pastel_from_hue(hue) else { unreachable!() };
+        let Color::Rgb(pr, pg, pb) = pastel_from_hue(hue) else {
+            unreachable!()
+        };
         let bg = Color::Rgb(
             (80.0 + intensity * (pr as f64 - 80.0)) as u8,
             (85.0 + intensity * (pg as f64 - 85.0)) as u8,
@@ -1694,7 +1863,10 @@ fn build_sync_status_line(app: &App) -> Line<'static> {
         }
         SyncStatus::Error(msg) => Line::from(vec![
             Span::styled("Sync: ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(format!("\u{26A0} error: {}", msg), Style::default().fg(ACCENT_RED)),
+            Span::styled(
+                format!("\u{26A0} error: {}", msg),
+                Style::default().fg(ACCENT_RED),
+            ),
         ]),
     }
 }
@@ -1717,8 +1889,8 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1),  // Sync status
-                Constraint::Length(1),  // Spacer
+                Constraint::Length(1), // Sync status
+                Constraint::Length(1), // Spacer
                 Constraint::Min(0),    // Setup block
             ])
             .split(inner);
@@ -1728,7 +1900,9 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
         let setup_block = Block::bordered()
             .title(Span::styled(
                 " Setup ",
-                Style::default().fg(ACCENT_YELLOW).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(ACCENT_YELLOW)
+                    .add_modifier(Modifier::BOLD),
             ))
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(ACCENT_YELLOW))
@@ -1769,7 +1943,7 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(1), // [0] Sync status line
             Constraint::Length(5), // [1] Summary stats block
             Constraint::Length(1), // [2] Toast message
-            Constraint::Min(0),   // [3] Backup list
+            Constraint::Min(0),    // [3] Backup list
         ])
         .split(inner);
 
@@ -1780,7 +1954,9 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
     let summary_block = Block::bordered()
         .title(Span::styled(
             " Summary ",
-            Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_BLUE)
+                .add_modifier(Modifier::BOLD),
         ))
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(FG_OVERLAY));
@@ -1799,7 +1975,15 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
         // Line 1: count + total size + endpoint/bucket
         let line1 = Line::from(vec![
             Span::styled(
-                format!(" {} backup{}", app.backup_entries.len(), if app.backup_entries.len() == 1 { "" } else { "s" }),
+                format!(
+                    " {} backup{}",
+                    app.backup_entries.len(),
+                    if app.backup_entries.len() == 1 {
+                        ""
+                    } else {
+                        "s"
+                    }
+                ),
                 Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
             ),
             Span::styled("  \u{2022}  ", Style::default().fg(FG_OVERLAY)),
@@ -1819,23 +2003,36 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(" Latest: ", Style::default().fg(FG_SUBTEXT)),
             Span::styled(&latest_age, Style::default().fg(ACCENT_TEAL)),
             Span::styled("  \u{2022}  ", Style::default().fg(FG_OVERLAY)),
-            Span::styled(format!("Schedule: {}d", schedule), Style::default().fg(FG_SUBTEXT)),
+            Span::styled(
+                format!("Schedule: {}d", schedule),
+                Style::default().fg(FG_SUBTEXT),
+            ),
             Span::styled("  \u{2022}  ", Style::default().fg(FG_OVERLAY)),
             Span::styled(format!("Max: {}", max), Style::default().fg(FG_SUBTEXT)),
         ]);
 
         let summary_chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
             .split(summary_inner);
 
         f.render_widget(Paragraph::new(line1), summary_chunks[0]);
         f.render_widget(Paragraph::new(line2), summary_chunks[1]);
 
         // Line 3: LineGauge showing days since last backup vs schedule
-        let days_since = (chrono::Utc::now() - app.backup_entries[0].timestamp).num_days().max(0) as f64;
+        let days_since = (chrono::Utc::now() - app.backup_entries[0].timestamp)
+            .num_days()
+            .max(0) as f64;
         let schedule_f = schedule as f64;
-        let ratio = if schedule_f > 0.0 { (days_since / schedule_f).min(1.0) } else { 0.0 };
+        let ratio = if schedule_f > 0.0 {
+            (days_since / schedule_f).min(1.0)
+        } else {
+            0.0
+        };
         let gauge_color = if ratio >= 1.0 {
             ACCENT_RED
         } else if ratio >= 0.75 {
@@ -1860,13 +2057,17 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
 
     // [2] Toast message
     if let Some(ref msg) = app.backup_status_msg {
-        let color = if msg.starts_with("Error") || msg.contains("failed") || msg.starts_with("\u{2717}") {
-            ACCENT_RED
-        } else {
-            ACCENT_GREEN
-        };
+        let color =
+            if msg.starts_with("Error") || msg.contains("failed") || msg.starts_with("\u{2717}") {
+                ACCENT_RED
+            } else {
+                ACCENT_GREEN
+            };
         f.render_widget(
-            Paragraph::new(Span::styled(format!(" {}", msg), Style::default().fg(color))),
+            Paragraph::new(Span::styled(
+                format!(" {}", msg),
+                Style::default().fg(color),
+            )),
             chunks[2],
         );
     }
@@ -1883,7 +2084,10 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
             Line::from(vec![
                 Span::styled("Press ", Style::default().fg(FG_OVERLAY)),
                 Span::styled(" u ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
-                Span::styled(" to create your first backup", Style::default().fg(FG_OVERLAY)),
+                Span::styled(
+                    " to create your first backup",
+                    Style::default().fg(FG_OVERLAY),
+                ),
             ]),
         ];
         f.render_widget(
@@ -1951,8 +2155,8 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
     // Scrollbar when entries exceed visible area (2 lines per entry)
     let visible_approx = chunks[3].height as usize / 2;
     if app.backup_entries.len() > visible_approx && chunks[3].height > 0 {
-        let mut scrollbar_state = ScrollbarState::new(app.backup_entries.len())
-            .position(app.backup_selected);
+        let mut scrollbar_state =
+            ScrollbarState::new(app.backup_entries.len()).position(app.backup_selected);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(FG_OVERLAY));
         f.render_stateful_widget(scrollbar, chunks[3], &mut scrollbar_state);
@@ -1998,8 +2202,8 @@ pub(super) fn draw_pane(
         .split(inner);
 
     // Stats sub-header with right-aligned sort label
-    let (elapsed, estimate, done, total) = pane.stats();
-    let stats_text = build_pane_stats(elapsed, estimate, done, total);
+    let (elapsed, estimate, done, total, on_time, overdue) = pane.stats();
+    let stats_text = build_pane_stats(elapsed, estimate, done, total, on_time, overdue);
     let left_text = format!(" {}", stats_text);
     let right_text = format!("{} ", sort_label_str);
     let left_width = left_text.chars().count();
@@ -2048,9 +2252,8 @@ pub(super) fn draw_pane(
             let is_selected = is_active && selected_idx == Some(idx);
             let is_running = task.status == TaskStatus::Running;
             let is_neon = is_running;
-            let is_overdue = !is_running
-                && task.status != TaskStatus::Done
-                && is_task_overdue(task, today);
+            let is_overdue =
+                !is_running && task.status != TaskStatus::Done && is_task_overdue(task, today);
             let status_icon = match task.status {
                 TaskStatus::Pending => "\u{25CB}", // ○
                 TaskStatus::Running => "\u{25B6}", // ▶
@@ -2066,7 +2269,11 @@ pub(super) fn draw_pane(
                 Some(n) if !n.is_empty() => " *",
                 _ => "",
             };
-            let recur_mark = if task.template_id.is_some() { " \u{21BB}" } else { "" };
+            let recur_mark = if task.is_template || task.template_id.is_some() {
+                "\u{21BB} "
+            } else {
+                ""
+            };
 
             let (num_style, title_style) = if is_running {
                 (
@@ -2079,12 +2286,8 @@ pub(super) fn draw_pane(
                 )
             } else if is_overdue {
                 (
-                    Style::default()
-                        .fg(ACCENT_RED)
-                        .add_modifier(Modifier::BOLD),
-                    Style::default()
-                        .fg(ACCENT_RED)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
+                    Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
                 )
             } else {
                 (task_num_style(task), task_title_style(task))
@@ -2103,10 +2306,54 @@ pub(super) fn draw_pane(
                 }
             };
 
+            // Apply marquee scrolling for selected tasks with long titles
+            let prefix_width = 7u16; // " NNN " (5) + "X " (2)
+            let available_title_width = list_area.width.saturating_sub(prefix_width + 2);
+            let full_title = format!("{}{}{}", recur_mark, task.title, notes_mark);
+            let title_chars: Vec<char> = full_title.chars().collect();
+
+            let display_title = if is_selected && !is_neon && available_title_width > 1 {
+                // Marquee scroll: 3 second pause at start, brief pause at end, slower scrolling
+                let scroll_len = (title_chars.len() as u16).saturating_sub(available_title_width);
+                if scroll_len > 0 {
+                    let pause_start: u64 = 180; // 3 seconds at 60fps
+                    let pause_end: u64 = 20;
+                    let total_cycle = pause_start + scroll_len as u64 + pause_end;
+                    let pos_in_cycle = (frame_count / 2) % total_cycle;
+                    let offset = if pos_in_cycle < pause_start {
+                        // Pause at start - show beginning of title
+                        0
+                    } else if pos_in_cycle < pause_start + scroll_len as u64 {
+                        // Scrolling phase
+                        (pos_in_cycle - pause_start) as usize
+                    } else {
+                        // Pause at end
+                        scroll_len as usize
+                    };
+                    title_chars[offset..offset + available_title_width as usize]
+                        .iter()
+                        .collect::<String>()
+                } else {
+                    full_title
+                }
+            } else if !is_selected
+                && title_chars.len() > available_title_width as usize
+                && available_title_width > 1
+            {
+                // Truncated with ellipsis for non-selected tasks
+                let mut s: String = title_chars[..available_title_width as usize - 1]
+                    .iter()
+                    .collect();
+                s.push('\u{2026}');
+                s
+            } else {
+                full_title
+            };
+
             let line1 = Line::from(vec![
                 Span::styled(format!(" {:>3} ", num), num_style),
                 Span::styled(format!("{} ", status_icon), status_style),
-                Span::styled(format!("{}{}{}", task.title, recur_mark, notes_mark), title_style),
+                Span::styled(display_title, title_style),
             ]);
 
             let meta_spans = build_compact_meta(task, today);
@@ -2162,8 +2409,8 @@ pub(super) fn draw_pane(
     // Each task item is ~2 lines, so approximate visible count
     let visible_approx = list_area.height as usize / 2;
     if pane.tasks.len() > visible_approx && list_area.height > 0 {
-        let mut scrollbar_state = ScrollbarState::new(pane.tasks.len())
-            .position(pane.list_state.selected().unwrap_or(0));
+        let mut scrollbar_state =
+            ScrollbarState::new(pane.tasks.len()).position(pane.list_state.selected().unwrap_or(0));
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(FG_OVERLAY));
         f.render_stateful_widget(scrollbar, list_area, &mut scrollbar_state);
@@ -2182,24 +2429,36 @@ pub(super) fn is_task_overdue(task: &Task, today: chrono::NaiveDate) -> bool {
     false
 }
 
-pub(super) fn build_pane_stats(elapsed: i64, estimate: i64, done: usize, total: usize) -> String {
+pub(super) fn build_pane_stats(
+    elapsed: i64,
+    estimate: i64,
+    done: usize,
+    total: usize,
+    on_time: usize,
+    overdue: usize,
+) -> String {
     if total == 0 {
         return "(0)".to_string();
     }
 
     let elapsed_str = format_dur_short(elapsed);
-    let estimate_str = format_dur_short(estimate);
 
-    let pct = if estimate > 0 {
-        (elapsed as f64 / estimate as f64 * 100.0) as u64
-    } else {
-        0
-    };
-
-    if estimate > 0 {
+    // For DONE pane, show on-time vs overdue tasks instead of percentage
+    if done > 0 && done == total {
+        if on_time + overdue > 0 {
+            format!("{} | {} on-time, {} overdue", elapsed_str, on_time, overdue)
+        } else {
+            format!("{} | {}/{} done", elapsed_str, done, total)
+        }
+    } else if estimate > 0 {
+        let pct = (elapsed as f64 / estimate as f64 * 100.0) as u64;
         format!(
             "{}/{} | {}% | {}/{}",
-            elapsed_str, estimate_str, pct, done, total
+            elapsed_str,
+            format_dur_short(estimate),
+            pct,
+            done,
+            total
         )
     } else {
         format!("{} | {}/{}", elapsed_str, done, total)
@@ -2209,7 +2468,9 @@ pub(super) fn build_pane_stats(elapsed: i64, estimate: i64, done: usize, total: 
 pub(super) fn task_num_style(task: &Task) -> Style {
     match task.status {
         TaskStatus::Running => Style::default().fg(ACCENT_GREEN),
-        TaskStatus::Done => Style::default().fg(FG_SUBTEXT).add_modifier(Modifier::CROSSED_OUT),
+        TaskStatus::Done => Style::default()
+            .fg(FG_SUBTEXT)
+            .add_modifier(Modifier::CROSSED_OUT),
         TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
         TaskStatus::Pending => Style::default().fg(FG_SUBTEXT),
     }
@@ -2220,7 +2481,9 @@ pub(super) fn task_title_style(task: &Task) -> Style {
         TaskStatus::Running => Style::default()
             .fg(ACCENT_GREEN)
             .add_modifier(Modifier::BOLD),
-        TaskStatus::Done => Style::default().fg(FG_SUBTEXT).add_modifier(Modifier::CROSSED_OUT),
+        TaskStatus::Done => Style::default()
+            .fg(FG_SUBTEXT)
+            .add_modifier(Modifier::CROSSED_OUT),
         TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
         TaskStatus::Pending => Style::default().fg(FG_TEXT),
     }
@@ -2238,9 +2501,7 @@ pub(super) fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<S
                 spans.push(Span::styled(" ", muted));
             }
             let pri_style = match p {
-                4 => Style::default()
-                    .fg(ACCENT_RED)
-                    .add_modifier(Modifier::BOLD),
+                4 => Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
                 3 => Style::default().fg(ACCENT_RED),
                 2 => Style::default().fg(ACCENT_YELLOW),
                 _ => Style::default().fg(FG_SUBTEXT),
@@ -2282,24 +2543,48 @@ pub(super) fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<S
         }
     }
 
-    // Elapsed (before estimate)
+    // Time display - show countdown if estimate exists, elapsed otherwise
     let elapsed = task.elapsed_seconds.unwrap_or(0);
     if elapsed > 0 {
         if !spans.is_empty() {
             spans.push(Span::styled(" ", muted));
         }
-        let elapsed_style = match task.estimate_minutes {
-            Some(est) if elapsed > est * 60 => Style::default().fg(ACCENT_RED),
-            Some(est) if elapsed > est * 45 => Style::default().fg(ACCENT_YELLOW),
-            _ => Style::default().fg(ACCENT_GREEN),
-        };
-        spans.push(Span::styled(
-            format!("({})", format_dur(elapsed)),
-            elapsed_style,
-        ));
+        if let Some(est) = task.estimate_minutes {
+            let remaining = est * 60 - elapsed;
+            let (time_str, time_style) = if remaining > 0 {
+                let r = remaining as u64;
+                let time_str = if r >= 3600 {
+                    format!("{}h{:02}m left", r / 3600, (r % 3600) / 60)
+                } else {
+                    format!("{}m left", r / 60)
+                };
+                let pct = remaining as f64 / (est * 60) as f64;
+                let style = if pct > 0.5 {
+                    Style::default().fg(ACCENT_GREEN)
+                } else {
+                    Style::default().fg(ACCENT_YELLOW)
+                };
+                (time_str, style)
+            } else {
+                let over = (-remaining) as u64;
+                let time_str = if over >= 3600 {
+                    format!("+{}h{:02}m over", over / 3600, (over % 3600) / 60)
+                } else {
+                    format!("+{}m over", over / 60)
+                };
+                (time_str, Style::default().fg(ACCENT_RED))
+            };
+            spans.push(Span::styled(format!("({})", time_str), time_style));
+        } else {
+            let elapsed_style = Style::default().fg(ACCENT_GREEN);
+            spans.push(Span::styled(
+                format!("({})", format_dur(elapsed)),
+                elapsed_style,
+            ));
+        }
     }
 
-    // Estimate (after elapsed)
+    // Estimate (only if no elapsed time shown)
     if let Some(est) = task.estimate_minutes {
         if !spans.is_empty() {
             spans.push(Span::styled(" ", muted));
@@ -2382,9 +2667,7 @@ pub(super) fn draw_delete_modal(f: &mut Frame, app: &App) {
     let block = Block::bordered()
         .title(Span::styled(
             " Delete Task ",
-            Style::default()
-                .fg(ACCENT_RED)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
         ))
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(ACCENT_RED))
@@ -2399,24 +2682,16 @@ pub(super) fn draw_delete_modal(f: &mut Frame, app: &App) {
             Span::styled("  Delete ", Style::default().fg(FG_TEXT)),
             Span::styled(
                 format!("\"{}\"", app.delete_task_title),
-                Style::default()
-                    .fg(FG_TEXT)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
             ),
             Span::styled("?", Style::default().fg(FG_TEXT)),
         ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("  ", Style::default()),
-            Span::styled(
-                " y ",
-                Style::default().fg(FG_TEXT).bg(ACCENT_RED),
-            ),
+            Span::styled(" y ", Style::default().fg(FG_TEXT).bg(ACCENT_RED)),
             Span::styled(" yes  ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(
-                " n ",
-                Style::default().fg(FG_TEXT).bg(BG_SURFACE),
-            ),
+            Span::styled(" n ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
             Span::styled(" no", Style::default().fg(FG_SUBTEXT)),
         ]),
     ];
@@ -2433,10 +2708,7 @@ fn build_multiline_input(input: &str, style: Style) -> Vec<Line<'static>> {
         .map(|(i, line)| {
             let prefix = if i == 0 { "\u{276F} " } else { "  " };
             let suffix = if i == last { "\u{2588}" } else { "" };
-            Line::from(Span::styled(
-                format!("{}{}{}", prefix, line, suffix),
-                style,
-            ))
+            Line::from(Span::styled(format!("{}{}{}", prefix, line, suffix), style))
         })
         .collect()
 }
@@ -2608,7 +2880,11 @@ pub(super) fn draw_edit_modal(f: &mut Frame, app: &App) {
                     "(no notes)".to_string()
                 } else {
                     let line_count = v.lines().count();
-                    format!("({} line{})", line_count, if line_count == 1 { "" } else { "s" })
+                    format!(
+                        "({} line{})",
+                        line_count,
+                        if line_count == 1 { "" } else { "s" }
+                    )
                 }
             } else {
                 let v = &app.edit_field_values[i];
@@ -2650,20 +2926,32 @@ pub(super) fn draw_edit_modal(f: &mut Frame, app: &App) {
     }
 }
 
-pub(super) fn format_config_display_value(value: &str, field_type: ConfigFieldType) -> (String, Style) {
+pub(super) fn format_config_display_value(
+    value: &str,
+    field_type: ConfigFieldType,
+) -> (String, Style) {
     match field_type {
         ConfigFieldType::Boolean => {
             if value == "true" {
-                ("\u{2611} enabled".to_string(), Style::default().fg(ACCENT_GREEN))
+                (
+                    "\u{2611} enabled".to_string(),
+                    Style::default().fg(ACCENT_GREEN),
+                )
             } else {
-                ("\u{2610} disabled".to_string(), Style::default().fg(FG_OVERLAY))
+                (
+                    "\u{2610} disabled".to_string(),
+                    Style::default().fg(FG_OVERLAY),
+                )
             }
         }
         ConfigFieldType::Sensitive => {
             if value.is_empty() {
                 ("(not set)".to_string(), Style::default().fg(FG_OVERLAY))
             } else {
-                ("\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}".to_string(), Style::default().fg(FG_SUBTEXT))
+                (
+                    "\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}\u{25CF}".to_string(),
+                    Style::default().fg(FG_SUBTEXT),
+                )
             }
         }
         ConfigFieldType::String | ConfigFieldType::Number => {
@@ -2742,16 +3030,20 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                     Style::default().fg(FG_OVERLAY),
                 )));
             }
-            let (display, _) = format_config_display_value(
-                &app.config_field_values[i],
-                CONFIG_FIELD_TYPES[i],
-            );
+            let (display, _) =
+                format_config_display_value(&app.config_field_values[i], CONFIG_FIELD_TYPES[i]);
             let style = if i == app.config_field_index {
-                Style::default().fg(ACCENT_MAUVE).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(ACCENT_MAUVE)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(FG_OVERLAY)
             };
-            let indicator = if i == app.config_field_index { "\u{25B6} " } else { "  " };
+            let indicator = if i == app.config_field_index {
+                "\u{25B6} "
+            } else {
+                "  "
+            };
             lines.push(Line::from(vec![
                 Span::styled(indicator, Style::default().fg(ACCENT_MAUVE)),
                 Span::styled(format!("{:<16}", CONFIG_FIELD_LABELS[i]), style),
@@ -2819,12 +3111,12 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                 )));
             }
             let is_selected = i == app.config_field_index;
-            let (display, display_style) = format_config_display_value(
-                &app.config_field_values[i],
-                CONFIG_FIELD_TYPES[i],
-            );
+            let (display, display_style) =
+                format_config_display_value(&app.config_field_values[i], CONFIG_FIELD_TYPES[i]);
             let label_style = if is_selected {
-                Style::default().fg(ACCENT_MAUVE).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(ACCENT_MAUVE)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(FG_SUBTEXT)
             };
@@ -2964,9 +3256,7 @@ pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
         for (i, note_entry) in app.note_lines.iter().enumerate() {
             let is_selected = i == app.note_selected;
             let style = if is_selected {
-                Style::default()
-                    .fg(FG_TEXT)
-                    .bg(Color::Rgb(65, 75, 120))
+                Style::default().fg(FG_TEXT).bg(Color::Rgb(65, 75, 120))
             } else {
                 Style::default().fg(FG_SUBTEXT)
             };
@@ -3063,7 +3353,10 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
             lines.push(help_key("< / >", "Quick-move task between panes"));
             lines.push(help_key("m", "Move task (pick target)"));
             lines.push(help_key("o", "Cycle sort mode"));
-            lines.push(help_key("v / V", "Next/prev view (Panes/Daily/Weekly/Calendar)"));
+            lines.push(help_key(
+                "v / V",
+                "Next/prev view (Panes/Daily/Weekly/Calendar)",
+            ));
             lines.push(help_key("t", "Jump to today (Daily/Weekly/Calendar)"));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled("Search", desc_style)));

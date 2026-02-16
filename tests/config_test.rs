@@ -62,10 +62,16 @@ max_backups = 5
 "#;
     let config: Config = toml::from_str(toml).unwrap();
     assert!(config.sync.enabled);
-    assert_eq!(config.sync.turso_url.as_deref(), Some("libsql://db.turso.io"));
+    assert_eq!(
+        config.sync.turso_url.as_deref(),
+        Some("libsql://db.turso.io")
+    );
     assert_eq!(config.sync.turso_token.as_deref(), Some("secret123"));
     assert!(config.backup.enabled);
-    assert_eq!(config.backup.endpoint.as_deref(), Some("https://s3.example.com"));
+    assert_eq!(
+        config.backup.endpoint.as_deref(),
+        Some("https://s3.example.com")
+    );
     assert_eq!(config.backup.bucket.as_deref(), Some("my-bucket"));
     assert_eq!(config.backup.prefix, "backups/");
     assert_eq!(config.backup.access_key.as_deref(), Some("AKID"));
@@ -446,6 +452,7 @@ fn preferences_full_roundtrip() {
             sound_enabled: false,
             timer_sound_interval: 15,
             default_view: "calendar".to_string(),
+            last_view: "daily".to_string(),
             default_estimate: 45,
         },
         ..Default::default()

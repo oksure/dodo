@@ -15,11 +15,11 @@ use super::format::*;
 
 #[derive(Clone)]
 pub(super) enum SyncStatus {
-    Disabled,                        // sync not configured
-    Idle,                            // sync configured but no sync attempted yet
-    Syncing,                         // sync in progress
-    Synced(std::time::Instant),      // last successful sync timestamp
-    Error(String),                   // last sync failed
+    Disabled,                   // sync not configured
+    Idle,                       // sync configured but no sync attempted yet
+    Syncing,                    // sync in progress
+    Synced(std::time::Instant), // last successful sync timestamp
+    Error(String),              // last sync failed
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -138,18 +138,31 @@ impl PaneState {
         self.list_state.selected().and_then(|i| self.tasks.get(i))
     }
 
-    pub(super) fn stats(&self) -> (i64, i64, usize, usize) {
+    pub(super) fn stats(&self) -> (i64, i64, usize, usize, usize, usize) {
         let mut elapsed = 0i64;
         let mut estimate = 0i64;
         let mut done = 0usize;
+        let mut on_time = 0usize;
+        let mut overdue = 0usize;
+        let today = chrono::Local::now().date_naive();
         for task in &self.tasks {
             elapsed += task.elapsed_seconds.unwrap_or(0);
             estimate += task.estimate_minutes.unwrap_or(0) * 60;
             if task.status == TaskStatus::Done {
                 done += 1;
+                // Check if task was completed on time
+                if let Some(scheduled) = task.scheduled {
+                    if scheduled <= today {
+                        on_time += 1;
+                    } else {
+                        overdue += 1;
+                    }
+                } else {
+                    on_time += 1;
+                }
             }
         }
-        (elapsed, estimate, done, self.tasks.len())
+        (elapsed, estimate, done, self.tasks.len(), on_time, overdue)
     }
 }
 
@@ -256,6 +269,7 @@ pub(super) struct App<'a> {
     // Daily view
     pub(super) daily_entries: Vec<DailyEntry>,
     pub(super) daily_cursor: usize,
+    pub(super) daily_scroll: usize, // Scroll offset for natural navigation
     // Weekly view
     pub(super) weekly_panes: [PaneState; 8],
     pub(super) weekly_active: usize,
@@ -281,7 +295,10 @@ pub(super) struct App<'a> {
 pub(super) fn split_note_entries(text: &str) -> Vec<String> {
     let mut entries: Vec<String> = Vec::new();
     for line in text.lines() {
-        if line.starts_with('[') && line.len() >= 11 && line[1..5].chars().all(|c| c.is_ascii_digit()) {
+        if line.starts_with('[')
+            && line.len() >= 11
+            && line[1..5].chars().all(|c| c.is_ascii_digit())
+        {
             entries.push(line.to_string());
         } else if let Some(last) = entries.last_mut() {
             last.push('\n');
@@ -305,7 +322,7 @@ impl<'a> App<'a> {
         panes[3].sort_ascending = false; // descending (newest done first)
         let config = dodo::config::Config::load().unwrap_or_default();
         let today = chrono::Local::now().date_naive();
-        let initial_view = match config.preferences.default_view.as_str() {
+        let initial_view = match config.preferences.last_view.as_str() {
             "daily" => TasksView::Daily,
             "weekly" => TasksView::Weekly,
             "calendar" => TasksView::Calendar,
@@ -346,7 +363,11 @@ impl<'a> App<'a> {
             backup_selected: 0,
             backup_config: config.backup,
             sync_config: config.sync.clone(),
-            sync_status: if config.sync.is_ready() { SyncStatus::Idle } else { SyncStatus::Disabled },
+            sync_status: if config.sync.is_ready() {
+                SyncStatus::Idle
+            } else {
+                SyncStatus::Disabled
+            },
             sync_receiver: None,
             last_sync_tick: 0,
             backup_status_msg: None,
@@ -360,9 +381,16 @@ impl<'a> App<'a> {
             tasks_view: initial_view,
             daily_entries: Vec::new(),
             daily_cursor: 0,
+            daily_scroll: 0,
             weekly_panes: [
-                PaneState::new(), PaneState::new(), PaneState::new(), PaneState::new(),
-                PaneState::new(), PaneState::new(), PaneState::new(), PaneState::new(),
+                PaneState::new(),
+                PaneState::new(),
+                PaneState::new(),
+                PaneState::new(),
+                PaneState::new(),
+                PaneState::new(),
+                PaneState::new(),
+                PaneState::new(),
             ],
             weekly_active: 0,
             week_start_date: today,
@@ -476,11 +504,13 @@ impl<'a> App<'a> {
     pub(super) fn current_selected_task(&self) -> Option<&Task> {
         match self.tasks_view {
             TasksView::Panes => self.panes[self.active_pane].selected_task(),
-            TasksView::Daily => {
-                self.daily_entries.get(self.daily_cursor).and_then(|e| {
-                    if let DailyEntry::Task(ref t) = e { Some(t) } else { None }
-                })
-            }
+            TasksView::Daily => self.daily_entries.get(self.daily_cursor).and_then(|e| {
+                if let DailyEntry::Task(ref t) = e {
+                    Some(t)
+                } else {
+                    None
+                }
+            }),
             TasksView::Weekly => self.weekly_panes[self.weekly_active].selected_task(),
             TasksView::Calendar => {
                 if self.calendar_focus == CalendarFocus::TaskList {
@@ -579,6 +609,19 @@ impl<'a> App<'a> {
         true
     }
 
+    pub(super) fn load_running_task(&mut self) {
+        self.running_task = if let Ok(Some((title, elapsed, estimate))) = self.db.get_running_task()
+        {
+            Some(RunningTaskInfo {
+                title,
+                elapsed_seconds: elapsed,
+                estimate_minutes: estimate,
+            })
+        } else {
+            None
+        };
+    }
+
     pub(super) fn refresh_all(&mut self) -> Result<()> {
         let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
 
@@ -601,7 +644,9 @@ impl<'a> App<'a> {
             self.panes[i].tasks = group;
             let sort = SORT_MODES[self.panes[i].sort_index];
             let ascending = self.panes[i].sort_ascending;
-            self.panes[i].tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
+            self.panes[i]
+                .tasks
+                .sort_by(|a, b| sort_tasks(a, b, sort, ascending));
             let len = self.panes[i].tasks.len();
             if len == 0 {
                 self.panes[i].list_state.select(None);
@@ -614,15 +659,7 @@ impl<'a> App<'a> {
             }
         }
 
-        self.running_task = if let Ok(Some((title, elapsed, estimate))) = self.db.get_running_task() {
-            Some(RunningTaskInfo {
-                title,
-                elapsed_seconds: elapsed,
-                estimate_minutes: estimate,
-            })
-        } else {
-            None
-        };
+        self.load_running_task();
 
         Ok(())
     }
@@ -674,6 +711,7 @@ impl<'a> App<'a> {
     pub(super) fn refresh_daily(&mut self) -> Result<()> {
         let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
         let today = chrono::Local::now().date_naive();
+        self.load_running_task();
 
         // Group tasks by scheduled date (None → today)
         let mut by_date: BTreeMap<NaiveDate, Vec<Task>> = BTreeMap::new();
@@ -700,7 +738,8 @@ impl<'a> App<'a> {
                     TaskStatus::Pending => 2,
                     TaskStatus::Done => 3,
                 };
-                status_order(&a.status).cmp(&status_order(&b.status))
+                status_order(&a.status)
+                    .cmp(&status_order(&b.status))
                     .then(a.created.cmp(&b.created))
             });
         }
@@ -719,6 +758,7 @@ impl<'a> App<'a> {
         }
 
         self.daily_entries = entries;
+        self.daily_scroll = 0;
         // Clamp cursor
         if self.daily_entries.is_empty() {
             self.daily_cursor = 0;
@@ -732,6 +772,7 @@ impl<'a> App<'a> {
     pub(super) fn refresh_weekly(&mut self) -> Result<()> {
         let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
         let today = chrono::Local::now().date_naive();
+        self.load_running_task();
 
         // Distribute tasks into 8 panes by date
         let dates: Vec<NaiveDate> = (0..8)
@@ -778,6 +819,7 @@ impl<'a> App<'a> {
     pub(super) fn refresh_calendar(&mut self) -> Result<()> {
         let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
         let today = chrono::Local::now().date_naive();
+        self.load_running_task();
 
         // Compute task counts per date and build tasks-by-date map
         self.calendar_task_counts.clear();
@@ -797,7 +839,10 @@ impl<'a> App<'a> {
             }
             let task_date = task.scheduled.unwrap_or(today);
             *self.calendar_task_counts.entry(task_date).or_insert(0) += 1;
-            self.calendar_tasks_by_date.entry(task_date).or_default().push(task.clone());
+            self.calendar_tasks_by_date
+                .entry(task_date)
+                .or_default()
+                .push(task.clone());
             if task_date == self.calendar_selected {
                 selected_tasks.push(task);
             }
@@ -806,14 +851,16 @@ impl<'a> App<'a> {
         // Sort tasks by status priority within each date
         for tasks in self.calendar_tasks_by_date.values_mut() {
             tasks.sort_by(|a, b| {
-                status_order(&a.status).cmp(&status_order(&b.status))
+                status_order(&a.status)
+                    .cmp(&status_order(&b.status))
                     .then(a.created.cmp(&b.created))
             });
         }
 
         // Sort selected tasks by status then created
         selected_tasks.sort_by(|a, b| {
-            status_order(&a.status).cmp(&status_order(&b.status))
+            status_order(&a.status)
+                .cmp(&status_order(&b.status))
                 .then(a.created.cmp(&b.created))
         });
 
@@ -874,8 +921,11 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn toggle_selected(&mut self) -> Result<()> {
-        let task_info = self.current_selected_task().map(|t| (t.id.clone(), t.status.clone(), t.num_id));
-        if let Some((id, status, num_id)) = task_info {
+        let task_info = self
+            .current_selected_task()
+            .map(|t| (t.id.clone(), t.status.clone(), t.num_id, t.scheduled));
+        if let Some((id, status, num_id, _scheduled)) = task_info {
+            let task_id = id.clone();
             if status == TaskStatus::Running {
                 self.db.pause_timer()?;
             } else {
@@ -887,12 +937,34 @@ impl<'a> App<'a> {
                 }
             }
             self.refresh_current_view()?;
+
+            // Follow the task to its new position in daily view
+            if self.tasks_view == TasksView::Daily {
+                for (i, entry) in self.daily_entries.iter().enumerate() {
+                    if let DailyEntry::Task(ref t) = entry {
+                        if t.id == task_id {
+                            self.daily_cursor = i;
+                            break;
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
 
+    pub(super) fn save_last_view(&mut self) {
+        self.preferences.last_view = match self.tasks_view {
+            TasksView::Panes => "panes".to_string(),
+            TasksView::Daily => "daily".to_string(),
+            TasksView::Weekly => "weekly".to_string(),
+            TasksView::Calendar => "calendar".to_string(),
+        };
+    }
+
     pub(super) fn done(&mut self) -> Result<()> {
-        let task_info = self.current_selected_task()
+        let task_info = self
+            .current_selected_task()
             .map(|t| (t.id.clone(), t.status == TaskStatus::Done));
         if let Some((ref id, was_done)) = task_info {
             if was_done {
@@ -1001,7 +1073,8 @@ impl<'a> App<'a> {
                 1 => Area::ThisWeek,
                 _ => Area::Today,
             };
-            self.db.update_task_scheduled(task_id, area.to_scheduled_date())?;
+            self.db
+                .update_task_scheduled(task_id, area.to_scheduled_date())?;
             self.refresh_current_view()?;
         }
         self.mode = AppMode::Normal;
@@ -1026,10 +1099,15 @@ impl<'a> App<'a> {
                 1 => Area::ThisWeek,
                 _ => Area::Today,
             };
-            self.db.update_task_scheduled(&task_id, area.to_scheduled_date())?;
+            self.db
+                .update_task_scheduled(&task_id, area.to_scheduled_date())?;
             self.refresh_current_view()?;
             self.active_pane = target;
-            if let Some(pos) = self.panes[target].tasks.iter().position(|t| t.id == task_id) {
+            if let Some(pos) = self.panes[target]
+                .tasks
+                .iter()
+                .position(|t| t.id == task_id)
+            {
                 self.panes[target].list_state.select(Some(pos));
             }
         }
@@ -1037,7 +1115,9 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn start_delete(&mut self) {
-        let info = self.current_selected_task().map(|t| (t.id.clone(), t.title.clone()));
+        let info = self
+            .current_selected_task()
+            .map(|t| (t.id.clone(), t.title.clone()));
         if let Some((id, title)) = info {
             self.delete_task_id = Some(id);
             self.delete_task_title = title;
@@ -1133,8 +1213,7 @@ impl<'a> App<'a> {
                     } else {
                         parsed.project = Some(String::new());
                     }
-                    self.db
-                        .update_task_fields_by_id(task_id, &parsed, None)?;
+                    self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                 }
                 2 => {
                     // Context
@@ -1144,8 +1223,7 @@ impl<'a> App<'a> {
                     } else {
                         parsed.contexts = vec![String::new()];
                     }
-                    self.db
-                        .update_task_fields_by_id(task_id, &parsed, None)?;
+                    self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                 }
                 3 => {
                     // Tags
@@ -1155,16 +1233,14 @@ impl<'a> App<'a> {
                     } else {
                         parsed.tags = vec![String::new()];
                     }
-                    self.db
-                        .update_task_fields_by_id(task_id, &parsed, None)?;
+                    self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                 }
                 4 => {
                     // Estimate
                     let mut parsed = dodo::notation::ParsedInput::default();
                     if let Some(mins) = parse_duration(val) {
                         parsed.estimate_minutes = Some(mins);
-                        self.db
-                            .update_task_fields_by_id(task_id, &parsed, None)?;
+                        self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                     }
                 }
                 5 => {
@@ -1172,8 +1248,7 @@ impl<'a> App<'a> {
                     let mut parsed = dodo::notation::ParsedInput::default();
                     if let Some(date) = parse_date(val) {
                         parsed.deadline = Some(date);
-                        self.db
-                            .update_task_fields_by_id(task_id, &parsed, None)?;
+                        self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                         self.edit_field_values[5] = date.format("%Y-%m-%d").to_string();
                     }
                 }
@@ -1182,8 +1257,7 @@ impl<'a> App<'a> {
                     let mut parsed = dodo::notation::ParsedInput::default();
                     if let Some(date) = parse_date(val) {
                         parsed.scheduled = Some(date);
-                        self.db
-                            .update_task_fields_by_id(task_id, &parsed, None)?;
+                        self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                         self.edit_field_values[6] = date.format("%Y-%m-%d").to_string();
                     }
                 }
@@ -1197,15 +1271,13 @@ impl<'a> App<'a> {
                         parsed.priority = Some(0);
                     }
                     if parsed.priority.is_some() {
-                        self.db
-                            .update_task_fields_by_id(task_id, &parsed, None)?;
+                        self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                     }
                 }
                 8 => {
                     // Notes (append)
                     if !self.edit_field_input.is_empty() {
-                        self.db
-                            .append_note_by_id(task_id, &self.edit_field_input)?;
+                        self.db.append_note_by_id(task_id, &self.edit_field_input)?;
                         let notes = self.db.get_task_notes_by_id(task_id)?;
                         self.edit_field_values[8] = notes.unwrap_or_default();
                     }
@@ -1231,12 +1303,20 @@ impl<'a> App<'a> {
         self.config_scroll = 0;
         self.config_field_values = [
             // Sync fields (0-3)
-            if self.sync_config.enabled { "true".to_string() } else { "false".to_string() },
+            if self.sync_config.enabled {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
             self.sync_config.turso_url.clone().unwrap_or_default(),
             self.sync_config.turso_token.clone().unwrap_or_default(),
             self.sync_config.sync_interval.to_string(),
             // Backup fields (4-12)
-            if self.backup_config.enabled { "true".to_string() } else { "false".to_string() },
+            if self.backup_config.enabled {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
             self.backup_config.endpoint.clone().unwrap_or_default(),
             self.backup_config.bucket.clone().unwrap_or_default(),
             self.backup_config.prefix.clone(),
@@ -1250,12 +1330,20 @@ impl<'a> App<'a> {
                 WeekStart::Sunday => "sunday".to_string(),
                 WeekStart::Monday => "monday".to_string(),
             },
-            if self.preferences.sound_enabled { "true".to_string() } else { "false".to_string() },
+            if self.preferences.sound_enabled {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
             self.preferences.timer_sound_interval.to_string(),
             self.preferences.default_view.clone(),
             self.preferences.default_estimate.to_string(),
             // Email fields (18-22)
-            if self.email_config.enabled { "true".to_string() } else { "false".to_string() },
+            if self.email_config.enabled {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            },
             self.email_config.api_key.clone().unwrap_or_default(),
             self.email_config.from.clone().unwrap_or_default(),
             self.email_config.to.clone().unwrap_or_default(),
@@ -1268,8 +1356,11 @@ impl<'a> App<'a> {
         if CONFIG_FIELD_TYPES[self.config_field_index] == ConfigFieldType::Boolean {
             // Toggle boolean immediately
             let new_val = self.config_field_values[self.config_field_index] != "true";
-            self.config_field_values[self.config_field_index] =
-                if new_val { "true".to_string() } else { "false".to_string() };
+            self.config_field_values[self.config_field_index] = if new_val {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            };
             self.apply_config_field(self.config_field_index);
             let _ = self.save_config();
         } else {
@@ -1288,7 +1379,11 @@ impl<'a> App<'a> {
 
     pub(super) fn apply_config_field(&mut self, idx: usize) {
         let val = &self.config_field_values[idx];
-        let opt = if val.is_empty() { None } else { Some(val.clone()) };
+        let opt = if val.is_empty() {
+            None
+        } else {
+            Some(val.clone())
+        };
         match idx {
             0 => self.sync_config.enabled = val == "true",
             1 => self.sync_config.turso_url = opt,
@@ -1297,7 +1392,13 @@ impl<'a> App<'a> {
             4 => self.backup_config.enabled = val == "true",
             5 => self.backup_config.endpoint = opt,
             6 => self.backup_config.bucket = opt,
-            7 => self.backup_config.prefix = if val.is_empty() { "dodo/".to_string() } else { val.clone() },
+            7 => {
+                self.backup_config.prefix = if val.is_empty() {
+                    "dodo/".to_string()
+                } else {
+                    val.clone()
+                }
+            }
             8 => self.backup_config.access_key = opt,
             9 => self.backup_config.secret_key = opt,
             10 => self.backup_config.region = opt,
@@ -1318,7 +1419,13 @@ impl<'a> App<'a> {
             19 => self.email_config.api_key = opt,
             20 => self.email_config.from = opt,
             21 => self.email_config.to = opt,
-            22 => self.email_config.digest_time = if val.is_empty() { "07:00".to_string() } else { val.clone() },
+            22 => {
+                self.email_config.digest_time = if val.is_empty() {
+                    "07:00".to_string()
+                } else {
+                    val.clone()
+                }
+            }
             _ => {}
         }
     }
@@ -1336,7 +1443,10 @@ impl<'a> App<'a> {
             }
             field_line += 2; // label line + hint/blank line
         }
-        if self.config_field_index == 4 || self.config_field_index == 13 || self.config_field_index == 18 {
+        if self.config_field_index == 4
+            || self.config_field_index == 13
+            || self.config_field_index == 18
+        {
             field_line += 2; // section header for current field's section
         }
         if field_line < self.config_scroll {
