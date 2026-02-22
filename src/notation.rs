@@ -223,7 +223,7 @@ pub fn parse_recurrence(s: &str) -> Option<String> {
     }
 
     // Interval patterns: 3d, 2w, 3m
-    if s.len() >= 2 {
+    if s.len() >= 2 && s.as_bytes()[s.len() - 1].is_ascii() {
         let unit = s.as_bytes()[s.len() - 1];
         let num_str = &s[..s.len() - 1];
         if matches!(unit, b'd' | b'w' | b'm') {
@@ -265,7 +265,7 @@ pub fn next_occurrence(pattern: &str, from: NaiveDate) -> Option<NaiveDate> {
     }
 
     // Interval: Nd, Nw, Nm
-    if p.len() >= 2 {
+    if p.len() >= 2 && p.as_bytes()[p.len() - 1].is_ascii() {
         let unit = p.as_bytes()[p.len() - 1];
         let num_str = &p[..p.len() - 1];
         if let Ok(n) = num_str.parse::<u32>() {
@@ -366,7 +366,10 @@ pub struct PreparedTask {
 /// Returns a PreparedTask with all fields resolved.
 pub fn prepare_task(raw_input: &str) -> PreparedTask {
     let parsed = parse_notation(raw_input);
-    let title = if parsed.title.is_empty() {
+    // If no plain-text title was extracted but notation tokens were parsed,
+    // don't fall back to raw_input (which would include the token strings).
+    // Only use raw_input as the title when *nothing* was recognized at all.
+    let title = if parsed.title.is_empty() && !parsed.has_updates() {
         raw_input.to_string()
     } else {
         parsed.title
@@ -422,7 +425,13 @@ fn parse_relative_date(s: &str, today: NaiveDate) -> Option<NaiveDate> {
         return None;
     }
 
-    let unit = rest.as_bytes()[rest.len() - 1];
+    // All valid unit chars (d, w, m) are ASCII; bail early on non-ASCII last byte
+    // to avoid panicking when slicing multi-byte characters (e.g. Korean text).
+    let last_byte = rest.as_bytes()[rest.len() - 1];
+    if !last_byte.is_ascii() {
+        return None;
+    }
+    let unit = last_byte;
     let num_str = &rest[..rest.len() - 1];
     let n: i64 = num_str.parse().ok()?;
 

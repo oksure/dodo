@@ -218,7 +218,8 @@ pub(super) struct App<'a> {
     pub(super) report_range: ReportRange,
     pub(super) report: Option<ReportData>,
     pub(super) tick_count: u64,
-    pub(super) frame_count: u64,
+    pub(super) frame_count: u64, // still used by event.rs tick logic
+    pub(super) start_time: std::time::Instant, // wall-clock anchor for animations
     // Add task
     pub(super) add_input: String,
     // Move task
@@ -297,7 +298,7 @@ pub(super) fn split_note_entries(text: &str) -> Vec<String> {
     for line in text.lines() {
         if line.starts_with('[')
             && line.len() >= 11
-            && line[1..5].chars().all(|c| c.is_ascii_digit())
+            && line.get(1..5).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))
         {
             entries.push(line.to_string());
         } else if let Some(last) = entries.last_mut() {
@@ -340,6 +341,7 @@ impl<'a> App<'a> {
             report: None,
             tick_count: 0,
             frame_count: 0,
+            start_time: std::time::Instant::now(),
             add_input: String::new(),
             move_task_id: None,
             move_source: 0,
@@ -405,6 +407,13 @@ impl<'a> App<'a> {
             preferences: config.preferences,
             email_config: config.email,
         }
+    }
+
+    /// Virtual frame count at 60fps based on wall-clock time.
+    /// Using real elapsed time instead of render frame_count means the animation
+    /// runs at a consistent visual speed regardless of the actual poll/render rate.
+    pub(super) fn anim_frame(&self) -> u64 {
+        (self.start_time.elapsed().as_millis() / 16) as u64
     }
 
     pub(super) fn adjust_selected_date(&mut self, days: i64) {

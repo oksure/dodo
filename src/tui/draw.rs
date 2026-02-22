@@ -514,7 +514,7 @@ pub(super) fn draw_tasks_panes(f: &mut Frame, app: &App, area: Rect) {
             &app.panes[i],
             &headers[i],
             is_active,
-            app.frame_count,
+            app.anim_frame(),
             &sort_display,
             pane_chunks[i],
         );
@@ -639,12 +639,17 @@ pub(super) fn build_task_list_item(
 
     let meta_spans = build_compact_meta(task, today);
 
-    // Apply marquee to metadata row if needed
+    // Apply marquee to metadata row if needed.
+    // Use char counts throughout — span content may contain multi-byte characters
+    // (priority ■ is U+25A0 = 3 bytes; project/context names may be CJK/emoji).
     let display_meta = if is_selected && is_active && !is_neon && !meta_spans.is_empty() {
-        let meta_width: u16 = meta_spans.iter().map(|s| s.content.len() as u16).sum();
+        let meta_char_width: u16 = meta_spans
+            .iter()
+            .map(|s| s.content.chars().count() as u16)
+            .sum();
         let available_meta_width = width.saturating_sub(7);
         if available_meta_width > 1 {
-            let scroll_len = meta_width.saturating_sub(available_meta_width);
+            let scroll_len = meta_char_width.saturating_sub(available_meta_width);
             if scroll_len > 0 {
                 let pause_frames: u64 = 20;
                 let total_cycle = pause_frames + scroll_len as u64;
@@ -655,25 +660,23 @@ pub(super) fn build_task_list_item(
                     scroll_len as usize
                 };
                 let mut result: Vec<Span> = Vec::new();
-                let mut char_offset: usize = 0;
+                let mut col: usize = 0; // char-column across all spans
                 for span in meta_spans.iter() {
-                    let span_content = &span.content;
-                    if char_offset + span_content.len() <= offset {
-                        char_offset += span_content.len();
+                    let span_chars: Vec<char> = span.content.chars().collect();
+                    let span_len = span_chars.len();
+                    if col + span_len <= offset {
+                        col += span_len;
                         continue;
-                    } else if char_offset >= offset + available_meta_width as usize {
+                    } else if col >= offset + available_meta_width as usize {
                         break;
-                    } else {
-                        let start_in_span = (offset - char_offset).max(0) as usize;
-                        let end_in_span = ((offset + available_meta_width as usize) - char_offset)
-                            .min(span_content.len());
-                        if start_in_span < end_in_span {
-                            let clipped: String =
-                                span_content[start_in_span..end_in_span].to_string();
-                            result.push(Span::raw(clipped));
-                        }
-                        char_offset += span_content.len();
                     }
+                    let start = offset.saturating_sub(col);
+                    let end = (offset + available_meta_width as usize - col).min(span_len);
+                    if start < end {
+                        let clipped: String = span_chars[start..end].iter().collect();
+                        result.push(Span::styled(clipped, span.style));
+                    }
+                    col += span_len;
                 }
                 result
             } else {
@@ -771,7 +774,7 @@ pub(super) fn draw_tasks_daily(f: &mut Frame, app: &mut App, area: Rect) {
             }
             DailyEntry::Task(task) => {
                 let is_selected = idx == app.daily_cursor;
-                build_task_list_item(task, is_selected, true, app.frame_count, area.width, today)
+                build_task_list_item(task, is_selected, true, app.anim_frame(), area.width, today)
             }
         })
         .collect();
@@ -836,7 +839,7 @@ pub(super) fn draw_tasks_weekly(f: &mut Frame, app: &App, area: Rect) {
             tile_date,
             is_today,
             is_active,
-            app.frame_count,
+            app.anim_frame(),
             tiles[i],
         );
     }
@@ -1288,7 +1291,10 @@ pub(super) fn draw_recurring_tab(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(FG_TEXT)
             };
 
-            let meta = build_compact_meta(template, chrono::Local::now().date_naive());
+            // For recurring templates, only show estimate/project/context —
+            // the scheduled date is always "in the past" (it's the base anchor)
+            // and would show misleading red highlights.
+            let meta = build_template_meta(template);
 
             let line1 = Line::from(vec![
                 Span::styled(format!(" {:>3} ", num), Style::default().fg(FG_SUBTEXT)),
@@ -2214,17 +2220,16 @@ pub(super) fn draw_pane(
 
     // Stats sub-header with right-aligned sort label
     let (elapsed, estimate, done, total, on_time, overdue) = pane.stats();
-    let stats_text = build_pane_stats(elapsed, estimate, done, total, on_time, overdue);
-    let left_text = format!(" {}", stats_text);
+    let stats_spans = build_pane_stats(elapsed, estimate, done, total, on_time, overdue);
     let right_text = format!("{} ", sort_label_str);
-    let left_width = left_text.chars().count();
+    let left_width = 1 + stats_spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
     let right_width = right_text.chars().count();
     let pad = (chunks[0].width as usize).saturating_sub(left_width + right_width);
-    let stats_line = Line::from(vec![
-        Span::styled(left_text, Style::default().fg(FG_SUBTEXT)),
-        Span::raw(" ".repeat(pad)),
-        Span::styled(right_text, Style::default().fg(FG_OVERLAY)),
-    ]);
+    let mut stats_spans_full = vec![Span::raw(" ")];
+    stats_spans_full.extend(stats_spans);
+    stats_spans_full.push(Span::raw(" ".repeat(pad)));
+    stats_spans_full.push(Span::styled(right_text, Style::default().fg(FG_OVERLAY)));
+    let stats_line = Line::from(stats_spans_full);
     let stats_area = Rect::new(chunks[0].x, chunks[0].y, chunks[0].width, 1);
     f.render_widget(Paragraph::new(stats_line), stats_area);
 
@@ -2447,32 +2452,54 @@ pub(super) fn build_pane_stats(
     total: usize,
     on_time: usize,
     overdue: usize,
-) -> String {
+) -> Vec<Span<'static>> {
+    let muted = Style::default().fg(FG_SUBTEXT);
+    let overlay = Style::default().fg(FG_OVERLAY);
+
     if total == 0 {
-        return "(0)".to_string();
+        return vec![Span::styled("(0)", overlay)];
     }
 
     let elapsed_str = format_dur_short(elapsed);
 
-    // For DONE pane, show on-time vs overdue tasks instead of percentage
+    // DONE pane: color-code on-time (green) / overdue (red) counts
     if done > 0 && done == total {
         if on_time + overdue > 0 {
-            format!("{} | {} on-time, {} overdue", elapsed_str, on_time, overdue)
+            vec![
+                Span::styled(elapsed_str, muted),
+                Span::styled(" | ", overlay),
+                Span::styled(on_time.to_string(), Style::default().fg(ACCENT_GREEN)),
+                Span::styled(" / ", overlay),
+                Span::styled(overdue.to_string(), Style::default().fg(ACCENT_RED)),
+            ]
         } else {
-            format!("{} | {}/{} done", elapsed_str, done, total)
+            vec![Span::styled(
+                format!("{} | {}/{}", elapsed_str, done, total),
+                muted,
+            )]
         }
     } else if estimate > 0 {
         let pct = (elapsed as f64 / estimate as f64 * 100.0) as u64;
-        format!(
-            "{}/{} | {}% | {}/{}",
-            elapsed_str,
-            format_dur_short(estimate),
-            pct,
-            done,
-            total
-        )
+        let pct_style = if pct < 80 {
+            Style::default().fg(ACCENT_GREEN)
+        } else if pct < 100 {
+            Style::default().fg(ACCENT_YELLOW)
+        } else {
+            Style::default().fg(ACCENT_RED)
+        };
+        vec![
+            Span::styled(
+                format!("{}/{}", elapsed_str, format_dur_short(estimate)),
+                muted,
+            ),
+            Span::styled(format!(" | {}%", pct), pct_style),
+            Span::styled(format!(" | {}/{}", done, total), muted),
+        ]
     } else {
-        format!("{} | {}/{}", elapsed_str, done, total)
+        vec![Span::styled(
+            format!("{} | {}/{}", elapsed_str, done, total),
+            muted,
+        )]
     }
 }
 
@@ -2498,6 +2525,41 @@ pub(super) fn task_title_style(task: &Task) -> Style {
         TaskStatus::Paused => Style::default().fg(ACCENT_YELLOW),
         TaskStatus::Pending => Style::default().fg(FG_TEXT),
     }
+}
+
+/// Minimal meta for recurring templates: estimate + project + context only.
+/// Omits scheduled/deadline dates (always-past anchor dates show misleading red).
+pub(super) fn build_template_meta(task: &Task) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = vec![];
+    let muted = Style::default().fg(FG_OVERLAY);
+
+    if let Some(est) = task.estimate_minutes {
+        spans.push(Span::styled(format!("~{}", format_est(est)), muted));
+    }
+    if let Some(ref p) = task.project {
+        if !spans.is_empty() {
+            spans.push(Span::styled(" ", muted));
+        }
+        spans.push(Span::styled(
+            format!("+{}", p),
+            Style::default().fg(ACCENT_MAUVE),
+        ));
+    }
+    if let Some(ref c) = task.context {
+        for ctx in c.split(',') {
+            let ctx = ctx.trim();
+            if !ctx.is_empty() {
+                if !spans.is_empty() {
+                    spans.push(Span::styled(" ", muted));
+                }
+                spans.push(Span::styled(
+                    format!("@{}", ctx),
+                    Style::default().fg(ACCENT_TEAL),
+                ));
+            }
+        }
+    }
+    spans
 }
 
 pub(super) fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<Span<'static>> {

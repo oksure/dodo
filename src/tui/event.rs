@@ -27,12 +27,24 @@ where
     B::Error: Send + Sync + 'static,
 {
     let mut last_data_refresh = std::time::Instant::now();
-    let poll_rate = std::time::Duration::from_millis(16);
+    // Animations now use wall-clock time (app.anim_frame()), so actual render fps
+    // no longer affects animation speed. We just need enough fps to look smooth:
+    //   33ms ≈ 30fps — smooth enough for the rainbow sweep on running tasks
+    //  100ms ≈ 10fps — barely-visible redraw for timer updates; keys still feel instant
+    let poll_rate_fast = std::time::Duration::from_millis(33);
+    let poll_rate_idle = std::time::Duration::from_millis(100);
     let data_refresh_rate = std::time::Duration::from_secs(1);
 
     loop {
         app.frame_count = app.frame_count.wrapping_add(1);
         terminal.draw(|f| draw_ui(f, app))?;
+
+        // Use faster poll when a task is running (rainbow animation + timer countdown).
+        let poll_rate = if app.running_task.is_some() {
+            poll_rate_fast
+        } else {
+            poll_rate_idle
+        };
 
         if crossterm::event::poll(poll_rate)? {
             if let Event::Key(key) = event::read()? {
