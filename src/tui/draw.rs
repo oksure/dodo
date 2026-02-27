@@ -103,6 +103,7 @@ pub(super) fn draw_ui(f: &mut Frame, app: &mut App) {
         AppMode::ConfirmDelete => draw_delete_modal(f, app),
         AppMode::RecConfirmDelete => draw_rec_delete_modal(f, app),
         AppMode::EditTask | AppMode::EditTaskField => draw_edit_modal(f, app),
+        AppMode::EditElapsed => draw_elapsed_edit_modal(f, app),
         AppMode::NoteView => draw_note_view_modal(f, app),
         AppMode::AddTask => draw_add_bar(f, app),
         AppMode::RecAddTemplate => draw_rec_add_bar(f, app),
@@ -3343,6 +3344,46 @@ pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
         }
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
+}
+
+pub(super) fn draw_elapsed_edit_modal(f: &mut Frame, app: &App) {
+    let area = centered_rect(40, 25, f.area());
+    draw_shadow(f, area);
+    f.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .title(Span::styled(
+            " Edit Elapsed Time ",
+            Style::default()
+                .fg(ACCENT_TEAL)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Span::styled(
+            " Enter:save  Esc:cancel ",
+            Style::default().fg(FG_OVERLAY),
+        ))
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(ACCENT_TEAL))
+        .padding(Padding::horizontal(1));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let hint_line = Line::from(Span::styled(
+        "  Duration, e.g.: 30m, 1h, 2h30m",
+        Style::default().fg(FG_OVERLAY),
+    ));
+    let input_line = Line::from(Span::styled(
+        format!("\u{276F} {}\u{2588}", app.elapsed_edit_input),
+        Style::default().fg(FG_TEXT),
+    ));
+    let lines = vec![
+        Line::from(""),
+        hint_line,
+        Line::from(""),
+        input_line,
+    ];
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {

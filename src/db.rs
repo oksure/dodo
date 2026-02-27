@@ -1274,6 +1274,78 @@ impl Database {
         })
     }
 
+    /// Update the recurrence pattern for a recurring template.
+    pub fn update_recurrence_by_id(&self, task_id: &str, recurrence: &str) -> Result<()> {
+        self.rt.block_on(async {
+            self.conn.execute(
+                "UPDATE tasks SET recurrence = ?1, modified_at = ?3 WHERE id = ?2",
+                params![recurrence, task_id, Utc::now().to_rfc3339()],
+            ).await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }
+
+    /// Set the total elapsed time for a task by adding a manual correction session.
+    /// Any currently-running session is stopped first. The correction session adjusts
+    /// the sum of all sessions to exactly `target_seconds`.
+    pub fn set_elapsed_seconds_by_id(&self, task_id: &str, target_seconds: i64) -> Result<()> {
+        self.rt.block_on(async {
+            let tx = self.conn.transaction().await?;
+
+            // Stop any running session for this task
+            if let Some(mut session) = get_active_session(&tx, task_id).await? {
+                if session.is_running() {
+                    session.stop();
+                    let ended = session.ended.context("Session ended timestamp missing")?;
+                    tx.execute(
+                        "UPDATE sessions SET ended = ?1, duration = ?2 WHERE id = ?3",
+                        params![ended.to_rfc3339(), session.duration, session.id],
+                    ).await?;
+                    tx.execute(
+                        "UPDATE tasks SET status = 'Paused', modified_at = ?1 WHERE id = ?2",
+                        params![Utc::now().to_rfc3339(), task_id],
+                    ).await?;
+                }
+            }
+
+            // Compute current total elapsed from all closed sessions
+            let mut rows = tx.query(
+                "SELECT COALESCE(SUM(duration), 0) FROM sessions WHERE task_id = ?1",
+                params![task_id],
+            ).await?;
+            let current_elapsed: i64 = match rows.next().await? {
+                Some(row) => val_i64(&row, 0)?,
+                None => 0,
+            };
+
+            // Add a correction session to adjust total to target
+            let delta = target_seconds - current_elapsed;
+            if delta != 0 {
+                let now = Utc::now();
+                let correction_id = ulid::Ulid::new().to_string();
+                tx.execute(
+                    "INSERT INTO sessions (id, task_id, started, ended, duration, manual_edit, notes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
+                    params![
+                        correction_id,
+                        task_id,
+                        now.to_rfc3339(),
+                        now.to_rfc3339(),
+                        delta,
+                        "Manual time adjustment",
+                    ],
+                ).await?;
+            }
+
+            tx.execute(
+                "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
+                params![Utc::now().to_rfc3339(), task_id],
+            ).await?;
+            tx.commit().await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }
+
     pub fn update_task_scheduled(&self, task_id: &str, date: NaiveDate) -> Result<()> {
         self.rt.block_on(async {
             self.conn.execute(

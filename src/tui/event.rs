@@ -47,7 +47,8 @@ where
         };
 
         if crossterm::event::poll(poll_rate)? {
-            if let Event::Key(key) = event::read()? {
+            match event::read()? {
+            Event::Key(key) => {
                 match app.mode {
                     AppMode::Normal => match key.code {
                         KeyCode::Char('q') | KeyCode::Esc => {
@@ -302,6 +303,8 @@ where
                             app.mode = AppMode::Normal;
                         }
                         KeyCode::Char('j') | KeyCode::Down => {
+                            // Templates only have fields 0-8 (with 8=Recurrence)
+                            // Regular tasks also 0-8 (with 8=Notes)
                             if app.edit_field_index < 8 {
                                 app.edit_field_index += 1;
                             }
@@ -311,26 +314,44 @@ where
                                 app.edit_field_index -= 1;
                             }
                         }
-                        KeyCode::Enter => {
-                            // If input is empty, enter edit mode; otherwise save
-                            if app.edit_field_input.is_empty() {
-                                app.enter_edit_field();
-                            } else {
-                                let _ = app.save_edit_field();
+                        KeyCode::Char('E') => {
+                            // Open elapsed-time edit modal (only for regular tasks)
+                            if !app.edit_is_template {
+                                app.start_elapsed_edit();
                             }
+                        }
+                        KeyCode::Enter => {
+                            // Enter edit mode for the selected field
+                            app.enter_edit_field();
                         }
                         KeyCode::Backspace => {
-                            // Only allow backspace if we're in edit mode (field has input)
-                            if !app.edit_field_input.is_empty() {
-                                app.edit_field_input.pop();
-                            } else {
-                                app.enter_edit_field();
-                            }
+                            app.enter_edit_field();
                         }
                         KeyCode::Char(c) => {
-                            // Start typing to enter edit mode
+                            // Start typing to immediately enter edit mode
                             app.edit_field_input.push(c);
                             app.mode = AppMode::EditTaskField;
+                        }
+                        _ => {}
+                    },
+                    AppMode::EditElapsed => match key.code {
+                        KeyCode::Esc => {
+                            app.elapsed_edit_input.clear();
+                            app.mode = AppMode::EditTask;
+                        }
+                        KeyCode::Enter => {
+                            let _ = app.save_elapsed_edit();
+                        }
+                        KeyCode::Backspace => {
+                            app.elapsed_edit_input.pop();
+                        }
+                        KeyCode::Char('u')
+                            if key.modifiers.contains(event::KeyModifiers::CONTROL) =>
+                        {
+                            app.elapsed_edit_input.clear();
+                        }
+                        KeyCode::Char(c) => {
+                            app.elapsed_edit_input.push(c);
                         }
                         _ => {}
                     },
@@ -636,7 +657,46 @@ where
                         _ => {}
                     },
                 }
-            }
+            } // Event::Key
+            Event::Paste(text) => {
+                // Handle bracketed paste events - route to the active input field
+                match app.mode {
+                    AppMode::AddTask => {
+                        // Strip newlines from single-line fields
+                        app.add_input.push_str(&text.replace('\n', " "));
+                    }
+                    AppMode::EditTaskField => {
+                        // For notes field, preserve newlines; for other fields strip them
+                        if app.edit_field_index == 8 && !app.edit_is_template {
+                            app.edit_field_input.push_str(&text);
+                        } else {
+                            app.edit_field_input.push_str(&text.replace('\n', " "));
+                        }
+                    }
+                    AppMode::NoteView => {
+                        if app.note_editing {
+                            // Preserve newlines in note editing
+                            app.edit_field_input.push_str(&text);
+                        }
+                    }
+                    AppMode::Search => {
+                        app.search_input.push_str(&text.replace('\n', " "));
+                        let _ = app.refresh_all();
+                    }
+                    AppMode::RecAddTemplate => {
+                        app.rec_add_input.push_str(&text.replace('\n', " "));
+                    }
+                    AppMode::EditConfigField => {
+                        app.config_field_input.push_str(&text.replace('\n', " "));
+                    }
+                    AppMode::EditElapsed => {
+                        app.elapsed_edit_input.push_str(&text.replace('\n', " "));
+                    }
+                    _ => {}
+                }
+            } // Event::Paste
+            _ => {} // ignore mouse events etc.
+            } // match event::read()
         }
 
         if last_data_refresh.elapsed() >= data_refresh_rate {
@@ -662,6 +722,22 @@ where
                 if at.elapsed().as_secs() >= threshold {
                     app.backup_status_msg = None;
                     app.backup_status_msg_at = None;
+                }
+            }
+
+            // Periodic auto-backup check (every hour)
+            const BACKUP_CHECK_INTERVAL_TICKS: u64 = 3600;
+            let backup_due = match app.last_backup_check_tick {
+                None => true,
+                Some(last) => app.tick_count.saturating_sub(last) >= BACKUP_CHECK_INTERVAL_TICKS,
+            };
+            if app.backup_config.is_ready() && backup_due {
+                app.last_backup_check_tick = Some(app.tick_count);
+                if let Ok(Some(_)) = dodo::backup::check_backup_age(&app.backup_config) {
+                    let cfg = app.backup_config.clone();
+                    std::thread::spawn(move || {
+                        let _ = dodo::backup::create_backup(&cfg);
+                    });
                 }
             }
 
@@ -1193,6 +1269,7 @@ pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
             if let Some(template) = app.templates.get(app.template_selected) {
                 app.edit_task_id = Some(template.id.clone());
                 app.edit_field_index = 0;
+                app.edit_is_template = true;  // recurring template uses field 8 = Recurrence
                 app.edit_field_values = [
                     template.title.clone(),
                     template.project.clone().unwrap_or_default(),

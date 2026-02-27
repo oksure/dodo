@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableMouseCapture, EnableMouseCapture, EnableBracketedPaste, DisableBracketedPaste},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -23,7 +23,7 @@ use state::App;
 pub fn run_tui(db: &Database) -> Result<()> {
     enable_raw_mode()?;
     let mut stderr = io::stderr();
-    execute!(stderr, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stderr, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)?;
 
     let backend = CrosstermBackend::new(stderr);
     let mut terminal = Terminal::new(backend)?;
@@ -43,7 +43,8 @@ pub fn run_tui(db: &Database) -> Result<()> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        DisableMouseCapture,
+        DisableBracketedPaste,
     )?;
     terminal.show_cursor()?;
 

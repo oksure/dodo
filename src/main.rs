@@ -28,12 +28,10 @@ fn main() -> Result<()> {
     let _ = Database::clean_sync_metadata(); // clean up old replica metadata from dodo.db
     let db = Database::new()?;
 
-    // Startup backup-age check (passive reminder to stderr)
-    if let Ok(Some(days)) = backup::check_backup_age(&config.backup) {
-        if days == u64::MAX {
-            eprintln!("Backup is configured but no backups exist. Run 'dodo backup' to create one.");
-        } else {
-            eprintln!("Backup is {} days old. Run 'dodo backup' to create one.", days);
+    // Startup backup-age check — auto-backup silently if overdue
+    if let Ok(Some(_)) = backup::check_backup_age(&config.backup) {
+        if let Err(e) = backup::create_backup(&config.backup) {
+            eprintln!("Auto-backup failed: {}", e);
         }
     }
 

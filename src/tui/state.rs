@@ -174,6 +174,7 @@ pub(super) enum AppMode {
     ConfirmDelete,
     EditTask,
     EditTaskField,
+    EditElapsed,
     NoteView,
     Search,
     RecAddTemplate,
@@ -234,6 +235,9 @@ pub(super) struct App<'a> {
     pub(super) edit_field_index: usize,
     pub(super) edit_field_values: [String; 9],
     pub(super) edit_field_input: String,
+    pub(super) edit_is_template: bool,  // true when editing a recurring template
+    // Elapsed editing modal
+    pub(super) elapsed_edit_input: String,
     // Note view
     pub(super) note_lines: Vec<String>,
     pub(super) note_selected: usize,
@@ -255,6 +259,7 @@ pub(super) struct App<'a> {
     pub(super) sync_status: SyncStatus,
     pub(super) sync_receiver: Option<mpsc::Receiver<Result<()>>>,
     pub(super) last_sync_tick: u64,
+    pub(super) last_backup_check_tick: Option<u64>,
     pub(super) backup_status_msg: Option<String>,
     pub(super) backup_status_msg_at: Option<std::time::Instant>,
     pub(super) config_test_result: Option<String>,
@@ -352,6 +357,8 @@ impl<'a> App<'a> {
             edit_field_index: 0,
             edit_field_values: Default::default(),
             edit_field_input: String::new(),
+            edit_is_template: false,
+            elapsed_edit_input: String::new(),
             note_lines: Vec::new(),
             note_selected: 0,
             note_editing: false,
@@ -372,6 +379,7 @@ impl<'a> App<'a> {
             },
             sync_receiver: None,
             last_sync_tick: 0,
+            last_backup_check_tick: None,
             backup_status_msg: None,
             backup_status_msg_at: None,
             config_test_result: None,
@@ -974,22 +982,44 @@ impl<'a> App<'a> {
     pub(super) fn done(&mut self) -> Result<()> {
         let task_info = self
             .current_selected_task()
-            .map(|t| (t.id.clone(), t.status == TaskStatus::Done));
-        if let Some((ref id, was_done)) = task_info {
-            if was_done {
+            .map(|t| (t.id.clone(), t.status.clone()));
+        if let Some((ref id, ref status)) = task_info {
+            if *status == TaskStatus::Done {
                 self.db.uncomplete_task_by_id(id)?;
             } else {
+                // If running, stop timer display immediately before DB call
+                if *status == TaskStatus::Running {
+                    self.running_task = None;
+                }
                 self.db.complete_task_by_id(id)?;
             }
         }
         self.refresh_current_view()?;
-        // Follow the task to its new pane (Panes view only)
-        if self.tasks_view == TasksView::Panes {
-            if let Some((ref id, _)) = task_info {
+        // Follow the task to its new position in all views
+        if let Some((ref id, _)) = task_info {
+            if self.tasks_view == TasksView::Panes {
                 for pane_idx in 0..4 {
                     if let Some(pos) = self.panes[pane_idx].tasks.iter().position(|t| t.id == *id) {
                         self.active_pane = pane_idx;
                         self.panes[pane_idx].list_state.select(Some(pos));
+                        break;
+                    }
+                }
+            } else if self.tasks_view == TasksView::Daily {
+                for (i, entry) in self.daily_entries.iter().enumerate() {
+                    if let DailyEntry::Task(ref t) = entry {
+                        if t.id == *id {
+                            self.daily_cursor = i;
+                            break;
+                        }
+                    }
+                }
+            } else if self.tasks_view == TasksView::Weekly {
+                for (pane_idx, pane) in self.weekly_panes.iter().enumerate() {
+                    if let Some(pos) = pane.tasks.iter().position(|t| t.id == *id) {
+                        self.weekly_active = pane_idx;
+                        // Can't mutate pane here, just switch active
+                        let _ = pos;
                         break;
                     }
                 }
@@ -999,7 +1029,7 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn open_note_quick(&mut self) {
-        self.start_edit_task();
+        self.start_edit_task(); // sets edit_is_template = false
         if self.mode == AppMode::EditTask {
             self.edit_field_index = 8;
             self.edit_field_input.clear();
@@ -1147,6 +1177,7 @@ impl<'a> App<'a> {
         if let Some(task) = self.current_selected_task().cloned() {
             self.edit_task_id = Some(task.id.clone());
             self.edit_field_index = 0;
+            self.edit_is_template = false;
             self.edit_field_values = [
                 task.title.clone(),
                 task.project.clone().unwrap_or_default(),
@@ -1172,7 +1203,9 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn enter_edit_field(&mut self) {
-        if self.edit_field_index == 8 {
+        // Field 8 for regular tasks = Notes (special NoteView)
+        // Field 8 for recurring templates = Recurrence (plain text)
+        if self.edit_field_index == 8 && !self.edit_is_template {
             let notes = &self.edit_field_values[8];
             if notes.is_empty() {
                 // No notes — go straight to append input
@@ -1204,6 +1237,7 @@ impl<'a> App<'a> {
     pub(super) fn save_edit_field(&mut self) -> Result<()> {
         let idx = self.edit_field_index;
         self.edit_field_values[idx] = self.edit_field_input.clone();
+        let saved_input = self.edit_field_input.clone();
 
         if let Some(ref task_id) = self.edit_task_id {
             let val = &self.edit_field_values[idx];
@@ -1283,10 +1317,16 @@ impl<'a> App<'a> {
                         self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                     }
                 }
+                8 if self.edit_is_template => {
+                    // Recurrence pattern for recurring templates
+                    if !saved_input.is_empty() {
+                        self.db.update_recurrence_by_id(task_id, &saved_input)?;
+                    }
+                }
                 8 => {
-                    // Notes (append)
-                    if !self.edit_field_input.is_empty() {
-                        self.db.append_note_by_id(task_id, &self.edit_field_input)?;
+                    // Notes (append) for regular tasks
+                    if !saved_input.is_empty() {
+                        self.db.append_note_by_id(task_id, &saved_input)?;
                         let notes = self.db.get_task_notes_by_id(task_id)?;
                         self.edit_field_values[8] = notes.unwrap_or_default();
                     }
@@ -1295,8 +1335,11 @@ impl<'a> App<'a> {
             }
             self.refresh_current_view()?;
         }
+        // Always clear the input field when returning to EditTask to prevent stale-input bug:
+        // without this, pressing Enter again would try to re-save the previous field's value.
+        self.edit_field_input.clear();
         // After appending a note, return to NoteView so the user sees the updated list
-        if idx == 8 && !self.edit_field_values[8].is_empty() {
+        if idx == 8 && !self.edit_is_template && !self.edit_field_values[8].is_empty() {
             self.note_lines = split_note_entries(&self.edit_field_values[8]);
             self.note_selected = self.note_lines.len().saturating_sub(1);
             self.note_editing = false;
@@ -1304,6 +1347,40 @@ impl<'a> App<'a> {
         } else {
             self.mode = AppMode::EditTask;
         }
+        Ok(())
+    }
+
+    pub(super) fn start_elapsed_edit(&mut self) {
+        // Pre-fill with current elapsed formatted as duration
+        if let Some(task) = self.current_selected_task() {
+            let elapsed = task.elapsed_seconds.unwrap_or(0);
+            let mins = elapsed / 60;
+            self.elapsed_edit_input = if mins > 0 {
+                let h = mins / 60;
+                let m = mins % 60;
+                if h > 0 && m > 0 {
+                    format!("{}h{}m", h, m)
+                } else if h > 0 {
+                    format!("{}h", h)
+                } else {
+                    format!("{}m", m)
+                }
+            } else {
+                String::new()
+            };
+            self.mode = AppMode::EditElapsed;
+        }
+    }
+
+    pub(super) fn save_elapsed_edit(&mut self) -> Result<()> {
+        if let Some(ref task_id) = self.edit_task_id.clone() {
+            if let Some(mins) = dodo::notation::parse_duration(&self.elapsed_edit_input) {
+                self.db.set_elapsed_seconds_by_id(task_id, mins * 60)?;
+                self.refresh_current_view()?;
+            }
+        }
+        self.elapsed_edit_input.clear();
+        self.mode = AppMode::EditTask;
         Ok(())
     }
 
