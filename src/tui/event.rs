@@ -314,8 +314,8 @@ where
                                 app.edit_field_index -= 1;
                             }
                         }
-                        KeyCode::Char('E') => {
-                            // Open elapsed-time edit modal (only for regular tasks)
+                        KeyCode::Char('e') => {
+                            // Open elapsed-time edit modal (only for regular tasks, not templates)
                             if !app.edit_is_template {
                                 app.start_elapsed_edit();
                             }
@@ -810,6 +810,19 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('s') => {
             let _ = app.toggle_selected();
+            return;
+        }
+        KeyCode::Char('e') => {
+            // Directly open elapsed-time edit modal from any task view
+            app.start_elapsed_edit();
+            return;
+        }
+        KeyCode::Char('H') => {
+            // Toggle show/hide done tasks (Daily, Weekly, Calendar views only)
+            if app.tasks_view != TasksView::Panes {
+                app.show_done = !app.show_done;
+                let _ = app.refresh_current_view();
+            }
             return;
         }
         KeyCode::Char('d') => {

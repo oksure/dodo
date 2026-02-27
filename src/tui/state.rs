@@ -238,6 +238,9 @@ pub(super) struct App<'a> {
     pub(super) edit_is_template: bool,  // true when editing a recurring template
     // Elapsed editing modal
     pub(super) elapsed_edit_input: String,
+    pub(super) elapsed_return_to_edit: bool, // true when opened from EditTask dialog
+    // Done visibility toggle (Daily/Weekly/Calendar only; Panes always shows Done pane)
+    pub(super) show_done: bool,
     // Note view
     pub(super) note_lines: Vec<String>,
     pub(super) note_selected: usize,
@@ -296,15 +299,26 @@ pub(super) struct App<'a> {
 }
 
 /// Split note text into entries grouped by timestamp.
-/// Each entry starts with a `[YYYY-MM-DD` timestamp line.
+/// Each entry starts with a strict `[YYYY-MM-DD HH:MM]` timestamp prefix.
+/// Uses strict matching to avoid misidentifying pasted text (e.g. `[2025-01-15 note]`).
 /// Continuation lines (without a timestamp prefix) are grouped with the previous entry.
 pub(super) fn split_note_entries(text: &str) -> Vec<String> {
     let mut entries: Vec<String> = Vec::new();
     for line in text.lines() {
-        if line.starts_with('[')
-            && line.len() >= 11
-            && line.get(1..5).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))
-        {
+        // Strict check: must match [YYYY-MM-DD HH:MM] exactly (19+ chars)
+        let is_timestamp = line.len() >= 19
+            && line.starts_with('[')
+            && line.get(1..5).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))  // YYYY
+            && line.get(5..6) == Some("-")
+            && line.get(6..8).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))  // MM
+            && line.get(8..9) == Some("-")
+            && line.get(9..11).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit())) // DD
+            && line.get(11..12) == Some(" ")
+            && line.get(12..14).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit())) // HH
+            && line.get(14..15) == Some(":")
+            && line.get(15..17).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit())) // MM
+            && line.get(17..18) == Some("]");
+        if is_timestamp {
             entries.push(line.to_string());
         } else if let Some(last) = entries.last_mut() {
             last.push('\n');
@@ -359,6 +373,8 @@ impl<'a> App<'a> {
             edit_field_input: String::new(),
             edit_is_template: false,
             elapsed_edit_input: String::new(),
+            elapsed_return_to_edit: false,
+            show_done: true,
             note_lines: Vec::new(),
             note_selected: 0,
             note_editing: false,
@@ -432,30 +448,8 @@ impl<'a> App<'a> {
             let task_id = task.id.clone();
             let _ = self.db.update_task_scheduled(&task_id, new_date);
             let _ = self.refresh_current_view();
-            // Follow cursor — same pattern as done()
-            if self.tasks_view == TasksView::Panes {
-                for pane_idx in 0..4 {
-                    if let Some(pos) = self.panes[pane_idx]
-                        .tasks
-                        .iter()
-                        .position(|t| t.id == task_id)
-                    {
-                        self.active_pane = pane_idx;
-                        self.panes[pane_idx].list_state.select(Some(pos));
-                        break;
-                    }
-                }
-            }
-            if self.tasks_view == TasksView::Daily {
-                for (i, entry) in self.daily_entries.iter().enumerate() {
-                    if let DailyEntry::Task(ref t) = entry {
-                        if t.id == task_id {
-                            self.daily_cursor = i;
-                            break;
-                        }
-                    }
-                }
-            }
+            // Follow cursor to task's new position in all views
+            self.follow_task_cursor(&task_id);
         }
     }
 
@@ -516,6 +510,51 @@ impl<'a> App<'a> {
         let sort = SORT_MODES[pane.sort_index];
         let ascending = pane.sort_ascending;
         pane.tasks.sort_by(|a, b| sort_tasks(a, b, sort, ascending));
+    }
+
+    /// Follow the cursor to a specific task in the current view after a status/schedule change.
+    /// This single method replaces the ad-hoc cursor-follow blocks that used to be duplicated
+    /// in done(), toggle_selected(), and adjust_selected_date().
+    pub(super) fn follow_task_cursor(&mut self, task_id: &str) {
+        match self.tasks_view {
+            TasksView::Panes => {
+                for pane_idx in 0..4 {
+                    if let Some(pos) = self.panes[pane_idx].tasks.iter().position(|t| t.id == task_id) {
+                        self.active_pane = pane_idx;
+                        self.panes[pane_idx].list_state.select(Some(pos));
+                        break;
+                    }
+                }
+            }
+            TasksView::Daily => {
+                for (i, entry) in self.daily_entries.iter().enumerate() {
+                    if let DailyEntry::Task(ref t) = entry {
+                        if t.id == task_id {
+                            self.daily_cursor = i;
+                            break;
+                        }
+                    }
+                }
+            }
+            TasksView::Weekly => {
+                for (pane_idx, pane) in self.weekly_panes.iter().enumerate() {
+                    if pane.tasks.iter().any(|t| t.id == task_id) {
+                        self.weekly_active = pane_idx;
+                        break;
+                    }
+                }
+            }
+            TasksView::Calendar => {
+                let found = self.calendar_tasks_by_date.iter().find_map(|(date, tasks)| {
+                    tasks.iter().position(|t| t.id == task_id).map(|pos| (*date, pos))
+                });
+                if let Some((date, pos)) = found {
+                    self.calendar_selected = date;
+                    self.calendar_task_selected = pos;
+                    self.calendar_focus = CalendarFocus::TaskList;
+                }
+            }
+        }
     }
 
     pub(super) fn current_selected_task(&self) -> Option<&Task> {
@@ -736,6 +775,9 @@ impl<'a> App<'a> {
             if !self.matches_search(&task) {
                 continue;
             }
+            if !self.show_done && task.status == TaskStatus::Done {
+                continue;
+            }
             let date = task.scheduled.unwrap_or(today);
             by_date.entry(date).or_default().push(task);
         }
@@ -804,6 +846,9 @@ impl<'a> App<'a> {
             if !self.matches_search(&task) {
                 continue;
             }
+            if !self.show_done && task.status == TaskStatus::Done {
+                continue;
+            }
             let task_date = task.scheduled.unwrap_or(today);
             for (i, date) in dates.iter().enumerate() {
                 if task_date == *date {
@@ -852,6 +897,9 @@ impl<'a> App<'a> {
 
         for task in all_tasks {
             if !self.matches_search(&task) {
+                continue;
+            }
+            if !self.show_done && task.status == TaskStatus::Done {
                 continue;
             }
             let task_date = task.scheduled.unwrap_or(today);
@@ -954,18 +1002,8 @@ impl<'a> App<'a> {
                 }
             }
             self.refresh_current_view()?;
-
-            // Follow the task to its new position in daily view
-            if self.tasks_view == TasksView::Daily {
-                for (i, entry) in self.daily_entries.iter().enumerate() {
-                    if let DailyEntry::Task(ref t) = entry {
-                        if t.id == task_id {
-                            self.daily_cursor = i;
-                            break;
-                        }
-                    }
-                }
-            }
+            // Follow cursor to task's new position in all views
+            self.follow_task_cursor(&task_id);
         }
         Ok(())
     }
@@ -995,35 +1033,9 @@ impl<'a> App<'a> {
             }
         }
         self.refresh_current_view()?;
-        // Follow the task to its new position in all views
+        // Follow task to its new position in all views via shared helper
         if let Some((ref id, _)) = task_info {
-            if self.tasks_view == TasksView::Panes {
-                for pane_idx in 0..4 {
-                    if let Some(pos) = self.panes[pane_idx].tasks.iter().position(|t| t.id == *id) {
-                        self.active_pane = pane_idx;
-                        self.panes[pane_idx].list_state.select(Some(pos));
-                        break;
-                    }
-                }
-            } else if self.tasks_view == TasksView::Daily {
-                for (i, entry) in self.daily_entries.iter().enumerate() {
-                    if let DailyEntry::Task(ref t) = entry {
-                        if t.id == *id {
-                            self.daily_cursor = i;
-                            break;
-                        }
-                    }
-                }
-            } else if self.tasks_view == TasksView::Weekly {
-                for (pane_idx, pane) in self.weekly_panes.iter().enumerate() {
-                    if let Some(pos) = pane.tasks.iter().position(|t| t.id == *id) {
-                        self.weekly_active = pane_idx;
-                        // Can't mutate pane here, just switch active
-                        let _ = pos;
-                        break;
-                    }
-                }
-            }
+            self.follow_task_cursor(id);
         }
         Ok(())
     }
@@ -1354,6 +1366,7 @@ impl<'a> App<'a> {
         // Pre-fill with current elapsed formatted as duration
         if let Some(task) = self.current_selected_task() {
             let elapsed = task.elapsed_seconds.unwrap_or(0);
+            let task_id = task.id.clone();
             let mins = elapsed / 60;
             self.elapsed_edit_input = if mins > 0 {
                 let h = mins / 60;
@@ -1368,6 +1381,10 @@ impl<'a> App<'a> {
             } else {
                 String::new()
             };
+            // Store the task id (may not be set if called from Normal mode, not EditTask dialog)
+            self.edit_task_id = Some(task_id);
+            // Remember whether to return to the edit dialog or back to Normal view
+            self.elapsed_return_to_edit = self.mode == AppMode::EditTask;
             self.mode = AppMode::EditElapsed;
         }
     }
@@ -1380,7 +1397,12 @@ impl<'a> App<'a> {
             }
         }
         self.elapsed_edit_input.clear();
-        self.mode = AppMode::EditTask;
+        // Return to the edit dialog if we came from it, otherwise back to Normal task view
+        self.mode = if self.elapsed_return_to_edit {
+            AppMode::EditTask
+        } else {
+            AppMode::Normal
+        };
         Ok(())
     }
 

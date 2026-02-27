@@ -325,6 +325,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 TasksView::Panes => vec![
                     ("a", "add"),
                     ("s", "start"),
+                    ("e", "elapsed"),
                     ("d", "done"),
                     ("n", "note"),
                     ("\u{21B5}", "edit"),
@@ -340,10 +341,11 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                     ("a", "add"),
                     ("s", "start"),
                     ("d", "done"),
+                    ("e", "elapsed"),
+                    ("H", "hide done"),
                     ("n", "note"),
                     ("+/-", "day"),
                     ("t", "today"),
-                    ("o", "sort"),
                     ("v", "view"),
                     ("/", "find"),
                     ("?", "help"),
@@ -353,6 +355,8 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                     ("a", "add"),
                     ("s", "start"),
                     ("d", "done"),
+                    ("e", "elapsed"),
+                    ("H", "hide done"),
                     ("+/-", "day"),
                     ("h/l", "day"),
                     ("[/]", "week"),
@@ -377,6 +381,8 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                         ("j/k", "task"),
                         ("s", "start"),
                         ("d", "done"),
+                        ("e", "elapsed"),
+                        ("H", "hide done"),
                         ("n", "note"),
                         ("\u{21B5}", "edit"),
                         ("Esc", "grid"),
@@ -453,8 +459,13 @@ pub(super) fn draw_view_selector(f: &mut Frame, app: &App, area: Rect) {
             left_spans.push(Span::styled(" | ", Style::default().fg(FG_OVERLAY)));
         }
         if *view == app.tasks_view {
+            let label = if *view != TasksView::Panes && !app.show_done {
+                format!("\u{25CF} {}\u{00AC}done  ", view.label())
+            } else {
+                format!("\u{25CF} {}  ", view.label())
+            };
             left_spans.push(Span::styled(
-                format!("\u{25CF} {}  ", view.label()),
+                label,
                 Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
             ));
         } else {
@@ -465,7 +476,11 @@ pub(super) fn draw_view_selector(f: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    let right = "v:next  V:prev ";
+    let right = if app.tasks_view != TasksView::Panes && !app.show_done {
+        "H:show done  v:next  V:prev "
+    } else {
+        "H:hide done  v:next  V:prev "
+    };
     let left_width: usize = left_spans.iter().map(|s| s.content.len()).sum();
     let pad = (area.width as usize).saturating_sub(left_width + right.len());
     left_spans.push(Span::raw(" ".repeat(pad)));
@@ -2812,8 +2827,10 @@ pub(super) fn draw_edit_modal(f: &mut Frame, app: &App) {
 
     let help_text = if app.mode == AppMode::EditTaskField {
         " Enter:save  Esc:cancel "
-    } else {
+    } else if app.edit_is_template {
         " j/k \u{2193}\u{2191}:navigate  Enter:edit  Esc:close "
+    } else {
+        " j/k \u{2193}\u{2191}:navigate  Enter:edit  e:elapsed  Esc:close "
     };
 
     let block = Block::bordered()
@@ -2838,7 +2855,7 @@ pub(super) fn draw_edit_modal(f: &mut Frame, app: &App) {
         if on_notes_field {
             // Editing Notes: show existing notes above, input below
             let input_line_count = app.edit_field_input.split('\n').count();
-            let input_area_height = (input_line_count as u16 + 2).max(4).min(8);
+            let input_area_height = (input_line_count as u16 + 2).max(4).min(14);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Min(1), Constraint::Length(input_area_height)])
@@ -3281,7 +3298,7 @@ pub(super) fn draw_note_view_modal(f: &mut Frame, app: &App) {
     if app.note_editing {
         // Notes above, input below
         let input_line_count = app.edit_field_input.split('\n').count();
-        let input_area_height = (input_line_count as u16 + 2).max(4).min(8);
+        let input_area_height = (input_line_count as u16 + 2).max(4).min(14);
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(input_area_height)])
