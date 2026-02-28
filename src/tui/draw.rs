@@ -120,34 +120,31 @@ pub(super) fn draw_search_bar(f: &mut Frame, app: &App, area: Rect) {
     let is_focused = app.mode == AppMode::Search;
     let has_filter = !app.search_input.is_empty();
 
-    if is_focused {
-        // Expanded bordered box (3 lines) when actively typing
-        let block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(ACCENT_BLUE))
-            .padding(Padding::horizontal(1));
-        let inner = block.inner(area);
-        f.render_widget(block, area);
-        let input_text = format!("/ {}\u{2588}", app.search_input);
-        f.render_widget(
-            Paragraph::new(input_text).style(Style::default().fg(FG_TEXT)),
-            inner,
-        );
-    } else if has_filter {
-        // 1-line active filter indicator
-        let filter_text = format!(" / {} ", app.search_input);
-        f.render_widget(
-            Paragraph::new(filter_text).style(Style::default().fg(ACCENT_BLUE)),
-            area,
-        );
+    // Always draw a bordered box so content never jumps position.
+    // Only the border color changes: blue when focused, muted otherwise.
+    let border_style = if is_focused {
+        Style::default().fg(ACCENT_BLUE)
     } else {
-        // 1-line muted hint (2a: collapsed when inactive)
-        let hint = " / search: +proj @ctx !! ^<3d =<1w ...";
-        f.render_widget(
-            Paragraph::new(hint).style(Style::default().fg(FG_OVERLAY)),
-            area,
-        );
-    }
+        Style::default().fg(FG_OVERLAY)
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(border_style)
+        .padding(Padding::horizontal(1));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let (content, style) = if is_focused {
+        let text = format!("/ {}\u{2588}", app.search_input);
+        (text, Style::default().fg(FG_TEXT))
+    } else if has_filter {
+        let text = format!("/ {}", app.search_input);
+        (text, Style::default().fg(ACCENT_BLUE))
+    } else {
+        let text = String::from("/ search: +proj @ctx !! ^<3d =<1w ...");
+        (text, Style::default().fg(FG_OVERLAY))
+    };
+    f.render_widget(Paragraph::new(content).style(style), inner);
 }
 
 pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
