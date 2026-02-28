@@ -60,6 +60,66 @@ pub(super) fn format_dur_short(seconds: i64) -> String {
     }
 }
 
+/// 10a: Convert raw recurrence patterns to human-readable descriptions.
+pub(super) fn humanize_recurrence(pattern: &str) -> String {
+    let p = pattern.trim_start_matches('*');
+    // Day-of-week list: mon,wed,fri
+    if p.contains(',') || ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        .iter()
+        .any(|d| p == *d)
+    {
+        let days: Vec<String> = p
+            .split(',')
+            .map(|d| {
+                let d = d.trim();
+                match d {
+                    "mon" => "Mon",
+                    "tue" => "Tue",
+                    "wed" => "Wed",
+                    "thu" => "Thu",
+                    "fri" => "Fri",
+                    "sat" => "Sat",
+                    "sun" => "Sun",
+                    _ => d,
+                }
+                .to_string()
+            })
+            .collect();
+        return days.join(", ");
+    }
+    // Day-of-month: day15
+    if let Some(rest) = p.strip_prefix("day") {
+        if let Ok(n) = rest.parse::<u32>() {
+            return format!("Day {} monthly", n);
+        }
+    }
+    // Named
+    match p {
+        "daily" => return "Every day".to_string(),
+        "weekly" => return "Every week".to_string(),
+        "monthly" => return "Every month".to_string(),
+        _ => {}
+    }
+    // Numeric: Nd or Nw or Nm
+    if let Some(rest) = p.strip_suffix('d') {
+        if let Ok(n) = rest.parse::<u32>() {
+            return if n == 1 { "Every day".to_string() } else { format!("Every {} days", n) };
+        }
+    }
+    if let Some(rest) = p.strip_suffix('w') {
+        if let Ok(n) = rest.parse::<u32>() {
+            return if n == 1 { "Every week".to_string() } else { format!("Every {} weeks", n) };
+        }
+    }
+    if let Some(rest) = p.strip_suffix('m') {
+        if let Ok(n) = rest.parse::<u32>() {
+            return if n == 1 { "Every month".to_string() } else { format!("Every {} months", n) };
+        }
+    }
+    // Fallback: return raw pattern
+    pattern.to_string()
+}
+
 pub(super) fn format_est(minutes: i64) -> String {
     let hours = minutes / 60;
     let mins = minutes % 60;
