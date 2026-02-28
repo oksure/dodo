@@ -243,11 +243,27 @@ where
                                 match key.code {
                                     KeyCode::Char('l') | KeyCode::Right => {
                                         app.report_range = app.report_range.next();
+                                        app.report_offset = 0; // reset to current period
                                         let _ = app.refresh_report();
                                     }
                                     KeyCode::Char('h') | KeyCode::Left => {
                                         app.report_range = app.report_range.prev();
+                                        app.report_offset = 0; // reset to current period
                                         let _ = app.refresh_report();
+                                    }
+                                    // [ / J = go back one period in time
+                                    KeyCode::Char('[') | KeyCode::Char('J') => {
+                                        if !matches!(app.report_range, dodo::cli::ReportRange::All) {
+                                            app.report_offset += 1;
+                                            let _ = app.refresh_report();
+                                        }
+                                    }
+                                    // ] / K = go forward one period in time
+                                    KeyCode::Char(']') | KeyCode::Char('K') => {
+                                        if app.report_offset > 0 {
+                                            app.report_offset -= 1;
+                                            let _ = app.refresh_report();
+                                        }
                                     }
                                     _ => {}
                                 }

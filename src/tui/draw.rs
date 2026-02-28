@@ -18,12 +18,9 @@ use super::format::*;
 use super::state::*;
 
 pub(super) fn draw_ui(f: &mut Frame, app: &mut App) {
-    // 2a: expand to 3 lines only when actively searching; otherwise 1-line inline hint.
-    let search_height = if app.tab == TuiTab::Tasks {
-        if app.mode == AppMode::Search { 3 } else { 1 }
-    } else {
-        0
-    };
+    // Always 3 lines for search — constant height avoids layout reflow / screen flicker
+    // when activating or deactivating search mode.
+    let search_height = if app.tab == TuiTab::Tasks { 3 } else { 0 };
     let view_selector_height = if app.tab == TuiTab::Tasks { 2 } else { 0 };
     let outer = Layout::default()
         .direction(Direction::Vertical)
@@ -439,7 +436,7 @@ pub(super) fn draw_view_selector(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(left_spans)), area);
 }
 
-pub(super) fn draw_tasks_panes(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_tasks_panes(f: &mut Frame, app: &mut App, area: Rect) {
     let now = chrono::Local::now();
     let today = now.date_naive();
     let tomorrow = today + chrono::Duration::days(1);
@@ -467,21 +464,23 @@ pub(super) fn draw_tasks_panes(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(area);
 
+    // Cache values derived from app before mutably borrowing individual panes.
+    let active_pane = app.active_pane;
+    let frame_count = app.anim_frame();
+    let sort_indices: [usize; 4] = std::array::from_fn(|i| app.panes[i].sort_index);
+    let sort_asc: [bool; 4] = std::array::from_fn(|i| app.panes[i].sort_ascending);
+
     for i in 0..4 {
-        let is_active = i == app.active_pane;
-        let sl = sort_label(SORT_MODES[app.panes[i].sort_index]);
-        let arrow = if app.panes[i].sort_ascending {
-            "\u{2191}"
-        } else {
-            "\u{2193}"
-        };
+        let is_active = i == active_pane;
+        let sl = sort_label(SORT_MODES[sort_indices[i]]);
+        let arrow = if sort_asc[i] { "\u{2191}" } else { "\u{2193}" };
         let sort_display = format!("{}{}", sl, arrow);
         draw_pane(
             f,
-            &app.panes[i],
+            &mut app.panes[i],
             &headers[i],
             is_active,
-            app.anim_frame(),
+            frame_count,
             &sort_display,
             pane_chunks[i],
         );
@@ -1416,7 +1415,13 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Length(2), Constraint::Min(0)])
         .split(area);
 
-    // Range selector
+    // Two-line header: row 0 = range type selector, row 1 = period label + time nav
+    let header_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(layout[0]);
+
+    // Range selector (h/l to change type)
     let ranges = [
         ReportRange::Day,
         ReportRange::Week,
@@ -1447,7 +1452,24 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
             all_spans.push(Span::styled("  ", Style::default()));
         }
     }
-    f.render_widget(Paragraph::new(Line::from(all_spans)), layout[0]);
+    all_spans.push(Span::styled("  h/l:type", Style::default().fg(FG_OVERLAY)));
+    f.render_widget(Paragraph::new(Line::from(all_spans)), header_rows[0]);
+
+    // Period label row: shows the actual date range and [/] nav hints
+    let period_label = app.report_period_label();
+    let nav_hint = if matches!(app.report_range, ReportRange::All) {
+        String::new()
+    } else if app.report_offset == 0 {
+        "  [ J:prev period".to_string()
+    } else {
+        format!("  [ J:prev   ] K:next  ({}x back)", app.report_offset)
+    };
+    let period_line = Line::from(vec![
+        Span::styled("  \u{25CF} ", Style::default().fg(ACCENT_BLUE)),
+        Span::styled(period_label, Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD)),
+        Span::styled(nav_hint, Style::default().fg(FG_OVERLAY)),
+    ]);
+    f.render_widget(Paragraph::new(period_line), header_rows[1]);
 
     // 3-row layout: summary cards, charts, lists
     let rows = Layout::default()
@@ -2175,7 +2197,7 @@ pub(super) fn draw_backup_tab(f: &mut Frame, app: &App, area: Rect) {
 
 pub(super) fn draw_pane(
     f: &mut Frame,
-    pane: &PaneState,
+    pane: &mut PaneState,
     label: &str,
     is_active: bool,
     frame_count: u64,
@@ -2285,10 +2307,26 @@ pub(super) fn draw_pane(
         list.highlight_symbol("  ")
     };
 
-    f.render_stateful_widget(list, list_area, &mut pane.list_state.clone());
+    // Symmetric scroll margin — mirrors draw_tasks_daily logic.
+    // Each task occupies 2 rows (title + meta), so halve height for item count.
+    let visible_items = (list_area.height as usize) / 2;
+    let margin = 2usize.min(visible_items.saturating_sub(1) / 2);
+    let cursor = pane.list_state.selected().unwrap_or(0);
+    let current_offset = *pane.list_state.offset_mut();
+    let new_offset = if visible_items == 0 {
+        0
+    } else if cursor < current_offset + margin {
+        cursor.saturating_sub(margin)
+    } else if cursor + margin + 1 > current_offset + visible_items {
+        (cursor + margin + 1).saturating_sub(visible_items)
+    } else {
+        current_offset
+    };
+    *pane.list_state.offset_mut() = new_offset;
 
-    // Scrollbar (only when tasks exceed visible area)
-    // Each task item is ~2 lines, so approximate visible count
+    f.render_stateful_widget(list, list_area, &mut pane.list_state);
+
+    // Scrollbar
     let visible_approx = list_area.height as usize / 2;
     if pane.tasks.len() > visible_approx && list_area.height > 0 {
         let mut scrollbar_state =
@@ -3310,6 +3348,39 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
     };
 
     let mut lines: Vec<Line> = vec![
+        Line::from(Span::styled("LEGEND", section_style)),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Status icons:  ", muted),
+            Span::styled("\u{25CB}", Style::default().fg(FG_OVERLAY)),
+            Span::styled(" pending  ", muted),
+            Span::styled("\u{25B6}", Style::default().fg(ACCENT_GREEN)),
+            Span::styled(" running  ", muted),
+            Span::styled("\u{23F8}", Style::default().fg(ACCENT_YELLOW)),
+            Span::styled(" paused  ", muted),
+            Span::styled("\u{2713}", Style::default().fg(ACCENT_TEAL)),
+            Span::styled(" done", muted),
+        ]),
+        Line::from(vec![
+            Span::styled("  Notation:      ", muted),
+            Span::styled("+proj ", Style::default().fg(ACCENT_MAUVE)),
+            Span::styled("@ctx ", Style::default().fg(ACCENT_TEAL)),
+            Span::styled("#tag ", Style::default().fg(ACCENT_PEACH)),
+            Span::styled("~est ", muted),
+            Span::styled("^deadline ", Style::default().fg(ACCENT_PEACH)),
+            Span::styled("=scheduled ", Style::default().fg(ACCENT_TEAL)),
+            Span::styled("! !! !!! !!!!", Style::default().fg(ACCENT_RED)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Duration:      ", muted),
+            Span::styled("~30m  ~1h  ~1h30m  ~1d (8h)  ~1w (40h)", muted),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
+            muted,
+        )),
+        Line::from(""),
         Line::from(Span::styled("GLOBAL", section_style)),
         Line::from(""),
         help_key("Tab", "Next tab"),
@@ -3381,11 +3452,13 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
         TuiTab::Report => {
             lines.push(Line::from(Span::styled("REPORT", section_style)));
             lines.push(Line::from(""));
-            lines.push(help_key("h / Left", "Previous range"));
-            lines.push(help_key("l / Right", "Next range"));
+            lines.push(help_key("h / Left", "Previous range type"));
+            lines.push(help_key("l / Right", "Next range type"));
+            lines.push(help_key("[ / J", "Go back one period in time"));
+            lines.push(help_key("] / K", "Go forward (toward today)"));
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Ranges: Day, Week, Month, Year, All",
+                "Range types: Day, Week, Month, Year, All",
                 desc_style,
             )));
         }

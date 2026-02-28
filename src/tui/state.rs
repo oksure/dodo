@@ -217,6 +217,7 @@ pub(super) struct App<'a> {
     // Tabs & report
     pub(super) tab: TuiTab,
     pub(super) report_range: ReportRange,
+    pub(super) report_offset: i64, // 0 = current period, 1 = one period ago, etc.
     pub(super) report: Option<ReportData>,
     pub(super) tick_count: u64,
     pub(super) frame_count: u64, // still used by event.rs tick logic
@@ -357,6 +358,7 @@ impl<'a> App<'a> {
             last_ding_tick: 0,
             tab: TuiTab::Tasks,
             report_range: ReportRange::Month,
+            report_offset: 0,
             report: None,
             tick_count: 0,
             frame_count: 0,
@@ -720,8 +722,66 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Compute (from_rfc3339, to_rfc3339) adjusted by report_offset periods into the past.
+    /// For ReportRange::All, offset is ignored.
+    pub(super) fn report_date_range(&self) -> (String, String) {
+        use chrono::Utc;
+        let today = chrono::Local::now().date_naive();
+        let period_days: i64 = match self.report_range {
+            ReportRange::Day => 1,
+            ReportRange::Week => 7,
+            ReportRange::Month => 30,
+            ReportRange::Year => 365,
+            ReportRange::All => {
+                // No offset for All — return the same as the plain date_range
+                return self.report_range.date_range();
+            }
+        };
+        // Shift the window into the past by offset * period_days.
+        let to_date = today - chrono::Duration::days(self.report_offset * period_days);
+        let from_date = to_date - chrono::Duration::days(period_days - 1);
+        let from = from_date
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(Utc)
+            .unwrap()
+            .to_rfc3339();
+        let to = (to_date + chrono::Duration::days(1))
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_local_timezone(Utc)
+            .unwrap()
+            .to_rfc3339();
+        (from, to)
+    }
+
+    /// Human-readable label for the current report period (used in draw_report_tab).
+    pub(super) fn report_period_label(&self) -> String {
+        if let ReportRange::All = self.report_range {
+            return "All time".to_string();
+        }
+        let today = chrono::Local::now().date_naive();
+        let period_days: i64 = match self.report_range {
+            ReportRange::Day => 1,
+            ReportRange::Week => 7,
+            ReportRange::Month => 30,
+            ReportRange::Year => 365,
+            ReportRange::All => unreachable!(),
+        };
+        let to_date = today - chrono::Duration::days(self.report_offset * period_days);
+        let from_date = to_date - chrono::Duration::days(period_days - 1);
+        if self.report_offset == 0 {
+            match self.report_range {
+                ReportRange::Day => format!("Today ({})", today.format("%b %d")),
+                _ => format!("{} \u{2013} {}", from_date.format("%b %d"), to_date.format("%b %d, %Y")),
+            }
+        } else {
+            format!("{} \u{2013} {}", from_date.format("%b %d"), to_date.format("%b %d, %Y"))
+        }
+    }
+
     pub(super) fn refresh_report(&mut self) -> Result<()> {
-        let (from, to) = self.report_range.date_range();
+        let (from, to) = self.report_date_range();
         self.report = Some(ReportData {
             tasks_done: self.db.report_tasks_done(&from, &to)?,
             total_seconds: self.db.report_total_seconds(&from, &to)?,
