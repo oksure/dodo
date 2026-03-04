@@ -1356,6 +1356,26 @@ impl Database {
         })
     }
 
+    /// Reschedule all non-Done, non-template tasks whose `scheduled` date is strictly
+    /// before today to today. Returns the number of tasks updated.
+    pub fn reschedule_overdue_to_today(&self) -> Result<()> {
+        self.rt.block_on(async {
+            let today = chrono::Utc::now()
+                .with_timezone(&chrono::Local)
+                .date_naive()
+                .to_string();
+            let now = Utc::now().to_rfc3339();
+            self.conn.execute(
+                "UPDATE tasks SET scheduled = ?1, modified_at = ?2
+                 WHERE scheduled < ?1
+                   AND status != 'Done'
+                   AND COALESCE(is_template, 0) = 0",
+                params![today, now],
+            ).await?;
+            Ok::<(), anyhow::Error>(())
+        })
+    }
+
     pub fn find_task_by_num_id(&self, num_id: i64) -> Result<Option<Task>> {
         self.rt.block_on(async {
             let query = format!(

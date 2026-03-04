@@ -450,19 +450,21 @@ pub(super) fn draw_tasks_panes(f: &mut Frame, app: &mut App, area: Rect) {
         "DONE".to_string(),
     ];
 
-    // 2c: weighted widths — LONG TERM 18%, THIS WEEK 22%, TODAY 35%, DONE 25%
+    // Adaptive widths: active pane gets 40%, others share the remaining 60% equally (20% each).
+    let active_pane = app.active_pane;
+    let constraints: [Constraint; 4] = std::array::from_fn(|i| {
+        if i == active_pane {
+            Constraint::Percentage(40)
+        } else {
+            Constraint::Percentage(20)
+        }
+    });
     let pane_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(18),
-            Constraint::Percentage(22),
-            Constraint::Percentage(35),
-            Constraint::Percentage(25),
-        ])
+        .constraints(constraints)
         .split(area);
 
     // Cache values derived from app before mutably borrowing individual panes.
-    let active_pane = app.active_pane;
     let frame_count = app.anim_frame();
     let sort_indices: [usize; 4] = std::array::from_fn(|i| app.panes[i].sort_index);
     let sort_asc: [bool; 4] = std::array::from_fn(|i| app.panes[i].sort_ascending);
@@ -748,15 +750,38 @@ pub(super) fn draw_tasks_daily(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_style(Style::default().add_modifier(Modifier::BOLD))
         .highlight_symbol("\u{258C} ");
 
-    // Symmetric scroll: keep cursor within a margin of the viewport edges
+    // Row-height-aware scroll: headers occupy 1 row, tasks occupy 2 rows.
+    // Compute the offset that just keeps `cursor` visible in the viewport.
     let height = area.height as usize;
-    let margin = 3usize.min(height / 4);
     let cursor = app.daily_cursor;
-    if cursor < app.daily_scroll + margin {
-        app.daily_scroll = cursor.saturating_sub(margin);
+
+    // Helper: count rows consumed by entries[scroll..scroll+n] until we fill `height`.
+    // Returns how many items fit starting from `start`.
+    fn count_visible(entries: &[DailyEntry], start: usize, height: usize) -> usize {
+        let mut rows = 0usize;
+        let mut count = 0usize;
+        for entry in entries.iter().skip(start) {
+            let item_rows = if matches!(entry, DailyEntry::Task(_)) { 2 } else { 1 };
+            if rows + item_rows > height {
+                break;
+            }
+            rows += item_rows;
+            count += 1;
+        }
+        count
     }
-    if cursor + margin >= app.daily_scroll + height {
-        app.daily_scroll = (cursor + margin + 1).saturating_sub(height);
+
+    // Scroll up: cursor above viewport — snap scroll to cursor.
+    if cursor < app.daily_scroll {
+        app.daily_scroll = cursor;
+    }
+    // Scroll down: cursor below viewport — advance scroll one step at a time.
+    loop {
+        let vis = count_visible(&app.daily_entries, app.daily_scroll, height);
+        if vis == 0 || cursor < app.daily_scroll + vis {
+            break;
+        }
+        app.daily_scroll += 1;
     }
 
     let mut list_state = ListState::default();
@@ -2246,17 +2271,30 @@ pub(super) fn draw_pane(
     f.render_widget(Paragraph::new(stats_line), stats_area);
 
     // LineGauge progress bar
-    let ratio = if estimate > 0 {
-        (elapsed as f64 / estimate as f64).min(1.0)
+    // For DONE pane: show net overrun (red) or underrun (green) relative to total estimate.
+    // For other panes: show elapsed-vs-estimate utilisation.
+    let is_done_pane = done > 0 && done == total;
+    let (ratio, gauge_color) = if is_done_pane && estimate > 0 {
+        let net = elapsed - estimate; // positive = over, negative = under
+        if net >= 0 {
+            let r = (net as f64 / estimate as f64).min(1.0);
+            (r, ACCENT_RED)
+        } else {
+            let r = ((-net) as f64 / estimate as f64).min(1.0);
+            (r, ACCENT_GREEN)
+        }
+    } else if estimate > 0 {
+        let r = (elapsed as f64 / estimate as f64).min(1.0);
+        let c = if r >= 1.0 {
+            ACCENT_RED
+        } else if r >= 0.75 {
+            ACCENT_YELLOW
+        } else {
+            ACCENT_GREEN
+        };
+        (r, c)
     } else {
-        0.0
-    };
-    let gauge_color = if ratio >= 1.0 {
-        ACCENT_RED
-    } else if ratio >= 0.75 {
-        ACCENT_YELLOW
-    } else {
-        ACCENT_GREEN
+        (0.0, ACCENT_GREEN)
     };
     let gauge = LineGauge::default()
         .filled_style(Style::default().fg(gauge_color))
@@ -2304,10 +2342,10 @@ pub(super) fn draw_pane(
         list.highlight_symbol("  ")
     };
 
-    // Symmetric scroll margin — mirrors draw_tasks_daily logic.
+    // Zero scroll margin — cursor can sit at the very edge of the viewport.
     // Each task occupies 2 rows (title + meta), so halve height for item count.
     let visible_items = (list_area.height as usize) / 2;
-    let margin = 2usize.min(visible_items.saturating_sub(1) / 2);
+    let margin = 0usize;
     let cursor = pane.list_state.selected().unwrap_or(0);
     let current_offset = *pane.list_state.offset_mut();
     let new_offset = if visible_items == 0 {
@@ -2363,22 +2401,30 @@ pub(super) fn build_pane_stats(
 
     let elapsed_str = format_dur_short(elapsed);
 
-    // DONE pane: color-code on-time (green) / overdue (red) counts
+    // DONE pane: color-code on-time (green) / overrun (red) counts + net time delta
     if done > 0 && done == total {
-        if on_time + overdue > 0 {
-            vec![
-                Span::styled(elapsed_str, muted),
-                Span::styled(" | ", overlay),
-                Span::styled(on_time.to_string(), Style::default().fg(ACCENT_GREEN)),
-                Span::styled(" / ", overlay),
-                Span::styled(overdue.to_string(), Style::default().fg(ACCENT_RED)),
-            ]
+        let net = elapsed - estimate; // positive = over budget, negative = under
+        let net_str = if estimate == 0 {
+            String::new()
+        } else if net >= 0 {
+            format!(" +{}", format_dur_short(net))
         } else {
-            vec![Span::styled(
-                format!("{} | {}/{}", elapsed_str, done, total),
-                muted,
-            )]
+            format!(" \u{2212}{}", format_dur_short(-net))
+        };
+        let net_style = if net > 0 {
+            Style::default().fg(ACCENT_RED)
+        } else {
+            Style::default().fg(ACCENT_GREEN)
+        };
+        let mut spans = vec![
+            Span::styled(on_time.to_string(), Style::default().fg(ACCENT_GREEN)),
+            Span::styled("/", overlay),
+            Span::styled(overdue.to_string(), Style::default().fg(ACCENT_RED)),
+        ];
+        if !net_str.is_empty() {
+            spans.push(Span::styled(net_str, net_style));
         }
+        spans
     } else if estimate > 0 {
         let pct = (elapsed as f64 / estimate as f64 * 100.0) as u64;
         let pct_style = if pct < 80 {
@@ -2533,10 +2579,37 @@ pub(super) fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<S
         }
     }
 
-    // Time display - show countdown if estimate exists, elapsed otherwise.
-    // Bug 1c: skip entirely for Done tasks (they don't need live timers).
+    // Time display — show countdown/overrun for active tasks, delta for Done tasks.
     let elapsed = task.elapsed_seconds.unwrap_or(0);
-    if elapsed > 0 && task.status != TaskStatus::Done {
+    if task.status == TaskStatus::Done {
+        // Show how much under (-) or over (+) estimate the task ran.
+        if let Some(est) = task.estimate_minutes {
+            if elapsed > 0 || est > 0 {
+                if !spans.is_empty() {
+                    spans.push(Span::styled(" ", muted));
+                }
+                let est_secs = est * 60;
+                let delta = elapsed - est_secs;
+                let (delta_str, delta_style) = if delta > 0 {
+                    (
+                        format!("+{}", format_dur_short(delta)),
+                        Style::default().fg(ACCENT_RED),
+                    )
+                } else if delta < 0 {
+                    (
+                        format!("\u{2212}{}", format_dur_short(-delta)),
+                        Style::default().fg(ACCENT_GREEN),
+                    )
+                } else {
+                    (
+                        "\u{2713}".to_string(),
+                        Style::default().fg(ACCENT_TEAL),
+                    )
+                };
+                spans.push(Span::styled(format!("({})", delta_str), delta_style));
+            }
+        }
+    } else if elapsed > 0 {
         if !spans.is_empty() {
             spans.push(Span::styled(" ", muted));
         }

@@ -841,6 +841,12 @@ pub(super) fn handle_tasks_key(app: &mut App, code: KeyCode) {
             }
             return;
         }
+        KeyCode::Char('T') => {
+            // Reschedule all overdue tasks to today
+            let _ = app.db.reschedule_overdue_to_today();
+            let _ = app.refresh_current_view();
+            return;
+        }
         KeyCode::Char('d') => {
             let was_done = app
                 .current_selected_task()

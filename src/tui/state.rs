@@ -144,15 +144,16 @@ impl PaneState {
         let mut done = 0usize;
         let mut on_time = 0usize;
         let mut overdue = 0usize;
-        let today = chrono::Local::now().date_naive();
         for task in &self.tasks {
             elapsed += task.elapsed_seconds.unwrap_or(0);
             estimate += task.estimate_minutes.unwrap_or(0) * 60;
             if task.status == TaskStatus::Done {
                 done += 1;
-                // Check if task was completed on time
-                if let Some(scheduled) = task.scheduled {
-                    if scheduled <= today {
+                // on_time = elapsed within estimate, overdue = elapsed exceeded estimate
+                let task_elapsed = task.elapsed_seconds.unwrap_or(0);
+                let task_estimate = task.estimate_minutes.unwrap_or(0) * 60;
+                if task_estimate > 0 {
+                    if task_elapsed <= task_estimate {
                         on_time += 1;
                     } else {
                         overdue += 1;
