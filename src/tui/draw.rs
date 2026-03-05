@@ -209,14 +209,44 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let inner = header_block.inner(area);
     f.render_widget(header_block, area);
 
-    // 3a: Replace 14-token symbol legend with compact date + sync age on the right.
-    let today = chrono::Local::now();
-    let date_str = today.format(" %a %b %d ").to_string();
-    let date_width = date_str.chars().count() as u16;
+    // Symbol legend: status icons + notation tokens + today's date on the right.
+    let today_dt = chrono::Local::now();
+    let date_str = today_dt.format("%a %b %d").to_string();
+    let dim = Style::default().fg(FG_OVERLAY);
+    let legend_spans: Vec<Span> = vec![
+        Span::raw("  "),
+        Span::styled("\u{25CB}", Style::default().fg(FG_SUBTEXT)),    // ○ pending
+        Span::raw(" "),
+        Span::styled("\u{25B6}", Style::default().fg(ACCENT_GREEN)),  // ▶ running
+        Span::raw(" "),
+        Span::styled("\u{23F8}", Style::default().fg(ACCENT_YELLOW)), // ⏸ paused
+        Span::raw(" "),
+        Span::styled("\u{2713}", Style::default().fg(FG_OVERLAY)),    // ✓ done
+        Span::raw(" "),
+        Span::styled("\u{21BB}", Style::default().fg(ACCENT_GREEN)),  // ↻ recurring
+        Span::raw("  "),
+        Span::styled("+", Style::default().fg(ACCENT_MAUVE)),          // +project
+        Span::raw(" "),
+        Span::styled("@", Style::default().fg(ACCENT_TEAL)),           // @context
+        Span::raw(" "),
+        Span::styled("#", Style::default().fg(ACCENT_PEACH)),          // #tag
+        Span::raw(" "),
+        Span::styled("~", Style::default().fg(FG_SUBTEXT)),            // ~estimate
+        Span::raw(" "),
+        Span::styled("^", Style::default().fg(ACCENT_RED)),            // ^deadline
+        Span::raw(" "),
+        Span::styled("=", Style::default().fg(ACCENT_BLUE)),           // =scheduled
+        Span::raw(" "),
+        Span::styled("!", Style::default().fg(ACCENT_RED)),            // !priority
+        Span::raw("  "),
+        Span::styled(date_str, dim),
+        Span::raw(" "),
+    ];
+    let legend_width: u16 = legend_spans.iter().map(|s| s.content.chars().count() as u16).sum();
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(0), Constraint::Length(date_width)])
+        .constraints([Constraint::Min(0), Constraint::Length(legend_width)])
         .split(inner);
 
     let mut left_spans = vec![
@@ -251,11 +281,7 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
     let left = Line::from(left_spans);
     f.render_widget(Paragraph::new(left), cols[0]);
-    f.render_widget(
-        Paragraph::new(Span::styled(date_str, Style::default().fg(FG_OVERLAY)))
-            .alignment(Alignment::Right),
-        cols[1],
-    );
+    f.render_widget(Paragraph::new(Line::from(legend_spans)), cols[1]);
 }
 
 pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {

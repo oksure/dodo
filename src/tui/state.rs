@@ -878,12 +878,29 @@ impl<'a> App<'a> {
         }
 
         self.daily_entries = entries;
-        self.daily_scroll = 0;
-        // Clamp cursor
+        // Preserve daily_scroll — draw.rs adjusts it every frame to keep the cursor visible.
+        // Clamp cursor to valid range
         if self.daily_entries.is_empty() {
             self.daily_cursor = 0;
         } else if self.daily_cursor >= self.daily_entries.len() {
             self.daily_cursor = self.daily_entries.len() - 1;
+        }
+        // Ensure cursor lands on a Task entry, not a Header (can shift after task removal).
+        while self.daily_cursor < self.daily_entries.len()
+            && !matches!(self.daily_entries[self.daily_cursor], DailyEntry::Task(_))
+        {
+            self.daily_cursor += 1;
+        }
+        if self.daily_cursor >= self.daily_entries.len() {
+            // Scanned past end — find the last Task entry
+            self.daily_cursor = self
+                .daily_entries
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, e)| matches!(e, DailyEntry::Task(_)))
+                .map(|(i, _)| i)
+                .unwrap_or(0);
         }
 
         Ok(())
@@ -1239,6 +1256,9 @@ impl<'a> App<'a> {
 
     pub(super) fn confirm_delete(&mut self) -> Result<()> {
         if let Some(ref task_id) = self.delete_task_id {
+            // If this is a recurring instance, generate the next occurrence before deleting
+            // so that deletion acts as "skip" rather than terminating the recurrence.
+            let _ = self.db.complete_recurring_instance(task_id);
             self.db.delete_task_by_id(task_id)?;
             self.refresh_current_view()?;
         }
