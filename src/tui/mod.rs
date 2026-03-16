@@ -18,7 +18,7 @@ mod state;
 mod tests;
 
 use event::run_app;
-use state::App;
+use state::{App, TasksView};
 
 pub fn run_tui(db: &Database) -> Result<()> {
     enable_raw_mode()?;
@@ -34,6 +34,11 @@ pub fn run_tui(db: &Database) -> Result<()> {
         app.trigger_sync();
     }
     app.refresh_all()?;
+    // If starting in Daily view, populate entries and position cursor on today's tasks
+    if app.tasks_view == TasksView::Daily {
+        let _ = app.refresh_daily();
+        app.daily_jump_to_today();
+    }
 
     let res = run_app(&mut terminal, &mut app);
 

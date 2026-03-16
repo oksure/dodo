@@ -1028,11 +1028,19 @@ impl<'a> App<'a> {
 
     pub(super) fn daily_jump_to_today(&mut self) {
         let today = chrono::Local::now().date_naive();
+
+        // Find today's header index so we can set scroll to show it at the top
+        let today_header_idx = self.daily_entries.iter().position(|e| {
+            matches!(e, DailyEntry::Header { is_today: true, .. })
+        });
+
         // Find the first Task entry on today's date (skip the header)
         for (i, entry) in self.daily_entries.iter().enumerate() {
             if let DailyEntry::Task(ref t) = entry {
                 if t.scheduled.unwrap_or(today) == today {
                     self.daily_cursor = i;
+                    // Scroll to show today's header at the top of the viewport
+                    self.daily_scroll = today_header_idx.unwrap_or(i.saturating_sub(1));
                     return;
                 }
             }
@@ -1046,6 +1054,7 @@ impl<'a> App<'a> {
                 } else {
                     self.daily_cursor = i;
                 }
+                self.daily_scroll = i; // show header at top
                 return;
             }
         }

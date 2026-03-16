@@ -228,10 +228,7 @@ where
                                         // gg → jump to first template
                                         app.template_selected = 0;
                                     } else {
-                                        // g followed by non-g → generate, then handle key
-                                        let _ = app.db.generate_instances();
-                                        let _ = app.refresh_templates();
-                                        let _ = app.refresh_all();
+                                        // g followed by non-g: cancel the pending g, handle key normally
                                         handle_recurring_key(app, key.code);
                                     }
                                 } else {
@@ -1298,6 +1295,11 @@ pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('g') => {
             app.pending_g = true;
+        }
+        KeyCode::Char('R') => {
+            let _ = app.db.generate_instances();
+            let _ = app.refresh_templates();
+            let _ = app.refresh_all();
         }
         KeyCode::Char('e') | KeyCode::Enter => {
             // Open edit modal for the selected template

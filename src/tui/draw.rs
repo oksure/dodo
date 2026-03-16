@@ -369,7 +369,7 @@ pub(super) fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
                 ("e", "edit"),
                 ("d", "del"),
                 ("p", "pause"),
-                ("g", "generate"),
+                ("R", "generate"),
                 ("G", "last"),
                 ("?", "help"),
                 ("q", "quit"),
@@ -3543,7 +3543,7 @@ pub(super) fn draw_help_modal(f: &mut Frame, app: &App) {
             lines.push(help_key("e / Enter", "Edit template"));
             lines.push(help_key("d / Del", "Delete template"));
             lines.push(help_key("p", "Pause/resume template"));
-            lines.push(help_key("g", "Generate instances"));
+            lines.push(help_key("R", "Generate instances"));
         }
         TuiTab::Report => {
             lines.push(Line::from(Span::styled("REPORT", section_style)));

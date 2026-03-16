@@ -1470,6 +1470,39 @@ impl Database {
 
     pub fn uncomplete_task_by_id(&self, task_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+
+        // If this is a recurring instance, clean up any other active (non-Done) instances
+        // that were auto-generated when this task was originally completed. We're bringing
+        // this instance back, so the auto-generated successor(s) should be removed to
+        // keep exactly one active instance per template.
+        let template_id: Option<String> = self.rt.block_on(async {
+            let mut rows = self.conn.query(
+                "SELECT template_id FROM tasks WHERE id = ?1 AND COALESCE(is_template, 0) = 0",
+                params![task_id],
+            ).await?;
+            match rows.next().await? {
+                Some(row) => val_opt_string(&row, 0),
+                None => Ok(None),
+            }
+        })?;
+
+        if let Some(tid) = template_id {
+            self.rt.block_on(async {
+                // Remove sessions for successor instances before deleting the tasks
+                self.conn.execute(
+                    "DELETE FROM sessions WHERE task_id IN (
+                        SELECT id FROM tasks WHERE template_id = ?1 AND status != 'Done' AND id != ?2
+                    )",
+                    params![tid.clone(), task_id],
+                ).await?;
+                self.conn.execute(
+                    "DELETE FROM tasks WHERE template_id = ?1 AND status != 'Done' AND id != ?2",
+                    params![tid, task_id],
+                ).await?;
+                Ok::<(), anyhow::Error>(())
+            })?;
+        }
+
         self.rt.block_on(async {
             self.conn.execute(
                 "UPDATE tasks SET status = 'Pending', area = 'Today', completed = NULL, modified_at = ?1 WHERE id = ?2",
@@ -2006,24 +2039,41 @@ impl Database {
             }
 
             if let Some(ref recurrence) = template.recurrence {
-                let from_date = instance_scheduled
-                    .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
-                    .unwrap_or_else(|| chrono::Local::now().date_naive());
+                // Only generate a new instance if there isn't already an active one
+                // (other than the task being completed/skipped). This prevents duplicates
+                // when an instance is uncompleted and then re-completed, or when a user
+                // skips an instance that already had a successor generated.
+                let has_other_active = self.rt.block_on(async {
+                    let mut rows = self.conn.query(
+                        "SELECT COUNT(*) FROM tasks WHERE template_id = ?1 AND status != 'Done' AND id != ?2",
+                        params![template_id.clone(), task_id],
+                    ).await?;
+                    match rows.next().await? {
+                        Some(row) => Ok::<bool, anyhow::Error>(val_i64(&row, 0)? > 0),
+                        None => Ok(false),
+                    }
+                })?;
 
-                let next_date = crate::notation::next_occurrence(recurrence, from_date)
-                    .unwrap_or_else(|| chrono::Local::now().date_naive());
+                if !has_other_active {
+                    let from_date = instance_scheduled
+                        .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
+                        .unwrap_or_else(|| chrono::Local::now().date_naive());
 
-                self.generate_instance_for_template(
-                    &template_id,
-                    &template.title,
-                    &template.project,
-                    &template.context,
-                    template.estimate_minutes,
-                    template.deadline,
-                    template.tags.as_deref(),
-                    template.priority,
-                    next_date,
-                )?;
+                    let next_date = crate::notation::next_occurrence(recurrence, from_date)
+                        .unwrap_or_else(|| chrono::Local::now().date_naive());
+
+                    self.generate_instance_for_template(
+                        &template_id,
+                        &template.title,
+                        &template.project,
+                        &template.context,
+                        template.estimate_minutes,
+                        template.deadline,
+                        template.tags.as_deref(),
+                        template.priority,
+                        next_date,
+                    )?;
+                }
             }
         }
 
