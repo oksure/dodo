@@ -31,11 +31,17 @@ fn score(title: &str, query: &str) -> u32 {
 
 /// Find best matching task using multi-pass fuzzy matching.
 /// Priority: exact match > prefix > word-start > substring > word-contains > fallback.
+/// Returns None if no task scores above 0.
 pub fn find_best_match<'a>(tasks: &'a [Task], query: &str) -> Option<&'a Task> {
     if tasks.is_empty() {
         return None;
     }
-    tasks.iter().max_by_key(|t| score(&t.title, query))
+    tasks
+        .iter()
+        .map(|t| (t, score(&t.title, query)))
+        .filter(|(_, s)| *s > 0)
+        .max_by_key(|(_, s)| *s)
+        .map(|(t, _)| t)
 }
 
 /// Score all tasks and return sorted by relevance (best first).

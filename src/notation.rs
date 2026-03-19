@@ -153,7 +153,7 @@ pub fn parse_date(s: &str) -> Option<NaiveDate> {
     }
 
     // Day names → next occurrence
-    if let Some(target_wd) = parse_weekday(&s_lower) {
+    if let Some(target_wd) = parse_weekday_short(&s_lower) {
         let current_wd = today.weekday();
         let days_ahead = (target_wd.num_days_from_monday() as i64
             - current_wd.num_days_from_monday() as i64
@@ -195,19 +195,6 @@ pub fn parse_date(s: &str) -> Option<NaiveDate> {
     }
 
     None
-}
-
-fn parse_weekday(s: &str) -> Option<Weekday> {
-    match s {
-        "mon" | "monday" => Some(Weekday::Mon),
-        "tue" | "tuesday" => Some(Weekday::Tue),
-        "wed" | "wednesday" => Some(Weekday::Wed),
-        "thu" | "thursday" => Some(Weekday::Thu),
-        "fri" | "friday" => Some(Weekday::Fri),
-        "sat" | "saturday" => Some(Weekday::Sat),
-        "sun" | "sunday" => Some(Weekday::Sun),
-        _ => None,
-    }
 }
 
 /// Validate a recurrence pattern string. Returns the normalized pattern if valid.

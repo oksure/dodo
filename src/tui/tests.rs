@@ -25,7 +25,7 @@ fn buffer_text(buf: &Buffer) -> String {
 }
 
 /// Create an App with N tasks spread across dates to populate the daily view.
-fn app_with_daily_tasks(db: &Database, count: usize) -> App {
+fn app_with_daily_tasks(db: &Database, count: usize) -> App<'_> {
     let today = chrono::Local::now().date_naive();
     for i in 0..count {
         let day_offset = i as i64 / 3; // ~3 tasks per day
@@ -102,7 +102,7 @@ fn daily_scroll_up_cursor_stays_within_margin() {
         handle_daily_nav(&mut app, KeyCode::Char('j'), 1);
         trigger_scroll(&mut app);
     }
-    let bottom_cursor = app.daily_cursor;
+    let _bottom_cursor = app.daily_cursor;
     let bottom_scroll = app.daily_scroll;
 
     // Now navigate back up
@@ -143,7 +143,7 @@ fn daily_scroll_cursor_stays_within_margin() {
     let db = test_db();
     let mut app = app_with_daily_tasks(&db, 30);
     let height: usize = 20; // TestBackend height
-    let margin: usize = 3;
+    let _margin: usize = 3;
 
     // Navigate down, verify cursor stays within margin of viewport edges
     for _ in 0..25 {

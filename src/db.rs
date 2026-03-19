@@ -353,69 +353,31 @@ impl Database {
     }
 
     /// Resolve num_id conflict: if `num_id` is taken by a different task (not `task_id`),
-    /// the task created earlier keeps it, the other gets bumped to MAX+1.
+    /// bump the existing holder to MAX+1 so the incoming task can use `num_id`.
     async fn resolve_num_id_conflict_async(
         &self,
         incoming_task_id: &str,
         num_id: i64,
-        incoming_created: DateTime<Utc>,
+        _incoming_created: DateTime<Utc>,
     ) -> Result<()> {
         let mut rows = self.conn.query(
-            "SELECT id, created FROM tasks WHERE num_id = ?1 AND id != ?2",
+            "SELECT id FROM tasks WHERE num_id = ?1 AND id != ?2",
             params![num_id, incoming_task_id],
         ).await?;
 
         if let Some(row) = rows.next().await? {
             let existing_id = val_string(&row, 0)?;
-            let existing_created_str = val_string(&row, 1)?;
-            let existing_created = DateTime::parse_from_rfc3339(&existing_created_str)
-                .map(|d| d.with_timezone(&Utc))
-                .unwrap_or(Utc::now());
 
-            // Earlier created timestamp keeps the num_id
-            let bump_id = if incoming_created < existing_created {
-                // Incoming is older — it keeps num_id, bump existing
-                existing_id
-            } else {
-                // Existing is older (or equal) — it keeps num_id, incoming will get a new one
-                // We don't bump incoming here — the caller will use the num_id as-is
-                // only if it's not conflicting. Since it IS conflicting and incoming is newer,
-                // we need to NOT assign num_id to incoming. But the caller is about to
-                // INSERT/UPDATE with this num_id. So we bump the existing one.
-                // Wait — the rule is: earlier created KEEPS. So if existing is earlier,
-                // existing keeps it and we need to assign a different num_id to incoming.
-                // But the caller will use `num_id` for the incoming task...
-                // So: if existing is earlier, we DON'T bump existing; instead we'll need
-                // the caller to use a different num_id. Let's return an error signal...
-                // Actually, let's simplify: always bump the one that's newer.
-                // If incoming is newer, incoming gets bumped (caller should use MAX+1).
-                // If existing is newer, existing gets bumped.
-                if existing_created < incoming_created {
-                    // Existing is older, keeps num_id. Incoming is newer, needs new num_id.
-                    // We need to signal the caller. For simplicity, let's re-assign num_id
-                    // to incoming at MAX+1 by updating it after insert.
-                    // Actually: we can just bump the incoming's num_id in the caller.
-                    // But that's complex. Let's keep it simple:
-                    // Bump the NEWER task to MAX+1.
-                    // The incoming task is newer, so we DON'T insert with num_id.
-                    // Instead, let's not bump here but handle in caller...
-                    // This gets messy. Let me use a cleaner approach.
-                    return Ok(()); // existing keeps, caller handles new num_id below
-                } else {
-                    existing_id
-                }
-            };
-
-            // Bump the loser to MAX+1
-            let mut rows = self.conn.query(
+            // Bump the existing holder to MAX+1 to make room for the incoming task
+            let mut max_rows = self.conn.query(
                 "SELECT COALESCE(MAX(num_id), 0) + 1 FROM tasks", ()
             ).await?;
-            let row = rows.next().await?.context("No result from MAX query")?;
-            let new_num_id = val_i64(&row, 0)?;
+            let max_row = max_rows.next().await?.context("No result from MAX query")?;
+            let new_num_id = val_i64(&max_row, 0)?;
 
             self.conn.execute(
                 "UPDATE tasks SET num_id = ?1 WHERE id = ?2",
-                params![new_num_id, bump_id],
+                params![new_num_id, existing_id],
             ).await?;
         }
 
@@ -1073,20 +1035,19 @@ impl Database {
             match rows.next().await? {
                 Some(row) => {
                     let task_id = val_string(&row, 0)?;
-                    let task_id_clone = task_id.clone();
                     let title = val_string(&row, 2)?; // title is at index 2
                     let estimate = val_opt_i64(&row, 9)?; // estimate_minutes is at index 9
                     let elapsed = val_opt_i64(&row, 16)?; // elapsed_seconds is at index 16
-                    
+
                     // Check if there's an active session for this running task
                     let has_active_session = get_active_session(&self.conn, &task_id).await?.is_some();
-                    
+
                     // If task is Running but has no active session, it's an orphaned task (terminal crash)
                     // Reset it to Paused
                     if !has_active_session {
                         self.conn.execute(
                             "UPDATE tasks SET status = 'Paused', modified_at = ?1 WHERE id = ?2",
-                            params![Utc::now().to_rfc3339(), task_id_clone],
+                            params![Utc::now().to_rfc3339(), task_id],
                         ).await?;
                     }
                     

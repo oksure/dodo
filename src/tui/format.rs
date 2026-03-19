@@ -1,16 +1,8 @@
 use dodo::cli::SortBy;
-use dodo::task::Task;
+use dodo::task::{format_estimate, Task};
 
 pub(super) fn format_estimate_tui(minutes: i64) -> String {
-    let hours = minutes / 60;
-    let mins = minutes % 60;
-    if hours > 0 && mins > 0 {
-        format!("{}h{}m", hours, mins)
-    } else if hours > 0 {
-        format!("{}h", hours)
-    } else {
-        format!("{}m", mins)
-    }
+    format_estimate(minutes)
 }
 
 // parse_filter_days moved to dodo::notation
@@ -121,13 +113,5 @@ pub(super) fn humanize_recurrence(pattern: &str) -> String {
 }
 
 pub(super) fn format_est(minutes: i64) -> String {
-    let hours = minutes / 60;
-    let mins = minutes % 60;
-    if hours > 0 && mins > 0 {
-        format!("{}h{}m", hours, mins)
-    } else if hours > 0 {
-        format!("{}h", hours)
-    } else {
-        format!("{}m", mins)
-    }
+    format_estimate(minutes)
 }

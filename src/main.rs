@@ -11,7 +11,7 @@ use dodo::cli::{BackupAction, Cli, Commands, EmailAction, RecurringAction, SyncA
 use dodo::config::Config;
 use dodo::db::Database;
 use dodo::notation::{parse_notation, prepare_task};
-use dodo::task::{Area, Task, TaskStatus};
+use dodo::task::{format_estimate, Area, Task, TaskStatus};
 
 const DONE_DISPLAY_LIMIT: usize = 5;
 
@@ -931,18 +931,6 @@ fn format_duration(seconds: i64) -> String {
         format!("{}m {}s", mins, secs)
     } else {
         format!("{}s", secs)
-    }
-}
-
-fn format_estimate(minutes: i64) -> String {
-    let hours = minutes / 60;
-    let mins = minutes % 60;
-    if hours > 0 && mins > 0 {
-        format!("{}h{}m", hours, mins)
-    } else if hours > 0 {
-        format!("{}h", hours)
-    } else {
-        format!("{}m", mins)
     }
 }
 

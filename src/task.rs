@@ -183,7 +183,7 @@ fn format_duration_short(seconds: i64) -> String {
     }
 }
 
-fn format_estimate(minutes: i64) -> String {
+pub fn format_estimate(minutes: i64) -> String {
     let hours = minutes / 60;
     let mins = minutes % 60;
     if hours > 0 && mins > 0 {

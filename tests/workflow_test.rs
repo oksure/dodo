@@ -728,7 +728,7 @@ fn update_notes_by_id_empty_clears_notes() {
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = tasks.iter().find(|t| t.num_id == Some(num_id)).unwrap();
 
-    db.append_note(&task.id, "existing note").unwrap();
+    db.append_note_by_id(&task.id, "existing note").unwrap();
     assert!(db.get_task_notes_by_id(&task.id).unwrap().is_some());
 
     db.update_notes_by_id(&task.id, "").unwrap();
@@ -745,7 +745,7 @@ fn update_notes_by_id_replaces_existing() {
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = tasks.iter().find(|t| t.num_id == Some(num_id)).unwrap();
 
-    db.append_note(&task.id, "old note").unwrap();
+    db.append_note_by_id(&task.id, "old note").unwrap();
     db.update_notes_by_id(&task.id, "completely new content").unwrap();
     let notes = db.get_task_notes_by_id(&task.id).unwrap();
     assert_eq!(notes, Some("completely new content".to_string()));
