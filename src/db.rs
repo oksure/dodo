@@ -257,7 +257,7 @@ impl Database {
                              status = ?7, created = ?8, completed = ?9, estimate_minutes = ?10,
                              deadline = ?11, scheduled = ?12, tags = ?13, task_notes = ?14,
                              priority = ?15, modified_at = ?16, recurrence = ?17,
-                             is_template = ?18, template_id = ?19, elapsed_snapshot = ?20
+                             is_template = ?18, template_id = ?19, elapsed_snapshot = COALESCE(?20, elapsed_snapshot)
                              WHERE id = ?1",
                             params![
                                 remote_task.id.clone(),
@@ -523,11 +523,20 @@ impl Database {
     }
 
     /// Export all tasks and sessions from the database.
+    /// Uses TASK_SELECT_COMPAT so it works on sync DBs that lack elapsed_snapshot.
     pub fn export_all_data(&self) -> Result<(Vec<Task>, Vec<Session>)> {
         self.rt.block_on(async {
             // Export all tasks (including templates)
+            // Try the full query first (local DB), fall back to compat (sync DB without elapsed_snapshot)
             let query = format!("{} GROUP BY t.id", Self::TASK_SELECT_WITH_ELAPSED);
-            let mut rows = self.conn.query(&query, ()).await?;
+            let result = self.conn.query(&query, ()).await;
+            let mut rows = match result {
+                Ok(rows) => rows,
+                Err(_) => {
+                    let compat_query = format!("{} GROUP BY t.id", Self::TASK_SELECT_COMPAT);
+                    self.conn.query(&compat_query, ()).await?
+                }
+            };
             let mut tasks = Vec::new();
             while let Some(row) = rows.next().await? {
                 tasks.push(row_to_task(&row)?);
@@ -778,6 +787,7 @@ impl Database {
         })
     }
 
+    /// Full query with elapsed_snapshot support (local DB only — requires the column to exist).
     const TASK_SELECT_WITH_ELAPSED: &'static str =
         "SELECT t.id, t.num_id, t.title, t.area, t.project, t.context, t.status, t.created, t.completed,
                 t.estimate_minutes, t.deadline, t.scheduled, t.tags, t.task_notes, t.priority,
@@ -791,6 +801,19 @@ impl Database {
                      ), 0)
                 END as elapsed_seconds,
                 t.recurrence, t.is_template, t.template_id, t.elapsed_snapshot
+         FROM tasks t LEFT JOIN sessions s ON s.task_id = t.id";
+
+    /// Backwards-compatible query without elapsed_snapshot (safe for sync DBs that lack the column).
+    const TASK_SELECT_COMPAT: &'static str =
+        "SELECT t.id, t.num_id, t.title, t.area, t.project, t.context, t.status, t.created, t.completed,
+                t.estimate_minutes, t.deadline, t.scheduled, t.tags, t.task_notes, t.priority,
+                t.modified_at,
+                COALESCE(SUM(
+                    CASE WHEN s.ended IS NOT NULL THEN s.duration
+                    ELSE CAST((julianday('now') - julianday(s.started)) * 86400 AS INTEGER)
+                    END
+                ), 0) as elapsed_seconds,
+                t.recurrence, t.is_template, t.template_id
          FROM tasks t LEFT JOIN sessions s ON s.task_id = t.id";
 
     fn sort_order_sql(sort: SortBy, is_completed: bool) -> &'static str {
@@ -2217,7 +2240,8 @@ fn row_to_task(row: &libsql::Row) -> Result<Task> {
         tags: val_opt_string(row, 12)?,
         notes: val_opt_string(row, 13)?,
         elapsed_seconds: val_opt_i64(row, 16)?,
-        elapsed_snapshot: val_opt_i64(row, 20)?,
+        // Column 20 only exists when using TASK_SELECT_WITH_ELAPSED (not TASK_SELECT_COMPAT)
+        elapsed_snapshot: val_opt_i64(row, 20).ok().flatten(),
         recurrence: val_opt_string(row, 17)?,
         is_template: val_opt_bool(row, 18)?.unwrap_or(false),
         template_id: val_opt_string(row, 19)?,
