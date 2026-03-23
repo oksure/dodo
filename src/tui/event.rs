@@ -62,12 +62,12 @@ where
                                 match app.tasks_view {
                                     TasksView::Daily => app.daily_jump_to_today(),
                                     TasksView::Weekly => {
-                                        app.week_start_date = chrono::Local::now().date_naive();
+                                        app.week_start_date = dodo::today();
                                         app.weekly_active = 0;
                                         let _ = app.refresh_weekly();
                                     }
                                     TasksView::Calendar => {
-                                        let today = chrono::Local::now().date_naive();
+                                        let today = dodo::today();
                                         app.calendar_selected = today;
                                         app.calendar_year = today.year();
                                         app.calendar_month = today.month();
@@ -91,7 +91,7 @@ where
                             app.count_prefix = None;
                             app.pending_g = false;
                         }
-                        KeyCode::Char('r') => {
+                        KeyCode::Char('r') if app.tab != TuiTab::Settings => {
                             app.save_last_view();
                             let _ = app.save_config();
                             app.tab = TuiTab::Report;
@@ -1025,7 +1025,7 @@ pub(super) fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
         KeyCode::Char('<') => {
             // Quick-move: change scheduled -1 day
             if let Some(DailyEntry::Task(ref t)) = app.daily_entries.get(app.daily_cursor) {
-                let today = chrono::Local::now().date_naive();
+                let today = dodo::today();
                 let current = t.scheduled.unwrap_or(today);
                 let new_date = current - chrono::Duration::days(1);
                 let _ = app.db.update_task_scheduled(&t.id, new_date);
@@ -1035,7 +1035,7 @@ pub(super) fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
         KeyCode::Char('>') => {
             // Quick-move: change scheduled +1 day
             if let Some(DailyEntry::Task(ref t)) = app.daily_entries.get(app.daily_cursor) {
-                let today = chrono::Local::now().date_naive();
+                let today = dodo::today();
                 let current = t.scheduled.unwrap_or(today);
                 let new_date = current + chrono::Duration::days(1);
                 let _ = app.db.update_task_scheduled(&t.id, new_date);
@@ -1121,7 +1121,7 @@ fn handle_weekly_nav(app: &mut App, code: KeyCode, count: usize) {
         KeyCode::Char('<') => {
             // Quick-move task to previous day
             if let Some(task) = app.weekly_panes[app.weekly_active].selected_task() {
-                let today = chrono::Local::now().date_naive();
+                let today = dodo::today();
                 let current = task.scheduled.unwrap_or(today);
                 let new_date = current - chrono::Duration::days(1);
                 let _ = app.db.update_task_scheduled(&task.id, new_date);
@@ -1131,7 +1131,7 @@ fn handle_weekly_nav(app: &mut App, code: KeyCode, count: usize) {
         KeyCode::Char('>') => {
             // Quick-move task to next day
             if let Some(task) = app.weekly_panes[app.weekly_active].selected_task() {
-                let today = chrono::Local::now().date_naive();
+                let today = dodo::today();
                 let current = task.scheduled.unwrap_or(today);
                 let new_date = current + chrono::Duration::days(1);
                 let _ = app.db.update_task_scheduled(&task.id, new_date);

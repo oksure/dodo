@@ -1,4 +1,4 @@
-use chrono::{Datelike, Local, Months, NaiveDate, Weekday};
+use chrono::{Datelike, Months, NaiveDate, Weekday};
 
 #[derive(Debug, Default, PartialEq)]
 pub struct ParsedInput {
@@ -141,7 +141,7 @@ pub fn parse_duration(s: &str) -> Option<i64> {
 }
 
 pub fn parse_date(s: &str) -> Option<NaiveDate> {
-    let today = Local::now().date_naive();
+    let today = crate::today();
     let s_lower = s.to_lowercase();
 
     // Named dates
@@ -374,7 +374,7 @@ pub fn prepare_task(raw_input: &str) -> PreparedTask {
     let estimate = parsed.estimate_minutes.or(Some(60));
     let scheduled = parsed
         .scheduled
-        .or_else(|| Some(Local::now().date_naive()));
+        .or_else(|| Some(crate::today()));
 
     PreparedTask {
         title,

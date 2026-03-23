@@ -210,8 +210,7 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(header_block, area);
 
     // Symbol legend: status icons + notation tokens + today's date on the right.
-    let today_dt = chrono::Local::now();
-    let date_str = today_dt.format("%a %b %d").to_string();
+    let date_str = dodo::now_naive().format("%a %b %d").to_string();
     let dim = Style::default().fg(FG_OVERLAY);
     let legend_spans: Vec<Span> = vec![
         Span::raw("  "),
@@ -460,8 +459,7 @@ pub(super) fn draw_view_selector(f: &mut Frame, app: &App, area: Rect) {
 }
 
 pub(super) fn draw_tasks_panes(f: &mut Frame, app: &mut App, area: Rect) {
-    let now = chrono::Local::now();
-    let today = now.date_naive();
+    let today = dodo::today();
     let tomorrow = today + chrono::Duration::days(1);
     let week_end = today + chrono::Duration::days(7);
 
@@ -719,7 +717,7 @@ pub(super) fn build_task_list_item(
 // ── Daily View ──────────────────────────────────────────────────────
 
 pub(super) fn draw_tasks_daily(f: &mut Frame, app: &mut App, area: Rect) {
-    let today = chrono::Local::now().date_naive();
+    let today = dodo::today();
 
     let items: Vec<ListItem> = app
         .daily_entries
@@ -828,7 +826,7 @@ pub(super) fn draw_tasks_daily(f: &mut Frame, app: &mut App, area: Rect) {
 // ── Weekly View ─────────────────────────────────────────────────────
 
 pub(super) fn draw_tasks_weekly(f: &mut Frame, app: &App, area: Rect) {
-    let today = chrono::Local::now().date_naive();
+    let today = dodo::today();
 
     // 9a: Show week date range above the tile grid.
     let outer = Layout::default()
@@ -925,7 +923,7 @@ fn draw_day_tile(
         return;
     }
 
-    let today_date = chrono::Local::now().date_naive();
+    let today_date = dodo::today();
     let selected_idx = pane.list_state.selected();
 
     let items: Vec<ListItem> = pane
@@ -969,7 +967,7 @@ fn draw_day_tile(
 // ── Calendar View ───────────────────────────────────────────────────
 
 pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
-    let today = chrono::Local::now().date_naive();
+    let today = dodo::today();
 
     let layout = Layout::default()
         .direction(Direction::Vertical)
@@ -2331,7 +2329,7 @@ pub(super) fn draw_pane(
 
     // Task list area
     let list_area = chunks[1];
-    let today = chrono::Local::now().date_naive();
+    let today = dodo::today();
 
     // 4d: Empty pane shows informative message.
     if pane.tasks.is_empty() {
@@ -3117,7 +3115,7 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                     Style::default().fg(FG_OVERLAY),
                 )));
             }
-            if i == 18 {
+            if i == 19 {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "\u{2500}\u{2500} Email \u{2500}\u{2500}",
@@ -3197,7 +3195,7 @@ pub(super) fn draw_config_modal(f: &mut Frame, app: &App) {
                     Style::default().fg(FG_OVERLAY),
                 )));
             }
-            if i == 18 {
+            if i == 19 {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "\u{2500}\u{2500} Email \u{2500}\u{2500}",

@@ -257,7 +257,7 @@ impl Database {
                              status = ?7, created = ?8, completed = ?9, estimate_minutes = ?10,
                              deadline = ?11, scheduled = ?12, tags = ?13, task_notes = ?14,
                              priority = ?15, modified_at = ?16, recurrence = ?17,
-                             is_template = ?18, template_id = ?19
+                             is_template = ?18, template_id = ?19, elapsed_snapshot = ?20
                              WHERE id = ?1",
                             params![
                                 remote_task.id.clone(),
@@ -279,6 +279,7 @@ impl Database {
                                 remote_task.recurrence.clone(),
                                 remote_task.is_template as i64,
                                 remote_task.template_id.clone(),
+                                remote_task.elapsed_snapshot,
                             ],
                         ).await?;
                     }
@@ -304,8 +305,8 @@ impl Database {
                     self.conn.execute(
                         "INSERT OR IGNORE INTO tasks (id, num_id, title, area, project, context, status, created, completed,
                          estimate_minutes, deadline, scheduled, tags, task_notes, priority, modified_at,
-                         recurrence, is_template, template_id)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                         recurrence, is_template, template_id, elapsed_snapshot)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                         params![
                             remote_task.id.clone(),
                             actual_num_id,
@@ -326,16 +327,22 @@ impl Database {
                             remote_task.recurrence.clone(),
                             remote_task.is_template as i64,
                             remote_task.template_id.clone(),
+                            remote_task.elapsed_snapshot,
                         ],
                     ).await?;
                 }
             }
 
-            // Sessions: INSERT OR IGNORE (first-write-wins, append-only)
+            // Sessions: INSERT or update ended/duration when the incoming copy is closed.
+            // A session starts with ended=NULL and is later closed (ended set, duration computed).
+            // INSERT OR IGNORE would permanently keep the NULL-ended version if it arrived first.
             for session in sessions {
                 self.conn.execute(
-                    "INSERT OR IGNORE INTO sessions (id, task_id, started, ended, duration, manual_edit, notes)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO sessions (id, task_id, started, ended, duration, manual_edit, notes)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(id) DO UPDATE SET
+                       ended = COALESCE(excluded.ended, sessions.ended),
+                       duration = CASE WHEN excluded.ended IS NOT NULL THEN excluded.duration ELSE sessions.duration END",
                     params![
                         session.id.clone(),
                         session.task_id.clone(),
@@ -547,8 +554,8 @@ impl Database {
                 self.conn.execute(
                     "INSERT OR REPLACE INTO tasks (id, num_id, title, area, project, context, status, created, completed,
                      estimate_minutes, deadline, scheduled, tags, task_notes, priority, modified_at,
-                     recurrence, is_template, template_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                     recurrence, is_template, template_id, elapsed_snapshot)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
                     params![
                         task.id.clone(),
                         task.num_id,
@@ -569,6 +576,7 @@ impl Database {
                         task.recurrence.clone(),
                         task.is_template as i64,
                         task.template_id.clone(),
+                        task.elapsed_snapshot,
                     ],
                 ).await?;
             }
@@ -684,6 +692,18 @@ impl Database {
                 self.conn.execute("ALTER TABLE tasks ADD COLUMN template_id TEXT", ()).await?;
             }
 
+            // Add elapsed_snapshot column (freeze elapsed time at completion)
+            if self.conn.prepare("SELECT elapsed_snapshot FROM tasks LIMIT 0").await.is_err() {
+                self.conn.execute("ALTER TABLE tasks ADD COLUMN elapsed_snapshot INTEGER", ()).await?;
+                // Backfill: snapshot elapsed for existing Done tasks from their sessions
+                self.conn.execute(
+                    "UPDATE tasks SET elapsed_snapshot = (
+                        SELECT COALESCE(SUM(duration), 0) FROM sessions WHERE task_id = tasks.id
+                    ) WHERE status = 'Done' AND elapsed_snapshot IS NULL",
+                    (),
+                ).await?;
+            }
+
             // Tombstone table for sync (tracks deleted task IDs so sync doesn't resurrect them)
             self.conn.execute(
                 "CREATE TABLE IF NOT EXISTS deleted_tasks (
@@ -762,12 +782,15 @@ impl Database {
         "SELECT t.id, t.num_id, t.title, t.area, t.project, t.context, t.status, t.created, t.completed,
                 t.estimate_minutes, t.deadline, t.scheduled, t.tags, t.task_notes, t.priority,
                 t.modified_at,
-                COALESCE(SUM(
-                    CASE WHEN s.ended IS NOT NULL THEN s.duration
-                    ELSE CAST((julianday('now') - julianday(s.started)) * 86400 AS INTEGER)
-                    END
-                ), 0) as elapsed_seconds,
-                t.recurrence, t.is_template, t.template_id
+                CASE WHEN t.status = 'Done' AND t.elapsed_snapshot IS NOT NULL
+                     THEN t.elapsed_snapshot
+                     ELSE COALESCE(SUM(
+                         CASE WHEN s.ended IS NOT NULL THEN s.duration
+                         ELSE CAST((julianday('now') - julianday(s.started)) * 86400 AS INTEGER)
+                         END
+                     ), 0)
+                END as elapsed_seconds,
+                t.recurrence, t.is_template, t.template_id, t.elapsed_snapshot
          FROM tasks t LEFT JOIN sessions s ON s.task_id = t.id";
 
     fn sort_order_sql(sort: SortBy, is_completed: bool) -> &'static str {
@@ -997,11 +1020,21 @@ impl Database {
                     None => 0,
                 };
 
+                // Snapshot total elapsed from all sessions (frozen at completion)
+                let mut snap_rows = tx.query(
+                    "SELECT COALESCE(SUM(duration), 0) FROM sessions WHERE task_id = ?1",
+                    params![task_id.clone()],
+                ).await?;
+                let elapsed_snapshot = match snap_rows.next().await? {
+                    Some(row) => val_i64(&row, 0)?,
+                    None => 0,
+                };
+
                 let now = Utc::now().to_rfc3339();
                 tx.execute(
-                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1
+                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1, elapsed_snapshot = ?3
                      WHERE id = ?2",
-                    params![now, task_id.clone()],
+                    params![now, task_id.clone(), elapsed_snapshot],
                 ).await?;
 
                 tx.commit().await?;
@@ -1078,7 +1111,7 @@ impl Database {
 
     pub fn append_note(&self, query: &str, text: &str) -> Result<String> {
         let task = self.resolve_task(query)?;
-        let timestamp = chrono::Local::now().format("[%Y-%m-%d %H:%M]");
+        let timestamp = crate::now_naive().format("[%Y-%m-%d %H:%M]");
         let new_entry = format!("{} {}", timestamp, text);
 
         self.rt.block_on(async {
@@ -1186,7 +1219,7 @@ impl Database {
     }
 
     pub fn append_note_by_id(&self, task_id: &str, text: &str) -> Result<()> {
-        let timestamp = chrono::Local::now().format("[%Y-%m-%d %H:%M]");
+        let timestamp = crate::now_naive().format("[%Y-%m-%d %H:%M]");
         let new_entry = format!("{} {}", timestamp, text);
 
         self.rt.block_on(async {
@@ -1298,9 +1331,10 @@ impl Database {
                 ).await?;
             }
 
+            // Update elapsed_snapshot for Done tasks so the frozen value stays in sync
             tx.execute(
-                "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
-                params![Utc::now().to_rfc3339(), task_id],
+                "UPDATE tasks SET modified_at = ?1, elapsed_snapshot = CASE WHEN status = 'Done' THEN ?3 ELSE elapsed_snapshot END WHERE id = ?2",
+                params![Utc::now().to_rfc3339(), task_id, target_seconds],
             ).await?;
             tx.commit().await?;
             Ok::<(), anyhow::Error>(())
@@ -1466,7 +1500,7 @@ impl Database {
 
         self.rt.block_on(async {
             self.conn.execute(
-                "UPDATE tasks SET status = 'Pending', area = 'Today', completed = NULL, modified_at = ?1 WHERE id = ?2",
+                "UPDATE tasks SET status = 'Pending', area = 'Today', completed = NULL, elapsed_snapshot = NULL, modified_at = ?1 WHERE id = ?2",
                 params![now, task_id],
             ).await?;
             Ok::<(), anyhow::Error>(())
@@ -1502,25 +1536,35 @@ impl Database {
                 }
             }
 
+            // Snapshot total elapsed from all sessions (frozen at completion)
+            let mut snap_rows = tx.query(
+                "SELECT COALESCE(SUM(duration), 0) FROM sessions WHERE task_id = ?1",
+                params![task_id],
+            ).await?;
+            let elapsed_snapshot = match snap_rows.next().await? {
+                Some(row) => val_i64(&row, 0)?,
+                None => 0,
+            };
+
             let now = Utc::now().to_rfc3339();
-            
+
             // Check if this is a recurring instance and update its scheduled date to today
             let is_template: Option<i64> = tx.query(
                 "SELECT is_template FROM tasks WHERE id = ?1",
                 params![task_id],
             ).await?.next().await?.map(|r| val_i64(&r, 0)).transpose()?;
-            
+
             if is_template == Some(0) {
                 // This is an instance (not a template), update scheduled to today
-                let today = chrono::Local::now().date_naive();
+                let today = crate::today();
                 tx.execute(
-                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, scheduled = ?2, modified_at = ?1 WHERE id = ?3",
-                    params![now, today.to_string(), task_id],
+                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, scheduled = ?2, modified_at = ?1, elapsed_snapshot = ?4 WHERE id = ?3",
+                    params![now, today.to_string(), task_id, elapsed_snapshot],
                 ).await?;
             } else {
                 tx.execute(
-                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1 WHERE id = ?2",
-                    params![now, task_id],
+                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1, elapsed_snapshot = ?3 WHERE id = ?2",
+                    params![now, task_id, elapsed_snapshot],
                 ).await?;
             }
 
@@ -1663,7 +1707,7 @@ impl Database {
                 "SELECT DISTINCT date(started) as d FROM sessions WHERE ended IS NOT NULL ORDER BY d DESC LIMIT 365",
                 (),
             ).await?;
-            let today = chrono::Local::now().date_naive();
+            let today = crate::today();
             let mut streak: i64 = 0;
             let mut expected = today;
             while let Some(row) = rows.next().await? {
@@ -1749,7 +1793,7 @@ impl Database {
         })?;
 
         // Generate first instance
-        let today = chrono::Local::now().date_naive();
+        let today = crate::today();
         self.generate_instance_for_template(&num_id.1, title, &project, &context,
             estimate_minutes, deadline, tags.as_deref(), priority, today)?;
 
@@ -1841,7 +1885,7 @@ impl Database {
 
     pub fn generate_instances(&self) -> Result<usize> {
         let templates = self.list_templates()?;
-        let today = chrono::Local::now().date_naive();
+        let today = crate::today();
         let mut created = 0;
 
         for template in &templates {
@@ -2018,10 +2062,10 @@ impl Database {
                 if !has_other_active {
                     let from_date = instance_scheduled
                         .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
-                        .unwrap_or_else(|| chrono::Local::now().date_naive());
+                        .unwrap_or_else(|| crate::today());
 
                     let next_date = crate::notation::next_occurrence(recurrence, from_date)
-                        .unwrap_or_else(|| chrono::Local::now().date_naive());
+                        .unwrap_or_else(|| crate::today());
 
                     self.generate_instance_for_template(
                         &template_id,
@@ -2172,7 +2216,8 @@ fn row_to_task(row: &libsql::Row) -> Result<Task> {
         priority: val_opt_i64(row, 14)?,
         tags: val_opt_string(row, 12)?,
         notes: val_opt_string(row, 13)?,
-        elapsed_seconds: val_opt_i64(row, 16).ok().flatten(),
+        elapsed_seconds: val_opt_i64(row, 16)?,
+        elapsed_snapshot: val_opt_i64(row, 20)?,
         recurrence: val_opt_string(row, 17)?,
         is_template: val_opt_bool(row, 18)?.unwrap_or(false),
         template_id: val_opt_string(row, 19)?,

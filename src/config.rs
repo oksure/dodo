@@ -29,6 +29,8 @@ pub struct PreferencesConfig {
     pub last_view: String,
     #[serde(default = "default_estimate")]
     pub default_estimate: u32,
+    #[serde(default)]
+    pub timezone: Option<String>,
 }
 
 impl Default for PreferencesConfig {
@@ -40,6 +42,7 @@ impl Default for PreferencesConfig {
             default_view: default_view_str(),
             last_view: default_last_view(),
             default_estimate: default_estimate(),
+            timezone: None,
         }
     }
 }

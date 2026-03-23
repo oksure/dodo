@@ -10,7 +10,7 @@ pub fn send_digest(config: &EmailConfig, db: &Database) -> Result<()> {
     let to = config.to.as_deref().context("Email 'to' not configured")?;
     let api_key = config.api_key.as_deref().context("Resend API key not configured")?;
 
-    let today = chrono::Local::now().date_naive();
+    let today = crate::today();
     let today_str = today.format("%A, %B %e, %Y").to_string();
 
     // Gather data

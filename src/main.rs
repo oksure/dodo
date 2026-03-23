@@ -21,6 +21,9 @@ fn main() -> Result<()> {
     // Load config before database init (needed for sync + backup-age check)
     let config = Config::load().unwrap_or_default();
 
+    // Initialize timezone from config (must happen before any date computation)
+    dodo::init_timezone(config.preferences.timezone.as_deref());
+
     // Recover from any interrupted sync migration before opening DB
     Database::recover_interrupted_migration()?;
 
@@ -85,7 +88,7 @@ fn cmd_add(db: &Database, args: dodo::cli::AddArgs) -> Result<()> {
             .as_ref()
             .and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
     }
-    if prep.scheduled == Some(chrono::Local::now().date_naive()) {
+    if prep.scheduled == Some(dodo::today()) {
         // Only override scheduled if prepare_task used the default (today)
         if let Some(sched) = args.scheduled
             .as_ref()
@@ -108,7 +111,7 @@ fn cmd_add(db: &Database, args: dodo::cli::AddArgs) -> Result<()> {
 }
 
 fn cmd_list(db: &Database, args: dodo::cli::ListArgs) -> Result<()> {
-    let today = chrono::Local::now().date_naive();
+    let today = dodo::today();
     let mut filter_area: Option<Area> = None;
     let mut filter_project: Option<String> = args.project.clone();
     let mut filter_context: Option<String> = None;
@@ -793,7 +796,7 @@ fn apply_filters<'a>(
 }
 
 fn print_task_colored(task: &Task) {
-    let today = chrono::Local::now().date_naive();
+    let today = dodo::today();
     let seven_days = today + chrono::Duration::days(7);
 
     let num = task

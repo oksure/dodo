@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use clap::ValueEnum;
 use std::fmt;
 
@@ -21,6 +21,7 @@ pub struct Task {
     pub tags: Option<String>,
     pub notes: Option<String>,
     pub elapsed_seconds: Option<i64>,
+    pub elapsed_snapshot: Option<i64>,
     pub recurrence: Option<String>,
     pub is_template: bool,
     pub template_id: Option<String>,
@@ -66,6 +67,7 @@ impl Task {
             tags: None,
             notes: None,
             elapsed_seconds: None,
+            elapsed_snapshot: None,
             recurrence: None,
             is_template: false,
             template_id: None,
@@ -88,7 +90,7 @@ impl Task {
             return Area::Completed;
         }
 
-        let today = Local::now().date_naive();
+        let today = crate::today();
         let seven_days = today + chrono::Duration::days(7);
 
         match self.scheduled {
@@ -234,7 +236,7 @@ impl Area {
     /// Map an area to a scheduled date for move operations.
     /// Used by both CLI `move` command and TUI move actions.
     pub fn to_scheduled_date(self) -> NaiveDate {
-        let today = Local::now().date_naive();
+        let today = crate::today();
         match self {
             Area::Today => today,
             Area::ThisWeek => today + chrono::Duration::days(1),

@@ -51,7 +51,7 @@ cargo test
 - **Task resolution**: `resolve_task(query)` tries `parse::<i64>()` first for numeric ID lookup, then falls back to fuzzy-ranked search via `find_tasks()` + `find_best_match()`.
 - **update_task_fields delegation**: `update_task_fields(query, ...)` resolves the query then delegates to `update_task_fields_by_id(id, ...)`, which is the single implementation for all 9 field updates.
 - **Session lifecycle**: `Session` methods (`elapsed_seconds`, `stop`, `is_running`) are used by `pause_timer`, `complete_task`, and `get_running_task` in `db.rs`. Sessions are loaded from DB via `row_to_session()` / `get_active_session()`.
-- **Elapsed time**: `list_tasks()` and `find_tasks()` use a LEFT JOIN on sessions to compute total elapsed seconds per task, including live running sessions via `julianday('now')`.
+- **Elapsed time**: `list_tasks()` and `find_tasks()` use a LEFT JOIN on sessions to compute total elapsed seconds per task, including live running sessions via `julianday('now')`. Done tasks use `elapsed_snapshot` (frozen at completion time) instead of the live SUM, so sync events and later session edits don't retroactively change historical elapsed values. The snapshot is also updated when the user manually edits elapsed via `set_elapsed_seconds_by_id()`.
 - **Default command**: Running `dodo` with no subcommand launches the TUI. `dodo help` / `dodo h` shows CLI help.
 - **Date-based area grouping**: `Task::effective_area()` computes area from the `scheduled` date only (deadline is informational, not used for pane placement): ≤today=Today, ≤7days=ThisWeek, >7days=LongTerm, no scheduled date=Today, Done=Completed. `area_str()` delegates to `effective_area()`.
 - **Default task values**: New tasks default to 1h estimate (`or(Some(60))`) and `scheduled = today` if no dates specified.
@@ -112,7 +112,7 @@ cargo test
 - libsql (SQLite-compatible) stored at `~/.local/share/dodo/dodo.db` (always local)
 - Sync replica at `~/.local/share/dodo/dodo-sync.db` (created during background sync only)
 - `Database::in_memory()` available for tests
-- Tables: `tasks` (with `num_id INTEGER UNIQUE`, `estimate_minutes`, `deadline`, `scheduled`, `tags`, `task_notes`, `priority`, `modified_at`, `recurrence`, `is_template`, `template_id`), `sessions`, `deleted_tasks` (tombstone table: `id TEXT PRIMARY KEY`, `deleted_at TEXT`)
+- Tables: `tasks` (with `num_id INTEGER UNIQUE`, `estimate_minutes`, `deadline`, `scheduled`, `tags`, `task_notes`, `priority`, `modified_at`, `recurrence`, `is_template`, `template_id`, `elapsed_snapshot`), `sessions`, `deleted_tasks` (tombstone table: `id TEXT PRIMARY KEY`, `deleted_at TEXT`)
 
 ## Testing
 

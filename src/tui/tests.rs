@@ -473,6 +473,7 @@ fn delete_task_records_tombstone_prevents_merge() {
         completed: None,
         estimate_minutes: None,
         elapsed_seconds: None,
+        elapsed_snapshot: None,
         deadline: None,
         scheduled: Some(today),
         tags: None,

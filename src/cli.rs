@@ -357,8 +357,7 @@ impl ReportRange {
     }
 
     pub fn date_range(self) -> (String, String) {
-        let now = chrono::Local::now();
-        let today = now.date_naive();
+        let today = crate::today();
         let to = (today + chrono::Duration::days(1))
             .and_hms_opt(0, 0, 0)
             .unwrap()

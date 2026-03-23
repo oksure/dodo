@@ -31,14 +31,14 @@ pub(super) enum ConfigFieldType {
     Number,
 }
 
-pub(super) const CONFIG_FIELD_COUNT: usize = 23;
+pub(super) const CONFIG_FIELD_COUNT: usize = 24;
 
 pub(super) const CONFIG_FIELD_LABELS: [&str; CONFIG_FIELD_COUNT] = [
     "Sync Enabled", "Turso URL", "Turso Token", "Sync Interval",
     "Backup Enabled", "Endpoint", "Bucket", "Prefix",
     "Access Key", "Secret Key", "Region", "Schedule Days", "Max Backups",
     "Week Start",
-    "Sound", "Sound Interval", "Default View", "Default Est.",
+    "Sound", "Sound Interval", "Default View", "Default Est.", "Timezone",
     "Email Enabled", "API Key", "From Address", "To Address", "Digest Time",
 ];
 
@@ -61,6 +61,7 @@ pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
     "Minutes between timer dings (default: 10)",
     "panes, daily, weekly, or calendar (default: panes)",
     "Default estimate in minutes (default: 60)",
+    "IANA timezone (e.g., America/New_York, Asia/Seoul, Europe/London)",
     "Toggle email digest on/off",
     "Resend API key (or set DODO_RESEND_API_KEY env)",
     "Dodo <dodo@yourdomain.com>",
@@ -78,5 +79,6 @@ pub(super) const CONFIG_FIELD_TYPES: [ConfigFieldType; CONFIG_FIELD_COUNT] = [
     ConfigFieldType::Number, ConfigFieldType::Number,
     ConfigFieldType::String,
     ConfigFieldType::Boolean, ConfigFieldType::Number, ConfigFieldType::String, ConfigFieldType::Number,
+    ConfigFieldType::String,
     ConfigFieldType::Boolean, ConfigFieldType::Sensitive, ConfigFieldType::String, ConfigFieldType::String, ConfigFieldType::String,
 ];

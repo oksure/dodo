@@ -343,7 +343,7 @@ impl<'a> App<'a> {
         panes[3].sort_index = 1; // DONE pane defaults to modified
         panes[3].sort_ascending = false; // descending (newest done first)
         let config = dodo::config::Config::load().unwrap_or_default();
-        let today = chrono::Local::now().date_naive();
+        let today = dodo::today();
         let initial_view = match config.preferences.last_view.as_str() {
             "daily" => TasksView::Daily,
             "weekly" => TasksView::Weekly,
@@ -445,7 +445,7 @@ impl<'a> App<'a> {
 
     pub(super) fn adjust_selected_date(&mut self, days: i64) {
         if let Some(task) = self.current_selected_task() {
-            let today = chrono::Local::now().date_naive();
+            let today = dodo::today();
             let current = task.scheduled.unwrap_or(today);
             let new_date = current + chrono::Duration::days(days);
             let task_id = task.id.clone();
@@ -586,7 +586,7 @@ impl<'a> App<'a> {
             return true;
         }
         let query = self.search_input.to_lowercase();
-        let today = chrono::Local::now().date_naive();
+        let today = dodo::today();
         for token in query.split_whitespace() {
             if let Some(proj) = token.strip_prefix('+') {
                 let task_proj = task.project.as_deref().unwrap_or("").to_lowercase();
@@ -727,7 +727,7 @@ impl<'a> App<'a> {
     /// For ReportRange::All, offset is ignored.
     pub(super) fn report_date_range(&self) -> (String, String) {
         use chrono::Utc;
-        let today = chrono::Local::now().date_naive();
+        let today = dodo::today();
         let period_days: i64 = match self.report_range {
             ReportRange::Day => 1,
             ReportRange::Week => 7,
@@ -761,7 +761,7 @@ impl<'a> App<'a> {
         if let ReportRange::All = self.report_range {
             return "All time".to_string();
         }
-        let today = chrono::Local::now().date_naive();
+        let today = dodo::today();
         let period_days: i64 = match self.report_range {
             ReportRange::Day => 1,
             ReportRange::Week => 7,
@@ -827,7 +827,7 @@ impl<'a> App<'a> {
 
     pub(super) fn refresh_daily(&mut self) -> Result<()> {
         let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
-        let today = chrono::Local::now().date_naive();
+        let today = dodo::today();
         self.load_running_task();
 
         // Group tasks by scheduled date (None → today)
@@ -908,7 +908,7 @@ impl<'a> App<'a> {
 
     pub(super) fn refresh_weekly(&mut self) -> Result<()> {
         let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
-        let today = chrono::Local::now().date_naive();
+        let today = dodo::today();
         self.load_running_task();
 
         // Distribute tasks into 8 panes by date
@@ -958,7 +958,7 @@ impl<'a> App<'a> {
 
     pub(super) fn refresh_calendar(&mut self) -> Result<()> {
         let all_tasks = self.db.list_all_tasks(SortBy::Created)?;
-        let today = chrono::Local::now().date_naive();
+        let today = dodo::today();
         self.load_running_task();
 
         // Compute task counts per date and build tasks-by-date map
@@ -1027,7 +1027,7 @@ impl<'a> App<'a> {
     }
 
     pub(super) fn daily_jump_to_today(&mut self) {
-        let today = chrono::Local::now().date_naive();
+        let today = dodo::today();
 
         // Find today's header index so we can set scroll to show it at the top
         let today_header_idx = self.daily_entries.iter().position(|e| {
@@ -1083,7 +1083,7 @@ impl<'a> App<'a> {
             } else {
                 let num_str = num_id.map(|n| n.to_string()).unwrap_or_default();
                 if !num_str.is_empty() {
-                    let today = chrono::Local::now().date_naive();
+                    let today = dodo::today();
                     self.db.update_task_scheduled(&id, today)?;
                     let _ = self.db.start_timer(&num_str);
                 }
@@ -1536,7 +1536,8 @@ impl<'a> App<'a> {
             self.preferences.timer_sound_interval.to_string(),
             self.preferences.default_view.clone(),
             self.preferences.default_estimate.to_string(),
-            // Email fields (18-22)
+            self.preferences.timezone.clone().unwrap_or_default(),
+            // Email fields (19-23)
             if self.email_config.enabled {
                 "true".to_string()
             } else {
@@ -1613,11 +1614,16 @@ impl<'a> App<'a> {
             15 => self.preferences.timer_sound_interval = val.parse().unwrap_or(10),
             16 => self.preferences.default_view = val.clone(),
             17 => self.preferences.default_estimate = val.parse().unwrap_or(60),
-            18 => self.email_config.enabled = val == "true",
-            19 => self.email_config.api_key = opt,
-            20 => self.email_config.from = opt,
-            21 => self.email_config.to = opt,
-            22 => {
+            18 => {
+                self.preferences.timezone = opt;
+                // Re-initialize timezone so it takes effect immediately
+                dodo::init_timezone(self.preferences.timezone.as_deref());
+            }
+            19 => self.email_config.enabled = val == "true",
+            20 => self.email_config.api_key = opt,
+            21 => self.email_config.from = opt,
+            22 => self.email_config.to = opt,
+            23 => {
                 self.email_config.digest_time = if val.is_empty() {
                     "07:00".to_string()
                 } else {
@@ -1632,18 +1638,18 @@ impl<'a> App<'a> {
         // Compute the line offset for the selected field.
         // Layout: "── Sync ──" header (1 line), then fields 0-3 (2 lines each),
         // blank + "── Backup ──" before field 4, fields 4-12 (2 lines each),
-        // blank + "── Preferences ──" before field 13, fields 13-17 (2 lines each),
-        // blank + "── Email ──" before field 18, fields 18+ (2 lines each).
+        // blank + "── Preferences ──" before field 13, fields 13-18 (2 lines each),
+        // blank + "── Email ──" before field 19, fields 19+ (2 lines each).
         let mut field_line: usize = 1; // "── Sync ──" header
         for i in 0..self.config_field_index {
-            if i == 4 || i == 13 || i == 18 {
+            if i == 4 || i == 13 || i == 19 {
                 field_line += 2; // blank + section header
             }
             field_line += 2; // label line + hint/blank line
         }
         if self.config_field_index == 4
             || self.config_field_index == 13
-            || self.config_field_index == 18
+            || self.config_field_index == 19
         {
             field_line += 2; // section header for current field's section
         }
