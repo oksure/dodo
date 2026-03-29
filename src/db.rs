@@ -285,7 +285,7 @@ impl Database {
                     }
                 } else {
                     // New task — insert with remote's num_id
-                    let num_id = remote_task.num_id.unwrap_or_else(|| 0);
+                    let num_id = remote_task.num_id.unwrap_or(0);
                     if num_id > 0 {
                         self.resolve_num_id_conflict_async(
                             &remote_task.id, num_id, remote_task.created,
@@ -1735,7 +1735,7 @@ impl Database {
                 if let Ok(d) = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d") {
                     if d == expected {
                         streak += 1;
-                        expected = expected - chrono::Duration::days(1);
+                        expected -= chrono::Duration::days(1);
                     } else if d < expected {
                         break;
                     }
@@ -2082,10 +2082,10 @@ impl Database {
                 if !has_other_active {
                     let from_date = instance_scheduled
                         .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
-                        .unwrap_or_else(|| crate::today());
+                        .unwrap_or_else(crate::today);
 
                     let next_date = crate::notation::next_occurrence(recurrence, from_date)
-                        .unwrap_or_else(|| crate::today());
+                        .unwrap_or_else(crate::today);
 
                     self.generate_instance_for_template(
                         &template_id,

@@ -310,15 +310,15 @@ pub(super) fn split_note_entries(text: &str) -> Vec<String> {
         // Strict check: must match [YYYY-MM-DD HH:MM] exactly (19+ chars)
         let is_timestamp = line.len() >= 19
             && line.starts_with('[')
-            && line.get(1..5).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))  // YYYY
+            && line.get(1..5).is_some_and(|s| s.chars().all(|c| c.is_ascii_digit()))  // YYYY
             && line.get(5..6) == Some("-")
-            && line.get(6..8).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit()))  // MM
+            && line.get(6..8).is_some_and(|s| s.chars().all(|c| c.is_ascii_digit()))  // MM
             && line.get(8..9) == Some("-")
-            && line.get(9..11).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit())) // DD
+            && line.get(9..11).is_some_and(|s| s.chars().all(|c| c.is_ascii_digit())) // DD
             && line.get(11..12) == Some(" ")
-            && line.get(12..14).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit())) // HH
+            && line.get(12..14).is_some_and(|s| s.chars().all(|c| c.is_ascii_digit())) // HH
             && line.get(14..15) == Some(":")
-            && line.get(15..17).map_or(false, |s| s.chars().all(|c| c.is_ascii_digit())) // MM
+            && line.get(15..17).is_some_and(|s| s.chars().all(|c| c.is_ascii_digit())) // MM
             && line.get(17..18) == Some("]");
         if is_timestamp {
             entries.push(line.to_string());
@@ -1075,7 +1075,7 @@ impl<'a> App<'a> {
     pub(super) fn toggle_selected(&mut self) -> Result<()> {
         let task_info = self
             .current_selected_task()
-            .map(|t| (t.id.clone(), t.status.clone(), t.num_id, t.scheduled));
+            .map(|t| (t.id.clone(), t.status, t.num_id, t.scheduled));
         if let Some((id, status, num_id, _scheduled)) = task_info {
             let task_id = id.clone();
             if status == TaskStatus::Running {
@@ -1107,7 +1107,7 @@ impl<'a> App<'a> {
     pub(super) fn done(&mut self) -> Result<()> {
         let task_info = self
             .current_selected_task()
-            .map(|t| (t.id.clone(), t.status.clone()));
+            .map(|t| (t.id.clone(), t.status));
         if let Some((ref id, ref status)) = task_info {
             if *status == TaskStatus::Done {
                 self.db.uncomplete_task_by_id(id)?;
@@ -1286,7 +1286,7 @@ impl<'a> App<'a> {
                 task.context.clone().unwrap_or_default(),
                 task.tags.clone().unwrap_or_default(),
                 task.estimate_minutes
-                    .map(|m| format_est(m))
+                    .map(format_est)
                     .unwrap_or_default(),
                 task.deadline
                     .map(|d| d.format("%Y-%m-%d").to_string())

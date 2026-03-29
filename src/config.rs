@@ -4,16 +4,13 @@ use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum WeekStart {
+    #[default]
     Sunday,
     Monday,
 }
 
-impl Default for WeekStart {
-    fn default() -> Self {
-        WeekStart::Sunday
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferencesConfig {

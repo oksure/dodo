@@ -175,7 +175,7 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                     format!(" +{}m over ", over / 60)
                 };
                 // Pulse: alternate between two reds
-                let style = if app.tick_count % 2 == 0 {
+                let style = if app.tick_count.is_multiple_of(2) {
                     Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(Color::Rgb(200, 80, 100)).add_modifier(Modifier::BOLD)
@@ -265,7 +265,7 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             left_spans.push(Span::styled("synced", Style::default().fg(ACCENT_GREEN)));
         }
         SyncStatus::Syncing => {
-            let icon = if app.tick_count % 2 == 0 { "\u{21BB}" } else { "\u{21BA}" };
+            let icon = if app.tick_count.is_multiple_of(2) { "\u{21BB}" } else { "\u{21BA}" };
             left_spans.push(Span::styled(
                 format!(" {} ", icon),
                 Style::default().fg(ACCENT_YELLOW),
@@ -1055,7 +1055,7 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
 
     // Total cells: start_weekday + days_in, rounded up to multiple of 7
     let total_cells = start_weekday + days_in;
-    let num_rows = (total_cells + 6) / 7;
+    let num_rows = total_cells.div_ceil(7);
 
     let grid_area = layout[2];
     if grid_area.height == 0 || num_rows == 0 {
@@ -1656,7 +1656,7 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
         .split(rows[1]);
 
     // Left: Weekly Activity BarChart
-    let mut weekday_data = vec![0u64; 7];
+    let mut weekday_data = [0u64; 7];
     for (dow, secs) in &report.by_weekday {
         if (*dow as usize) < 7 {
             weekday_data[*dow as usize] = *secs as u64;
@@ -1702,7 +1702,7 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(weekly_chart, chart_cols[0]);
 
     // Right: Hourly Distribution BarChart
-    let mut hour_data = vec![0u64; 24];
+    let mut hour_data = [0u64; 24];
     for (hour, secs) in &report.by_hour {
         if (*hour as usize) < 24 {
             hour_data[*hour as usize] = *secs as u64;

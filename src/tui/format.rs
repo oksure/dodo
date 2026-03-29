@@ -56,9 +56,7 @@ pub(super) fn format_dur_short(seconds: i64) -> String {
 pub(super) fn humanize_recurrence(pattern: &str) -> String {
     let p = pattern.trim_start_matches('*');
     // Day-of-week list: mon,wed,fri
-    if p.contains(',') || ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-        .iter()
-        .any(|d| p == *d)
+    if p.contains(',') || ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].contains(&p)
     {
         let days: Vec<String> = p
             .split(',')

@@ -116,7 +116,7 @@ pub fn list_backups(config: &BackupConfig) -> Result<Vec<BackupEntry>> {
             }
             let size = obj.size().unwrap_or(0);
             let timestamp = parse_backup_timestamp(key)
-                .unwrap_or_else(|| Utc::now());
+                .unwrap_or_else(Utc::now);
             let display_name = key
                 .rsplit('/')
                 .next()

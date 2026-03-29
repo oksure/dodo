@@ -1086,10 +1086,10 @@ fn handle_weekly_nav(app: &mut App, code: KeyCode, count: usize) {
                 dodo::config::WeekStart::Sunday => chrono::Weekday::Sun,
                 dodo::config::WeekStart::Monday => chrono::Weekday::Mon,
             };
-            app.week_start_date = app.week_start_date - chrono::Duration::days(7);
+            app.week_start_date -= chrono::Duration::days(7);
             // Align to week start day
             while app.week_start_date.weekday() != week_start_day {
-                app.week_start_date = app.week_start_date - chrono::Duration::days(1);
+                app.week_start_date -= chrono::Duration::days(1);
             }
             let _ = app.refresh_weekly();
         }
@@ -1099,10 +1099,10 @@ fn handle_weekly_nav(app: &mut App, code: KeyCode, count: usize) {
                 dodo::config::WeekStart::Sunday => chrono::Weekday::Sun,
                 dodo::config::WeekStart::Monday => chrono::Weekday::Mon,
             };
-            app.week_start_date = app.week_start_date + chrono::Duration::days(7);
+            app.week_start_date += chrono::Duration::days(7);
             // Align to week start day
             while app.week_start_date.weekday() != week_start_day {
-                app.week_start_date = app.week_start_date - chrono::Duration::days(1);
+                app.week_start_date -= chrono::Duration::days(1);
             }
             let _ = app.refresh_weekly();
         }
@@ -1155,25 +1155,25 @@ fn handle_calendar_nav(app: &mut App, code: KeyCode, _count: usize) {
     match app.calendar_focus {
         CalendarFocus::Grid => match code {
             KeyCode::Char('h') | KeyCode::Left => {
-                app.calendar_selected = app.calendar_selected - chrono::Duration::days(1);
+                app.calendar_selected -= chrono::Duration::days(1);
                 app.calendar_year = app.calendar_selected.year();
                 app.calendar_month = app.calendar_selected.month();
                 let _ = app.refresh_calendar();
             }
             KeyCode::Char('l') | KeyCode::Right => {
-                app.calendar_selected = app.calendar_selected + chrono::Duration::days(1);
+                app.calendar_selected += chrono::Duration::days(1);
                 app.calendar_year = app.calendar_selected.year();
                 app.calendar_month = app.calendar_selected.month();
                 let _ = app.refresh_calendar();
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                app.calendar_selected = app.calendar_selected + chrono::Duration::days(7);
+                app.calendar_selected += chrono::Duration::days(7);
                 app.calendar_year = app.calendar_selected.year();
                 app.calendar_month = app.calendar_selected.month();
                 let _ = app.refresh_calendar();
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                app.calendar_selected = app.calendar_selected - chrono::Duration::days(7);
+                app.calendar_selected -= chrono::Duration::days(7);
                 app.calendar_year = app.calendar_selected.year();
                 app.calendar_month = app.calendar_selected.month();
                 let _ = app.refresh_calendar();
@@ -1314,7 +1314,7 @@ pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
                     template.tags.clone().unwrap_or_default(),
                     template
                         .estimate_minutes
-                        .map(|m| format_estimate_tui(m))
+                        .map(format_estimate_tui)
                         .unwrap_or_default(),
                     template.deadline.map(|d| d.to_string()).unwrap_or_default(),
                     template
