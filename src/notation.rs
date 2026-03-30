@@ -50,9 +50,7 @@ pub fn parse_notation(input: &str) -> ParsedInput {
 
         // All notation symbols are ASCII single-byte characters.
         // Skip tokens that don't start with a known symbol or are too short.
-        if token.len() < 2
-            || !matches!(first_byte, b'+' | b'@' | b'#' | b'~' | b'^' | b'=')
-        {
+        if token.len() < 2 || !matches!(first_byte, b'+' | b'@' | b'#' | b'~' | b'^' | b'=') {
             title_parts.push(token);
             continue;
         }
@@ -103,7 +101,9 @@ pub fn parse_notation(input: &str) -> ParsedInput {
 }
 
 fn is_word_token(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
 }
 
 pub fn parse_duration(s: &str) -> Option<i64> {
@@ -119,10 +119,22 @@ pub fn parse_duration(s: &str) -> Option<i64> {
             let n: i64 = current_num.parse().ok()?;
             current_num.clear();
             match c {
-                'w' => { total += n * 2400; found_unit = true; }
-                'd' => { total += n * 480; found_unit = true; }
-                'h' => { total += n * 60; found_unit = true; }
-                'm' => { total += n; found_unit = true; }
+                'w' => {
+                    total += n * 2400;
+                    found_unit = true;
+                }
+                'd' => {
+                    total += n * 480;
+                    found_unit = true;
+                }
+                'h' => {
+                    total += n * 60;
+                    found_unit = true;
+                }
+                'm' => {
+                    total += n;
+                    found_unit = true;
+                }
                 _ => return None,
             }
         }
@@ -137,7 +149,11 @@ pub fn parse_duration(s: &str) -> Option<i64> {
         total += n; // bare number = minutes
     }
 
-    if total > 0 { Some(total) } else { None }
+    if total > 0 {
+        Some(total)
+    } else {
+        None
+    }
 }
 
 pub fn parse_date(s: &str) -> Option<NaiveDate> {
@@ -291,16 +307,18 @@ pub fn next_occurrence(pattern: &str, from: NaiveDate) -> Option<NaiveDate> {
 
     // Day-of-week list: mon,wed,fri
     let parts: Vec<&str> = p.split(',').collect();
-    let weekdays: Vec<Weekday> = parts.iter().filter_map(|s| parse_weekday_short(s)).collect();
+    let weekdays: Vec<Weekday> = parts
+        .iter()
+        .filter_map(|s| parse_weekday_short(s))
+        .collect();
     if !weekdays.is_empty() {
         let current_wd = from.weekday();
         // Find the next matching weekday strictly after `from`
         let mut best_offset = 8u32; // impossibly high
         for &wd in &weekdays {
-            let offset = (wd.num_days_from_monday() as i32
-                - current_wd.num_days_from_monday() as i32
-                + 7)
-                % 7;
+            let offset =
+                (wd.num_days_from_monday() as i32 - current_wd.num_days_from_monday() as i32 + 7)
+                    % 7;
             let offset = if offset == 0 { 7 } else { offset as u32 };
             if offset < best_offset {
                 best_offset = offset;
@@ -314,7 +332,11 @@ pub fn next_occurrence(pattern: &str, from: NaiveDate) -> Option<NaiveDate> {
 
 fn last_day_of_month(year: i32, month: u32) -> u32 {
     // The first day of the next month minus 1 day
-    let (y, m) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let (y, m) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
     NaiveDate::from_ymd_opt(y, m, 1)
         .and_then(|d| d.pred_opt())
         .map(|d| d.day())
@@ -372,9 +394,7 @@ pub fn prepare_task(raw_input: &str) -> PreparedTask {
         None
     };
     let estimate = parsed.estimate_minutes.or(Some(60));
-    let scheduled = parsed
-        .scheduled
-        .or_else(|| Some(crate::today()));
+    let scheduled = parsed.scheduled.or_else(|| Some(crate::today()));
 
     PreparedTask {
         title,

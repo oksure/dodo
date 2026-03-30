@@ -87,7 +87,10 @@ fn daily_scroll_down_cursor_stays_within_margin() {
     if scrolling_entries.len() >= 2 {
         // Scroll should be monotonically non-decreasing when going down
         for pair in scrolling_entries.windows(2) {
-            assert!(pair[1].1 >= pair[0].1, "scroll should not decrease going down");
+            assert!(
+                pair[1].1 >= pair[0].1,
+                "scroll should not decrease going down"
+            );
         }
     }
 }
@@ -152,7 +155,12 @@ fn daily_scroll_cursor_stays_within_margin() {
         let scroll = app.daily_scroll;
         let cursor = app.daily_cursor;
         // Cursor should be >= scroll (visible)
-        assert!(cursor >= scroll, "cursor {} below scroll {}", cursor, scroll);
+        assert!(
+            cursor >= scroll,
+            "cursor {} below scroll {}",
+            cursor,
+            scroll
+        );
         // Cursor should be within viewport
         assert!(
             cursor < scroll + height,
@@ -169,7 +177,12 @@ fn daily_scroll_cursor_stays_within_margin() {
         trigger_scroll(&mut app);
         let scroll = app.daily_scroll;
         let cursor = app.daily_cursor;
-        assert!(cursor >= scroll, "cursor {} below scroll {}", cursor, scroll);
+        assert!(
+            cursor >= scroll,
+            "cursor {} below scroll {}",
+            cursor,
+            scroll
+        );
         assert!(
             cursor < scroll + height,
             "cursor {} outside viewport going up (scroll={}, height={})",
@@ -331,8 +344,18 @@ fn full_ui_renders_without_panic() {
 fn daily_view_renders_task_titles() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_task("Buy groceries", Area::Today, None, None, Some(60), None, Some(today), None, None)
-        .unwrap();
+    db.add_task(
+        "Buy groceries",
+        Area::Today,
+        None,
+        None,
+        Some(60),
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
     db.add_task(
         "Write report",
         Area::Today,
@@ -361,7 +384,10 @@ fn daily_view_renders_task_titles() {
 
     // Check the rendered buffer contains our task titles
     let content = buffer_text(terminal.backend().buffer());
-    assert!(content.contains("Buy groceries"), "should render task title");
+    assert!(
+        content.contains("Buy groceries"),
+        "should render task title"
+    );
     assert!(content.contains("Write report"), "should render task title");
 }
 
@@ -369,8 +395,18 @@ fn daily_view_renders_task_titles() {
 fn recurring_mark_rendered() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("Daily standup", "daily", Some("work".into()), None, Some(15), None, Some(today), None, None)
-        .unwrap();
+    db.add_template(
+        "Daily standup",
+        "daily",
+        Some("work".into()),
+        None,
+        Some(15),
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let mut app = App::new(&db);
     app.tasks_view = TasksView::Panes;
@@ -448,8 +484,18 @@ fn view_cycling_with_v() {
 fn delete_task_records_tombstone_prevents_merge() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_task("Delete me", Area::Today, None, None, None, None, Some(today), None, None)
-        .unwrap();
+    db.add_task(
+        "Delete me",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let task = db.find_task_by_num_id(1).unwrap().unwrap();
     let task_id = task.id.clone();

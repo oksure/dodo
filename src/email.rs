@@ -6,9 +6,15 @@ use crate::task::TaskStatus;
 
 /// Send a daily digest email via the Resend API.
 pub fn send_digest(config: &EmailConfig, db: &Database) -> Result<()> {
-    let from = config.from.as_deref().context("Email 'from' not configured")?;
+    let from = config
+        .from
+        .as_deref()
+        .context("Email 'from' not configured")?;
     let to = config.to.as_deref().context("Email 'to' not configured")?;
-    let api_key = config.api_key.as_deref().context("Resend API key not configured")?;
+    let api_key = config
+        .api_key
+        .as_deref()
+        .context("Resend API key not configured")?;
 
     let today = crate::today();
     let today_str = today.format("%A, %B %e, %Y").to_string();
@@ -74,8 +80,20 @@ pub fn send_digest(config: &EmailConfig, db: &Database) -> Result<()> {
                 TaskStatus::Paused => "⏸",
                 _ => "○",
             };
-            let project = task.project.as_deref().map(|p| format!(" <span style=\"color: #cba6f7;\">+{}</span>", html_escape(p))).unwrap_or_default();
-            let estimate = task.estimate_minutes.map(|m| format!(" <span style=\"color: #999;\">~{}m</span>", m)).unwrap_or_default();
+            let project = task
+                .project
+                .as_deref()
+                .map(|p| {
+                    format!(
+                        " <span style=\"color: #cba6f7;\">+{}</span>",
+                        html_escape(p)
+                    )
+                })
+                .unwrap_or_default();
+            let estimate = task
+                .estimate_minutes
+                .map(|m| format!(" <span style=\"color: #999;\">~{}m</span>", m))
+                .unwrap_or_default();
             html.push_str(&format!(
                 "<li>{} {}{}{}</li>",
                 status_icon,
@@ -88,8 +106,14 @@ pub fn send_digest(config: &EmailConfig, db: &Database) -> Result<()> {
     }
 
     // Summary
-    let total = all_tasks.iter().filter(|t| t.status != TaskStatus::Done).count();
-    let done_today = all_tasks.iter().filter(|t| t.status == TaskStatus::Done && t.scheduled == Some(today)).count();
+    let total = all_tasks
+        .iter()
+        .filter(|t| t.status != TaskStatus::Done)
+        .count();
+    let done_today = all_tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::Done && t.scheduled == Some(today))
+        .count();
     html.push_str(&format!(
         r#"<div style="background: #f8f9fa; padding: 12px; margin: 16px 0; border-radius: 4px; color: #666;">
 <strong>{}</strong> active tasks &middot; <strong>{}</strong> completed today &middot; <strong>{}</strong> overdue
@@ -124,9 +148,15 @@ pub fn send_digest(config: &EmailConfig, db: &Database) -> Result<()> {
 
 /// Send a test email to verify the configuration.
 pub fn send_test(config: &EmailConfig) -> Result<()> {
-    let from = config.from.as_deref().context("Email 'from' not configured")?;
+    let from = config
+        .from
+        .as_deref()
+        .context("Email 'from' not configured")?;
     let to = config.to.as_deref().context("Email 'to' not configured")?;
-    let api_key = config.api_key.as_deref().context("Resend API key not configured")?;
+    let api_key = config
+        .api_key
+        .as_deref()
+        .context("Resend API key not configured")?;
 
     let body = serde_json::json!({
         "from": from,

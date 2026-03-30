@@ -17,7 +17,11 @@ pub(super) fn sort_tasks(a: &Task, b: &Task, sort: SortBy, ascending: bool) -> s
         }
         SortBy::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
     };
-    if ascending { ord } else { ord.reverse() }
+    if ascending {
+        ord
+    } else {
+        ord.reverse()
+    }
 }
 
 pub(super) fn sort_label(sort: SortBy) -> &'static str {
@@ -56,8 +60,7 @@ pub(super) fn format_dur_short(seconds: i64) -> String {
 pub(super) fn humanize_recurrence(pattern: &str) -> String {
     let p = pattern.trim_start_matches('*');
     // Day-of-week list: mon,wed,fri
-    if p.contains(',') || ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].contains(&p)
-    {
+    if p.contains(',') || ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].contains(&p) {
         let days: Vec<String> = p
             .split(',')
             .map(|d| {
@@ -93,17 +96,29 @@ pub(super) fn humanize_recurrence(pattern: &str) -> String {
     // Numeric: Nd or Nw or Nm
     if let Some(rest) = p.strip_suffix('d') {
         if let Ok(n) = rest.parse::<u32>() {
-            return if n == 1 { "Every day".to_string() } else { format!("Every {} days", n) };
+            return if n == 1 {
+                "Every day".to_string()
+            } else {
+                format!("Every {} days", n)
+            };
         }
     }
     if let Some(rest) = p.strip_suffix('w') {
         if let Ok(n) = rest.parse::<u32>() {
-            return if n == 1 { "Every week".to_string() } else { format!("Every {} weeks", n) };
+            return if n == 1 {
+                "Every week".to_string()
+            } else {
+                format!("Every {} weeks", n)
+            };
         }
     }
     if let Some(rest) = p.strip_suffix('m') {
         if let Ok(n) = rest.parse::<u32>() {
-            return if n == 1 { "Every month".to_string() } else { format!("Every {} months", n) };
+            return if n == 1 {
+                "Every month".to_string()
+            } else {
+                format!("Every {} months", n)
+            };
         }
     }
     // Fallback: return raw pattern

@@ -20,7 +20,15 @@ pub(super) const SORT_MODES: [SortBy; 3] = [SortBy::Created, SortBy::Modified, S
 pub(super) const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 pub(super) const EDIT_FIELD_LABELS: [&str; 9] = [
-    "Title", "Project", "Context", "Tags", "Estimate", "Deadline", "Scheduled", "Priority", "Notes",
+    "Title",
+    "Project",
+    "Context",
+    "Tags",
+    "Estimate",
+    "Deadline",
+    "Scheduled",
+    "Priority",
+    "Notes",
 ];
 
 #[derive(Clone, Copy, PartialEq)]
@@ -34,12 +42,30 @@ pub(super) enum ConfigFieldType {
 pub(super) const CONFIG_FIELD_COUNT: usize = 24;
 
 pub(super) const CONFIG_FIELD_LABELS: [&str; CONFIG_FIELD_COUNT] = [
-    "Sync Enabled", "Turso URL", "Turso Token", "Sync Interval",
-    "Backup Enabled", "Endpoint", "Bucket", "Prefix",
-    "Access Key", "Secret Key", "Region", "Schedule Days", "Max Backups",
+    "Sync Enabled",
+    "Turso URL",
+    "Turso Token",
+    "Sync Interval",
+    "Backup Enabled",
+    "Endpoint",
+    "Bucket",
+    "Prefix",
+    "Access Key",
+    "Secret Key",
+    "Region",
+    "Schedule Days",
+    "Max Backups",
     "Week Start",
-    "Sound", "Sound Interval", "Default View", "Default Est.", "Timezone",
-    "Email Enabled", "API Key", "From Address", "To Address", "Digest Time",
+    "Sound",
+    "Sound Interval",
+    "Default View",
+    "Default Est.",
+    "Timezone",
+    "Email Enabled",
+    "API Key",
+    "From Address",
+    "To Address",
+    "Digest Time",
 ];
 
 pub(super) const CONFIG_FIELD_HINTS: [&str; CONFIG_FIELD_COUNT] = [
@@ -73,12 +99,28 @@ pub(super) const TOAST_DURATION_SECS: u64 = 5;
 pub(super) const TOAST_ERROR_DURATION_SECS: u64 = 8;
 
 pub(super) const CONFIG_FIELD_TYPES: [ConfigFieldType; CONFIG_FIELD_COUNT] = [
-    ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::Sensitive, ConfigFieldType::Number,
-    ConfigFieldType::Boolean, ConfigFieldType::String, ConfigFieldType::String, ConfigFieldType::String,
-    ConfigFieldType::Sensitive, ConfigFieldType::Sensitive, ConfigFieldType::String,
-    ConfigFieldType::Number, ConfigFieldType::Number,
+    ConfigFieldType::Boolean,
     ConfigFieldType::String,
-    ConfigFieldType::Boolean, ConfigFieldType::Number, ConfigFieldType::String, ConfigFieldType::Number,
+    ConfigFieldType::Sensitive,
+    ConfigFieldType::Number,
+    ConfigFieldType::Boolean,
     ConfigFieldType::String,
-    ConfigFieldType::Boolean, ConfigFieldType::Sensitive, ConfigFieldType::String, ConfigFieldType::String, ConfigFieldType::String,
+    ConfigFieldType::String,
+    ConfigFieldType::String,
+    ConfigFieldType::Sensitive,
+    ConfigFieldType::Sensitive,
+    ConfigFieldType::String,
+    ConfigFieldType::Number,
+    ConfigFieldType::Number,
+    ConfigFieldType::String,
+    ConfigFieldType::Boolean,
+    ConfigFieldType::Number,
+    ConfigFieldType::String,
+    ConfigFieldType::Number,
+    ConfigFieldType::String,
+    ConfigFieldType::Boolean,
+    ConfigFieldType::Sensitive,
+    ConfigFieldType::String,
+    ConfigFieldType::String,
+    ConfigFieldType::String,
 ];

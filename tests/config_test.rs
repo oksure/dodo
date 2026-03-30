@@ -465,7 +465,10 @@ fn preferences_full_roundtrip() {
     assert_eq!(deserialized.preferences.timer_sound_interval, 15);
     assert_eq!(deserialized.preferences.default_view, "calendar");
     assert_eq!(deserialized.preferences.default_estimate, 45);
-    assert_eq!(deserialized.preferences.timezone, Some("America/New_York".to_string()));
+    assert_eq!(
+        deserialized.preferences.timezone,
+        Some("America/New_York".to_string())
+    );
 }
 
 // ── Email config ────────────────────────────────────────────────────

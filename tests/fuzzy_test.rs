@@ -18,10 +18,7 @@ fn exact_match_wins() {
 
 #[test]
 fn prefix_match_over_substring() {
-    let tasks = vec![
-        make_task("Overwrite config"),
-        make_task("Write unit tests"),
-    ];
+    let tasks = vec![make_task("Overwrite config"), make_task("Write unit tests")];
     // "Write" is a prefix of "Write unit tests" but a substring of "Overwrite config"
     let best = find_best_match(&tasks, "Write").unwrap();
     assert_eq!(best.title, "Write unit tests");
@@ -82,10 +79,7 @@ fn rank_matches_orders_by_relevance() {
 
 #[test]
 fn rank_matches_exact_first() {
-    let tasks = vec![
-        make_task("Write report"),
-        make_task("report"),
-    ];
+    let tasks = vec![make_task("Write report"), make_task("report")];
     let ranked = rank_matches(&tasks, "report");
     // "report" = exact (100), "Write report" = substring (50)
     assert_eq!(ranked[0].title, "report");

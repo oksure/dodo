@@ -416,4 +416,3 @@ pub enum EmailAction {
     /// Send a test email to verify configuration
     Test,
 }
-

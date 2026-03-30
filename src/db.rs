@@ -59,7 +59,11 @@ fn val_bool(row: &libsql::Row, idx: i32) -> Result<bool> {
 impl Database {
     pub fn new() -> Result<Self> {
         let db_path = Self::db_path()?;
-        std::fs::create_dir_all(db_path.parent().context("Database path has no parent directory")?)?;
+        std::fs::create_dir_all(
+            db_path
+                .parent()
+                .context("Database path has no parent directory")?,
+        )?;
         Self::open(&db_path)
     }
 
@@ -69,11 +73,10 @@ impl Database {
             .build()
             .context("Failed to create tokio runtime")?;
         let path_str = path.to_str().context("Invalid database path")?.to_string();
-        let db = rt.block_on(async {
-            libsql::Builder::new_local(&path_str).build().await
-        }).context("Failed to open database")?;
-        let conn = db.connect()
-            .context("Failed to connect to database")?;
+        let db = rt
+            .block_on(async { libsql::Builder::new_local(&path_str).build().await })
+            .context("Failed to open database")?;
+        let conn = db.connect().context("Failed to connect to database")?;
         let database = Self { db, conn, rt };
         database.migrate()?;
         Ok(database)
@@ -84,11 +87,10 @@ impl Database {
             .enable_all()
             .build()
             .context("Failed to create tokio runtime")?;
-        let db = rt.block_on(async {
-            libsql::Builder::new_local(":memory:").build().await
-        }).context("Failed to open in-memory database")?;
-        let conn = db.connect()
-            .context("Failed to connect to database")?;
+        let db = rt
+            .block_on(async { libsql::Builder::new_local(":memory:").build().await })
+            .context("Failed to open in-memory database")?;
+        let conn = db.connect().context("Failed to connect to database")?;
         let database = Self { db, conn, rt };
         database.migrate()?;
         Ok(database)
@@ -96,8 +98,7 @@ impl Database {
 
     /// Get the database file path
     pub fn db_path() -> Result<PathBuf> {
-        let home = dirs::data_local_dir()
-            .context("Could not find local data directory")?;
+        let home = dirs::data_local_dir().context("Could not find local data directory")?;
         Ok(home.join("dodo").join("dodo.db"))
     }
 
@@ -121,10 +122,7 @@ impl Database {
         if let Ok(entries) = std::fs::read_dir(parent) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                if name.starts_with(&db_name)
-                    && name != db_name
-                    && !name.ends_with(".pre-sync")
-                {
+                if name.starts_with(&db_name) && name != db_name && !name.ends_with(".pre-sync") {
                     files.push(parent.join(&name));
                 }
             }
@@ -166,8 +164,7 @@ impl Database {
 
     /// Get the sync replica database file path (dodo-sync.db).
     pub fn sync_db_path() -> Result<PathBuf> {
-        let home = dirs::data_local_dir()
-            .context("Could not find local data directory")?;
+        let home = dirs::data_local_dir().context("Could not find local data directory")?;
         Ok(home.join("dodo").join("dodo-sync.db"))
     }
 
@@ -367,25 +364,31 @@ impl Database {
         num_id: i64,
         _incoming_created: DateTime<Utc>,
     ) -> Result<()> {
-        let mut rows = self.conn.query(
-            "SELECT id FROM tasks WHERE num_id = ?1 AND id != ?2",
-            params![num_id, incoming_task_id],
-        ).await?;
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id FROM tasks WHERE num_id = ?1 AND id != ?2",
+                params![num_id, incoming_task_id],
+            )
+            .await?;
 
         if let Some(row) = rows.next().await? {
             let existing_id = val_string(&row, 0)?;
 
             // Bump the existing holder to MAX+1 to make room for the incoming task
-            let mut max_rows = self.conn.query(
-                "SELECT COALESCE(MAX(num_id), 0) + 1 FROM tasks", ()
-            ).await?;
+            let mut max_rows = self
+                .conn
+                .query("SELECT COALESCE(MAX(num_id), 0) + 1 FROM tasks", ())
+                .await?;
             let max_row = max_rows.next().await?.context("No result from MAX query")?;
             let new_num_id = val_i64(&max_row, 0)?;
 
-            self.conn.execute(
-                "UPDATE tasks SET num_id = ?1 WHERE id = ?2",
-                params![new_num_id, existing_id],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET num_id = ?1 WHERE id = ?2",
+                    params![new_num_id, existing_id],
+                )
+                .await?;
         }
 
         Ok(())
@@ -396,7 +399,11 @@ impl Database {
     pub fn do_remote_sync(url: &str, token: &str) -> Result<()> {
         let db_path = Self::db_path()?;
         let sync_path = Self::sync_db_path()?;
-        std::fs::create_dir_all(sync_path.parent().context("Sync DB path has no parent directory")?)?;
+        std::fs::create_dir_all(
+            sync_path
+                .parent()
+                .context("Sync DB path has no parent directory")?,
+        )?;
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -405,16 +412,22 @@ impl Database {
 
         let url = url.to_string();
         let token = token.to_string();
-        let sync_path_str = sync_path.to_str().context("Invalid sync DB path")?.to_string();
+        let sync_path_str = sync_path
+            .to_str()
+            .context("Invalid sync DB path")?
+            .to_string();
 
         // 1. Open the remote replica (sync DB)
-        let sync_db = rt.block_on(async {
-            libsql::Builder::new_remote_replica(sync_path_str, url, token)
-                .read_your_writes(false)
-                .build()
-                .await
-        }).context("Failed to open sync replica")?;
-        let sync_conn = sync_db.connect()
+        let sync_db = rt
+            .block_on(async {
+                libsql::Builder::new_remote_replica(sync_path_str, url, token)
+                    .read_your_writes(false)
+                    .build()
+                    .await
+            })
+            .context("Failed to open sync replica")?;
+        let sync_conn = sync_db
+            .connect()
             .context("Failed to connect to sync replica")?;
 
         // 2. Pull from Turso
@@ -424,7 +437,11 @@ impl Database {
         })?;
 
         // 3. Run migrations on sync DB
-        let sync_database = Self { db: sync_db, conn: sync_conn, rt };
+        let sync_database = Self {
+            db: sync_db,
+            conn: sync_conn,
+            rt,
+        };
         sync_database.migrate()?;
 
         // 4. Open local DB (second connection)
@@ -447,7 +464,11 @@ impl Database {
 
         // 7. Push to Turso
         sync_database.rt.block_on(async {
-            sync_database.db.sync().await.context("Failed to push to Turso")?;
+            sync_database
+                .db
+                .sync()
+                .await
+                .context("Failed to push to Turso")?;
             Ok::<(), anyhow::Error>(())
         })?;
 
@@ -468,8 +489,7 @@ impl Database {
     /// Test sync connection by attempting to open a remote replica in a temp dir.
     pub fn test_sync_connection(url: String, token: String) -> Result<()> {
         let tmp_dir = std::env::temp_dir().join("dodo-sync-test");
-        std::fs::create_dir_all(&tmp_dir)
-            .context("Failed to create temp dir for sync test")?;
+        std::fs::create_dir_all(&tmp_dir).context("Failed to create temp dir for sync test")?;
         let tmp_db = tmp_dir.join("test-sync.db");
         let tmp_path = tmp_db.to_str().context("Invalid temp path")?.to_string();
 
@@ -479,12 +499,14 @@ impl Database {
                 .build()
                 .context("Failed to create tokio runtime")?;
 
-            let sync_db = rt.block_on(async {
-                libsql::Builder::new_remote_replica(tmp_path.clone(), url, token)
-                    .read_your_writes(false)
-                    .build()
-                    .await
-            }).context("Failed to connect to Turso")?;
+            let sync_db = rt
+                .block_on(async {
+                    libsql::Builder::new_remote_replica(tmp_path.clone(), url, token)
+                        .read_your_writes(false)
+                        .build()
+                        .await
+                })
+                .context("Failed to connect to Turso")?;
 
             rt.block_on(async {
                 sync_db.sync().await.context("Failed to sync with Turso")?;
@@ -502,24 +524,32 @@ impl Database {
 
     /// Delete tombstoned tasks from another database (used during sync to propagate deletes).
     fn propagate_tombstones(&self, target: &Database) -> Result<()> {
-        self.rt.block_on(async {
-            let mut rows = self.conn.query("SELECT id FROM deleted_tasks", ()).await?;
-            let mut ids = Vec::new();
-            while let Some(row) = rows.next().await? {
-                ids.push(val_string(&row, 0)?);
-            }
-            Ok::<Vec<String>, anyhow::Error>(ids)
-        })?.into_iter().try_for_each(|id| {
-            target.rt.block_on(async {
-                target.conn.execute(
-                    "DELETE FROM sessions WHERE task_id = ?1", params![id.clone()],
-                ).await?;
-                target.conn.execute(
-                    "DELETE FROM tasks WHERE id = ?1", params![id.clone()],
-                ).await?;
-                Ok::<(), anyhow::Error>(())
+        self.rt
+            .block_on(async {
+                let mut rows = self.conn.query("SELECT id FROM deleted_tasks", ()).await?;
+                let mut ids = Vec::new();
+                while let Some(row) = rows.next().await? {
+                    ids.push(val_string(&row, 0)?);
+                }
+                Ok::<Vec<String>, anyhow::Error>(ids)
+            })?
+            .into_iter()
+            .try_for_each(|id| {
+                target.rt.block_on(async {
+                    target
+                        .conn
+                        .execute(
+                            "DELETE FROM sessions WHERE task_id = ?1",
+                            params![id.clone()],
+                        )
+                        .await?;
+                    target
+                        .conn
+                        .execute("DELETE FROM tasks WHERE id = ?1", params![id.clone()])
+                        .await?;
+                    Ok::<(), anyhow::Error>(())
+                })
             })
-        })
     }
 
     /// Export all tasks and sessions from the database.
@@ -612,8 +642,9 @@ impl Database {
 
     fn migrate(&self) -> Result<()> {
         self.rt.block_on(async {
-            self.conn.execute(
-                "CREATE TABLE IF NOT EXISTS tasks (
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS tasks (
                     id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
                     area TEXT NOT NULL,
@@ -623,11 +654,13 @@ impl Database {
                     created TEXT NOT NULL,
                     completed TEXT
                 )",
-                (),
-            ).await?;
+                    (),
+                )
+                .await?;
 
-            self.conn.execute(
-                "CREATE TABLE IF NOT EXISTS sessions (
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
                     task_id TEXT NOT NULL,
                     started TEXT NOT NULL,
@@ -637,101 +670,206 @@ impl Database {
                     notes TEXT,
                     FOREIGN KEY (task_id) REFERENCES tasks(id)
                 )",
-                (),
-            ).await?;
+                    (),
+                )
+                .await?;
 
             // Add num_id column if it doesn't exist
-            let has_num_id = self.conn.prepare("SELECT num_id FROM tasks LIMIT 0").await.is_ok();
+            let has_num_id = self
+                .conn
+                .prepare("SELECT num_id FROM tasks LIMIT 0")
+                .await
+                .is_ok();
             if !has_num_id {
-                self.conn.execute_batch(
-                    "ALTER TABLE tasks ADD COLUMN num_id INTEGER;
+                self.conn
+                    .execute_batch(
+                        "ALTER TABLE tasks ADD COLUMN num_id INTEGER;
                      UPDATE tasks SET num_id = ROWID WHERE num_id IS NULL;
-                     CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_num_id ON tasks(num_id);"
-                ).await?;
+                     CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_num_id ON tasks(num_id);",
+                    )
+                    .await?;
             }
 
             // Add estimate_minutes column
-            if self.conn.prepare("SELECT estimate_minutes FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT estimate_minutes FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN estimate_minutes INTEGER", ())
+                    .await?;
             }
 
             // Add deadline column
-            if self.conn.prepare("SELECT deadline FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN deadline TEXT", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT deadline FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN deadline TEXT", ())
+                    .await?;
             }
 
             // Add scheduled column
-            if self.conn.prepare("SELECT scheduled FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN scheduled TEXT", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT scheduled FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN scheduled TEXT", ())
+                    .await?;
             }
 
             // Add tags column
-            if self.conn.prepare("SELECT tags FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN tags TEXT", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT tags FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN tags TEXT", ())
+                    .await?;
             }
 
             // Add task_notes column
-            if self.conn.prepare("SELECT task_notes FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN task_notes TEXT", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT task_notes FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN task_notes TEXT", ())
+                    .await?;
             }
 
             // Add priority column
-            if self.conn.prepare("SELECT priority FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN priority INTEGER", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT priority FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN priority INTEGER", ())
+                    .await?;
             }
 
             // Add modified_at column
-            if self.conn.prepare("SELECT modified_at FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN modified_at TEXT", ()).await?;
-                self.conn.execute("UPDATE tasks SET modified_at = created WHERE modified_at IS NULL", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT modified_at FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN modified_at TEXT", ())
+                    .await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET modified_at = created WHERE modified_at IS NULL",
+                        (),
+                    )
+                    .await?;
             }
 
             // Add recurrence column
-            if self.conn.prepare("SELECT recurrence FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN recurrence TEXT", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT recurrence FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN recurrence TEXT", ())
+                    .await?;
             }
 
             // Add is_template column
-            if self.conn.prepare("SELECT is_template FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN is_template INTEGER DEFAULT 0", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT is_template FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute(
+                        "ALTER TABLE tasks ADD COLUMN is_template INTEGER DEFAULT 0",
+                        (),
+                    )
+                    .await?;
             }
 
             // Add template_id column
-            if self.conn.prepare("SELECT template_id FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN template_id TEXT", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT template_id FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN template_id TEXT", ())
+                    .await?;
             }
 
             // Add elapsed_snapshot column (freeze elapsed time at completion)
-            if self.conn.prepare("SELECT elapsed_snapshot FROM tasks LIMIT 0").await.is_err() {
-                self.conn.execute("ALTER TABLE tasks ADD COLUMN elapsed_snapshot INTEGER", ()).await?;
+            if self
+                .conn
+                .prepare("SELECT elapsed_snapshot FROM tasks LIMIT 0")
+                .await
+                .is_err()
+            {
+                self.conn
+                    .execute("ALTER TABLE tasks ADD COLUMN elapsed_snapshot INTEGER", ())
+                    .await?;
                 // Backfill: snapshot elapsed for existing Done tasks from their sessions
-                self.conn.execute(
-                    "UPDATE tasks SET elapsed_snapshot = (
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET elapsed_snapshot = (
                         SELECT COALESCE(SUM(duration), 0) FROM sessions WHERE task_id = tasks.id
                     ) WHERE status = 'Done' AND elapsed_snapshot IS NULL",
-                    (),
-                ).await?;
+                        (),
+                    )
+                    .await?;
             }
 
             // Tombstone table for sync (tracks deleted task IDs so sync doesn't resurrect them)
-            self.conn.execute(
-                "CREATE TABLE IF NOT EXISTS deleted_tasks (
+            self.conn
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS deleted_tasks (
                     id TEXT PRIMARY KEY,
                     deleted_at TEXT NOT NULL
                 )",
-                (),
-            ).await?;
+                    (),
+                )
+                .await?;
 
             // Indexes
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area)", ()
-            ).await?;
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)", ()
-            ).await?;
-            self.conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions(task_id)", ()
-            ).await?;
+            self.conn
+                .execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tasks_area ON tasks(area)",
+                    (),
+                )
+                .await?;
+            self.conn
+                .execute(
+                    "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)",
+                    (),
+                )
+                .await?;
+            self.conn
+                .execute(
+                    "CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions(task_id)",
+                    (),
+                )
+                .await?;
 
             Ok::<(), anyhow::Error>(())
         })?;
@@ -934,10 +1072,12 @@ impl Database {
 
         self.rt.block_on(async {
             let task_id = task.id.clone();
-            self.conn.execute(
-                "UPDATE tasks SET status = 'Running', modified_at = ?2 WHERE id = ?1",
-                params![task.id, Utc::now().to_rfc3339()],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET status = 'Running', modified_at = ?2 WHERE id = ?1",
+                    params![task.id, Utc::now().to_rfc3339()],
+                )
+                .await?;
 
             let session = Session::new(&task_id);
             self.conn.execute(
@@ -965,9 +1105,9 @@ impl Database {
             let tx = self.conn.transaction().await?;
 
             // Find running task
-            let mut rows = tx.query(
-                "SELECT id FROM tasks WHERE status = 'Running'", ()
-            ).await?;
+            let mut rows = tx
+                .query("SELECT id FROM tasks WHERE status = 'Running'", ())
+                .await?;
             let running_id: Option<String> = match rows.next().await? {
                 Some(row) => Some(val_string(&row, 0)?),
                 None => None,
@@ -976,21 +1116,21 @@ impl Database {
             if let Some(task_id) = running_id {
                 if let Some(mut session) = get_active_session(&tx, &task_id).await? {
                     session.stop();
-                    let ended = session.ended.context("Session ended timestamp missing after stop()")?;
+                    let ended = session
+                        .ended
+                        .context("Session ended timestamp missing after stop()")?;
                     tx.execute(
                         "UPDATE sessions SET ended = ?1, duration = ?2 WHERE id = ?3",
-                        params![
-                            ended.to_rfc3339(),
-                            session.duration,
-                            session.id,
-                        ],
-                    ).await?;
+                        params![ended.to_rfc3339(), session.duration, session.id,],
+                    )
+                    .await?;
                 }
 
                 tx.execute(
                     "UPDATE tasks SET status = 'Paused', modified_at = ?2 WHERE id = ?1",
                     params![task_id, Utc::now().to_rfc3339()],
-                ).await?;
+                )
+                .await?;
             }
 
             tx.commit().await?;
@@ -1096,7 +1236,8 @@ impl Database {
                     let elapsed = val_opt_i64(&row, 16)?; // elapsed_seconds is at index 16
 
                     // Check if there's an active session for this running task
-                    let has_active_session = get_active_session(&self.conn, &task_id).await?.is_some();
+                    let has_active_session =
+                        get_active_session(&self.conn, &task_id).await?.is_some();
 
                     // If task is Running but has no active session, it's an orphaned task (terminal crash)
                     // Reset it to Paused
@@ -1106,7 +1247,7 @@ impl Database {
                             params![Utc::now().to_rfc3339(), task_id],
                         ).await?;
                     }
-                    
+
                     Ok(Some((title, elapsed.unwrap_or(0), estimate)))
                 }
                 None => Ok(None),
@@ -1120,12 +1261,15 @@ impl Database {
         let num_id = task.num_id.unwrap_or(0);
 
         self.rt.block_on(async {
-            self.conn.execute(
-                "DELETE FROM sessions WHERE task_id = ?1", params![task.id.clone()],
-            ).await?;
-            self.conn.execute(
-                "DELETE FROM tasks WHERE id = ?1", params![task.id],
-            ).await?;
+            self.conn
+                .execute(
+                    "DELETE FROM sessions WHERE task_id = ?1",
+                    params![task.id.clone()],
+                )
+                .await?;
+            self.conn
+                .execute("DELETE FROM tasks WHERE id = ?1", params![task.id])
+                .await?;
             Ok::<(), anyhow::Error>(())
         })?;
 
@@ -1138,9 +1282,13 @@ impl Database {
         let new_entry = format!("{} {}", timestamp, text);
 
         self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT task_notes FROM tasks WHERE id = ?1", params![task.id.clone()],
-            ).await?;
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT task_notes FROM tasks WHERE id = ?1",
+                    params![task.id.clone()],
+                )
+                .await?;
             let existing: Option<String> = match rows.next().await? {
                 Some(row) => val_opt_string(&row, 0)?,
                 None => None,
@@ -1151,10 +1299,12 @@ impl Database {
                 _ => new_entry,
             };
 
-            self.conn.execute(
-                "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
-                params![updated, task.id, Utc::now().to_rfc3339()],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
+                    params![updated, task.id, Utc::now().to_rfc3339()],
+                )
+                .await?;
 
             Ok::<(), anyhow::Error>(())
         })?;
@@ -1165,10 +1315,12 @@ impl Database {
     pub fn clear_notes(&self, query: &str) -> Result<String> {
         let task = self.resolve_task(query)?;
         self.rt.block_on(async {
-            self.conn.execute(
-                "UPDATE tasks SET task_notes = NULL, modified_at = ?2 WHERE id = ?1",
-                params![task.id, Utc::now().to_rfc3339()],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET task_notes = NULL, modified_at = ?2 WHERE id = ?1",
+                    params![task.id, Utc::now().to_rfc3339()],
+                )
+                .await?;
             Ok::<(), anyhow::Error>(())
         })?;
         Ok(task.title)
@@ -1177,9 +1329,13 @@ impl Database {
     pub fn get_task_notes(&self, query: &str) -> Result<(String, Option<String>)> {
         let task = self.resolve_task(query)?;
         let notes = self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT task_notes FROM tasks WHERE id = ?1", params![task.id],
-            ).await?;
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT task_notes FROM tasks WHERE id = ?1",
+                    params![task.id],
+                )
+                .await?;
             match rows.next().await? {
                 Some(row) => val_opt_string(&row, 0),
                 None => Ok(None),
@@ -1188,7 +1344,12 @@ impl Database {
         Ok((task.title, notes))
     }
 
-    pub fn update_task_fields(&self, query: &str, input: &ParsedInput, area: Option<Area>) -> Result<String> {
+    pub fn update_task_fields(
+        &self,
+        query: &str,
+        input: &ParsedInput,
+        area: Option<Area>,
+    ) -> Result<String> {
         let task = self.resolve_task(query)?;
         self.update_task_fields_by_id(&task.id, input, area)?;
         Ok(task.title)
@@ -1246,9 +1407,13 @@ impl Database {
         let new_entry = format!("{} {}", timestamp, text);
 
         self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT task_notes FROM tasks WHERE id = ?1", params![task_id],
-            ).await?;
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT task_notes FROM tasks WHERE id = ?1",
+                    params![task_id],
+                )
+                .await?;
             let existing: Option<String> = match rows.next().await? {
                 Some(row) => val_opt_string(&row, 0)?,
                 None => None,
@@ -1259,10 +1424,12 @@ impl Database {
                 _ => new_entry,
             };
 
-            self.conn.execute(
-                "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
-                params![updated, task_id, Utc::now().to_rfc3339()],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
+                    params![updated, task_id, Utc::now().to_rfc3339()],
+                )
+                .await?;
 
             Ok::<(), anyhow::Error>(())
         })
@@ -1270,9 +1437,13 @@ impl Database {
 
     pub fn get_task_notes_by_id(&self, task_id: &str) -> Result<Option<String>> {
         self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT task_notes FROM tasks WHERE id = ?1", params![task_id],
-            ).await?;
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT task_notes FROM tasks WHERE id = ?1",
+                    params![task_id],
+                )
+                .await?;
             match rows.next().await? {
                 Some(row) => val_opt_string(&row, 0),
                 None => Ok(None),
@@ -1283,10 +1454,12 @@ impl Database {
     pub fn update_notes_by_id(&self, task_id: &str, text: &str) -> Result<()> {
         self.rt.block_on(async {
             let notes_val: Option<&str> = if text.is_empty() { None } else { Some(text) };
-            self.conn.execute(
-                "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
-                params![notes_val, task_id, Utc::now().to_rfc3339()],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET task_notes = ?1, modified_at = ?3 WHERE id = ?2",
+                    params![notes_val, task_id, Utc::now().to_rfc3339()],
+                )
+                .await?;
             Ok::<(), anyhow::Error>(())
         })
     }
@@ -1294,10 +1467,12 @@ impl Database {
     /// Update the recurrence pattern for a recurring template.
     pub fn update_recurrence_by_id(&self, task_id: &str, recurrence: &str) -> Result<()> {
         self.rt.block_on(async {
-            self.conn.execute(
-                "UPDATE tasks SET recurrence = ?1, modified_at = ?3 WHERE id = ?2",
-                params![recurrence, task_id, Utc::now().to_rfc3339()],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET recurrence = ?1, modified_at = ?3 WHERE id = ?2",
+                    params![recurrence, task_id, Utc::now().to_rfc3339()],
+                )
+                .await?;
             Ok::<(), anyhow::Error>(())
         })
     }
@@ -1366,10 +1541,12 @@ impl Database {
 
     pub fn update_task_scheduled(&self, task_id: &str, date: NaiveDate) -> Result<()> {
         self.rt.block_on(async {
-            self.conn.execute(
-                "UPDATE tasks SET scheduled = ?1, modified_at = ?3 WHERE id = ?2",
-                params![date.to_string(), task_id, Utc::now().to_rfc3339()],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET scheduled = ?1, modified_at = ?3 WHERE id = ?2",
+                    params![date.to_string(), task_id, Utc::now().to_rfc3339()],
+                )
+                .await?;
             Ok::<(), anyhow::Error>(())
         })
     }
@@ -1380,13 +1557,15 @@ impl Database {
         self.rt.block_on(async {
             let today = crate::today().to_string();
             let now = Utc::now().to_rfc3339();
-            self.conn.execute(
-                "UPDATE tasks SET scheduled = ?1, modified_at = ?2
+            self.conn
+                .execute(
+                    "UPDATE tasks SET scheduled = ?1, modified_at = ?2
                  WHERE scheduled < ?1
                    AND status != 'Done'
                    AND COALESCE(is_template, 0) = 0",
-                params![today, now],
-            ).await?;
+                    params![today, now],
+                )
+                .await?;
             Ok::<(), anyhow::Error>(())
         })
     }
@@ -1409,76 +1588,101 @@ impl Database {
         self.rt.block_on(async {
             // Record tombstone so sync doesn't resurrect this task
             let now = Utc::now().to_rfc3339();
-            self.conn.execute(
-                "INSERT OR IGNORE INTO deleted_tasks (id, deleted_at) VALUES (?1, ?2)",
-                params![task_id, now.clone()],
-            ).await?;
-            self.conn.execute(
-                "DELETE FROM sessions WHERE task_id = ?1", params![task_id],
-            ).await?;
-            self.conn.execute(
-                "DELETE FROM tasks WHERE id = ?1", params![task_id],
-            ).await?;
+            self.conn
+                .execute(
+                    "INSERT OR IGNORE INTO deleted_tasks (id, deleted_at) VALUES (?1, ?2)",
+                    params![task_id, now.clone()],
+                )
+                .await?;
+            self.conn
+                .execute("DELETE FROM sessions WHERE task_id = ?1", params![task_id])
+                .await?;
+            self.conn
+                .execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
+                .await?;
             Ok::<(), anyhow::Error>(())
         })
     }
 
-    pub fn update_task_fields_by_id(&self, task_id: &str, input: &ParsedInput, area: Option<Area>) -> Result<()> {
+    pub fn update_task_fields_by_id(
+        &self,
+        task_id: &str,
+        input: &ParsedInput,
+        area: Option<Area>,
+    ) -> Result<()> {
         self.rt.block_on(async {
             if let Some(ref project) = input.project {
-                self.conn.execute(
-                    "UPDATE tasks SET project = ?1 WHERE id = ?2",
-                    params![project.clone(), task_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET project = ?1 WHERE id = ?2",
+                        params![project.clone(), task_id],
+                    )
+                    .await?;
             }
             if !input.contexts.is_empty() {
                 let ctx = input.contexts.join(",");
-                self.conn.execute(
-                    "UPDATE tasks SET context = ?1 WHERE id = ?2",
-                    params![ctx, task_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET context = ?1 WHERE id = ?2",
+                        params![ctx, task_id],
+                    )
+                    .await?;
             }
             if !input.tags.is_empty() {
                 let tags = input.tags.join(",");
-                self.conn.execute(
-                    "UPDATE tasks SET tags = ?1 WHERE id = ?2",
-                    params![tags, task_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET tags = ?1 WHERE id = ?2",
+                        params![tags, task_id],
+                    )
+                    .await?;
             }
             if let Some(est) = input.estimate_minutes {
-                self.conn.execute(
-                    "UPDATE tasks SET estimate_minutes = ?1 WHERE id = ?2",
-                    params![est, task_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET estimate_minutes = ?1 WHERE id = ?2",
+                        params![est, task_id],
+                    )
+                    .await?;
             }
             if let Some(ref dl) = input.deadline {
-                self.conn.execute(
-                    "UPDATE tasks SET deadline = ?1 WHERE id = ?2",
-                    params![dl.to_string(), task_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET deadline = ?1 WHERE id = ?2",
+                        params![dl.to_string(), task_id],
+                    )
+                    .await?;
             }
             if let Some(ref sc) = input.scheduled {
-                self.conn.execute(
-                    "UPDATE tasks SET scheduled = ?1 WHERE id = ?2",
-                    params![sc.to_string(), task_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET scheduled = ?1 WHERE id = ?2",
+                        params![sc.to_string(), task_id],
+                    )
+                    .await?;
             }
             if let Some(p) = input.priority {
-                self.conn.execute(
-                    "UPDATE tasks SET priority = ?1 WHERE id = ?2",
-                    params![p, task_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET priority = ?1 WHERE id = ?2",
+                        params![p, task_id],
+                    )
+                    .await?;
             }
             if let Some(area) = area {
-                self.conn.execute(
-                    "UPDATE tasks SET area = ?1 WHERE id = ?2",
-                    params![area.as_str(), task_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET area = ?1 WHERE id = ?2",
+                        params![area.as_str(), task_id],
+                    )
+                    .await?;
             }
-            self.conn.execute(
-                "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
-                params![Utc::now().to_rfc3339(), task_id],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
+                    params![Utc::now().to_rfc3339(), task_id],
+                )
+                .await?;
             Ok::<(), anyhow::Error>(())
         })
     }
@@ -1490,16 +1694,17 @@ impl Database {
         // that were auto-generated when this task was originally completed. We're bringing
         // this instance back, so the auto-generated successor(s) should be removed to
         // keep exactly one active instance per template.
-        let template_id: Option<String> = self.rt.block_on(async {
-            let mut rows = self.conn.query(
+        let template_id: Option<String> =
+            self.rt.block_on(async {
+                let mut rows = self.conn.query(
                 "SELECT template_id FROM tasks WHERE id = ?1 AND COALESCE(is_template, 0) = 0",
                 params![task_id],
             ).await?;
-            match rows.next().await? {
-                Some(row) => val_opt_string(&row, 0),
-                None => Ok(None),
-            }
-        })?;
+                match rows.next().await? {
+                    Some(row) => val_opt_string(&row, 0),
+                    None => Ok(None),
+                }
+            })?;
 
         if let Some(tid) = template_id {
             self.rt.block_on(async {
@@ -1529,10 +1734,12 @@ impl Database {
 
     pub fn update_task_title_by_id(&self, task_id: &str, title: &str) -> Result<()> {
         self.rt.block_on(async {
-            self.conn.execute(
-                "UPDATE tasks SET title = ?1, modified_at = ?3 WHERE id = ?2",
-                params![title, task_id, Utc::now().to_rfc3339()],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET title = ?1, modified_at = ?3 WHERE id = ?2",
+                    params![title, task_id, Utc::now().to_rfc3339()],
+                )
+                .await?;
             Ok::<(), anyhow::Error>(())
         })
     }
@@ -1675,13 +1882,16 @@ impl Database {
 
     pub fn report_by_project(&self, from: &str, to: &str) -> Result<Vec<(String, i64)>> {
         self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT COALESCE(t.project, '(none)'), COALESCE(SUM(s.duration), 0)
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT COALESCE(t.project, '(none)'), COALESCE(SUM(s.duration), 0)
                  FROM sessions s JOIN tasks t ON s.task_id = t.id
                  WHERE s.started >= ?1 AND s.started < ?2 AND s.ended IS NOT NULL
                  GROUP BY t.project ORDER BY SUM(s.duration) DESC",
-                params![from, to],
-            ).await?;
+                    params![from, to],
+                )
+                .await?;
             let mut result = vec![];
             while let Some(row) = rows.next().await? {
                 result.push((val_string(&row, 0)?, val_i64(&row, 1)?));
@@ -1690,16 +1900,24 @@ impl Database {
         })
     }
 
-    pub fn report_done_tasks(&self, from: &str, to: &str, limit: i64) -> Result<Vec<(String, i64)>> {
+    pub fn report_done_tasks(
+        &self,
+        from: &str,
+        to: &str,
+        limit: i64,
+    ) -> Result<Vec<(String, i64)>> {
         self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT title, COALESCE(
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT title, COALESCE(
                     (SELECT SUM(duration) FROM sessions WHERE task_id = t.id), 0
                  ) FROM tasks t
                  WHERE status = 'Done' AND completed >= ?1 AND completed < ?2
                  ORDER BY completed DESC LIMIT ?3",
-                params![from, to, limit],
-            ).await?;
+                    params![from, to, limit],
+                )
+                .await?;
             let mut result = vec![];
             while let Some(row) = rows.next().await? {
                 result.push((val_string(&row, 0)?, val_i64(&row, 1)?));
@@ -1814,8 +2032,17 @@ impl Database {
 
         // Generate first instance
         let today = crate::today();
-        self.generate_instance_for_template(&num_id.1, title, &project, &context,
-            estimate_minutes, deadline, tags.as_deref(), priority, today)?;
+        self.generate_instance_for_template(
+            &num_id.1,
+            title,
+            &project,
+            &context,
+            estimate_minutes,
+            deadline,
+            tags.as_deref(),
+            priority,
+            today,
+        )?;
 
         Ok(num_id.0)
     }
@@ -1917,29 +2144,33 @@ impl Database {
                 None => continue,
             };
 
-            let has_active: bool = self.rt.block_on(async {
-                let mut rows = self.conn.query(
+            let has_active: bool =
+                self.rt.block_on(async {
+                    let mut rows = self.conn.query(
                     "SELECT COUNT(*) FROM tasks WHERE template_id = ?1 AND status != 'Done'",
                     params![template.id.clone()],
                 ).await?;
-                match rows.next().await? {
-                    Some(row) => {
-                        let count = val_i64(&row, 0)?;
-                        Ok::<bool, anyhow::Error>(count > 0)
+                    match rows.next().await? {
+                        Some(row) => {
+                            let count = val_i64(&row, 0)?;
+                            Ok::<bool, anyhow::Error>(count > 0)
+                        }
+                        None => Ok(false),
                     }
-                    None => Ok(false),
-                }
-            })?;
+                })?;
 
             if has_active {
                 continue;
             }
 
             let last_scheduled: Option<String> = self.rt.block_on(async {
-                let mut rows = self.conn.query(
-                    "SELECT MAX(scheduled) FROM tasks WHERE template_id = ?1",
-                    params![template.id.clone()],
-                ).await?;
+                let mut rows = self
+                    .conn
+                    .query(
+                        "SELECT MAX(scheduled) FROM tasks WHERE template_id = ?1",
+                        params![template.id.clone()],
+                    )
+                    .await?;
                 match rows.next().await? {
                     Some(row) => val_opt_string(&row, 0),
                     None => Ok(None),
@@ -1950,8 +2181,8 @@ impl Database {
                 .and_then(|d| NaiveDate::parse_from_str(&d, "%Y-%m-%d").ok())
                 .unwrap_or(today);
 
-            let next_date = crate::notation::next_occurrence(&recurrence, from_date)
-                .unwrap_or(today);
+            let next_date =
+                crate::notation::next_occurrence(&recurrence, from_date).unwrap_or(today);
 
             self.generate_instance_for_template(
                 &template.id,
@@ -2021,9 +2252,13 @@ impl Database {
 
     pub fn complete_recurring_instance(&self, task_id: &str) -> Result<Option<String>> {
         let template_id: Option<String> = self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT template_id FROM tasks WHERE id = ?1", params![task_id],
-            ).await?;
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT template_id FROM tasks WHERE id = ?1",
+                    params![task_id],
+                )
+                .await?;
             match rows.next().await? {
                 Some(row) => val_opt_string(&row, 0),
                 None => Ok(None),
@@ -2036,9 +2271,13 @@ impl Database {
         };
 
         let instance_scheduled: Option<String> = self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT scheduled FROM tasks WHERE id = ?1", params![task_id],
-            ).await?;
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT scheduled FROM tasks WHERE id = ?1",
+                    params![task_id],
+                )
+                .await?;
             match rows.next().await? {
                 Some(row) => val_opt_string(&row, 0),
                 None => Ok(None),
@@ -2051,7 +2290,10 @@ impl Database {
                 "{} WHERE t.id = ?1 GROUP BY t.id",
                 Self::TASK_SELECT_WITH_ELAPSED
             );
-            let mut rows = self.conn.query(&query, params![template_id.clone()]).await?;
+            let mut rows = self
+                .conn
+                .query(&query, params![template_id.clone()])
+                .await?;
             match rows.next().await? {
                 Some(row) => Ok::<Option<Task>, anyhow::Error>(Some(row_to_task(&row)?)),
                 None => Ok(None),
@@ -2131,10 +2373,13 @@ impl Database {
 
     pub fn template_last_date(&self, template_id: &str) -> Result<Option<NaiveDate>> {
         self.rt.block_on(async {
-            let mut rows = self.conn.query(
-                "SELECT MAX(scheduled) FROM tasks WHERE template_id = ?1",
-                params![template_id],
-            ).await?;
+            let mut rows = self
+                .conn
+                .query(
+                    "SELECT MAX(scheduled) FROM tasks WHERE template_id = ?1",
+                    params![template_id],
+                )
+                .await?;
             match rows.next().await? {
                 Some(row) => {
                     let s = val_opt_string(&row, 0)?;
@@ -2148,59 +2393,77 @@ impl Database {
     pub fn update_template_fields(&self, template_id: &str, input: &ParsedInput) -> Result<()> {
         self.rt.block_on(async {
             if let Some(ref project) = input.project {
-                self.conn.execute(
-                    "UPDATE tasks SET project = ?1 WHERE id = ?2",
-                    params![project.clone(), template_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET project = ?1 WHERE id = ?2",
+                        params![project.clone(), template_id],
+                    )
+                    .await?;
             }
             if !input.contexts.is_empty() {
                 let ctx = input.contexts.join(",");
-                self.conn.execute(
-                    "UPDATE tasks SET context = ?1 WHERE id = ?2",
-                    params![ctx, template_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET context = ?1 WHERE id = ?2",
+                        params![ctx, template_id],
+                    )
+                    .await?;
             }
             if !input.tags.is_empty() {
                 let tags = input.tags.join(",");
-                self.conn.execute(
-                    "UPDATE tasks SET tags = ?1 WHERE id = ?2",
-                    params![tags, template_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET tags = ?1 WHERE id = ?2",
+                        params![tags, template_id],
+                    )
+                    .await?;
             }
             if let Some(est) = input.estimate_minutes {
-                self.conn.execute(
-                    "UPDATE tasks SET estimate_minutes = ?1 WHERE id = ?2",
-                    params![est, template_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET estimate_minutes = ?1 WHERE id = ?2",
+                        params![est, template_id],
+                    )
+                    .await?;
             }
             if let Some(ref dl) = input.deadline {
-                self.conn.execute(
-                    "UPDATE tasks SET deadline = ?1 WHERE id = ?2",
-                    params![dl.to_string(), template_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET deadline = ?1 WHERE id = ?2",
+                        params![dl.to_string(), template_id],
+                    )
+                    .await?;
             }
             if let Some(ref sc) = input.scheduled {
-                self.conn.execute(
-                    "UPDATE tasks SET scheduled = ?1 WHERE id = ?2",
-                    params![sc.to_string(), template_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET scheduled = ?1 WHERE id = ?2",
+                        params![sc.to_string(), template_id],
+                    )
+                    .await?;
             }
             if let Some(p) = input.priority {
-                self.conn.execute(
-                    "UPDATE tasks SET priority = ?1 WHERE id = ?2",
-                    params![p, template_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET priority = ?1 WHERE id = ?2",
+                        params![p, template_id],
+                    )
+                    .await?;
             }
             if let Some(ref recurrence) = input.recurrence {
-                self.conn.execute(
-                    "UPDATE tasks SET recurrence = ?1 WHERE id = ?2",
-                    params![recurrence.clone(), template_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET recurrence = ?1 WHERE id = ?2",
+                        params![recurrence.clone(), template_id],
+                    )
+                    .await?;
             }
-            self.conn.execute(
-                "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
-                params![Utc::now().to_rfc3339(), template_id],
-            ).await?;
+            self.conn
+                .execute(
+                    "UPDATE tasks SET modified_at = ?1 WHERE id = ?2",
+                    params![Utc::now().to_rfc3339(), template_id],
+                )
+                .await?;
             Ok::<(), anyhow::Error>(())
         })
     }
@@ -2213,12 +2476,10 @@ fn row_to_task(row: &libsql::Row) -> Result<Task> {
         id: val_string(row, 0)?,
         num_id: val_opt_i64(row, 1)?,
         title: val_string(row, 2)?,
-        area: Area::from_str(&val_string(row, 3)?)
-            .unwrap_or(Area::Today),
+        area: Area::from_str(&val_string(row, 3)?).unwrap_or(Area::Today),
         project: val_opt_string(row, 4)?,
         context: val_opt_string(row, 5)?,
-        status: TaskStatus::from_str(&val_string(row, 6)?)
-            .unwrap_or(TaskStatus::Pending),
+        status: TaskStatus::from_str(&val_string(row, 6)?).unwrap_or(TaskStatus::Pending),
         created: DateTime::parse_from_rfc3339(&val_string(row, 7)?)
             .map_err(|e| anyhow::anyhow!(e))?
             .into(),
@@ -2246,12 +2507,14 @@ fn row_to_task(row: &libsql::Row) -> Result<Task> {
 }
 
 async fn get_active_session(conn: &Connection, task_id: &str) -> Result<Option<Session>> {
-    let mut rows = conn.query(
-        "SELECT id, task_id, started, ended, duration, manual_edit, notes
+    let mut rows = conn
+        .query(
+            "SELECT id, task_id, started, ended, duration, manual_edit, notes
          FROM sessions WHERE task_id = ?1 AND ended IS NULL
          LIMIT 1",
-        params![task_id],
-    ).await?;
+            params![task_id],
+        )
+        .await?;
     match rows.next().await? {
         Some(row) => Ok(Some(row_to_session(&row)?)),
         None => Ok(None),
@@ -2273,4 +2536,3 @@ fn row_to_session(row: &libsql::Row) -> Result<Session> {
         notes: val_opt_string(row, 6)?,
     })
 }
-

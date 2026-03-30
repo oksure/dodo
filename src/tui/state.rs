@@ -237,7 +237,7 @@ pub(super) struct App<'a> {
     pub(super) edit_field_index: usize,
     pub(super) edit_field_values: [String; 9],
     pub(super) edit_field_input: String,
-    pub(super) edit_is_template: bool,  // true when editing a recurring template
+    pub(super) edit_is_template: bool, // true when editing a recurring template
     // Elapsed editing modal
     pub(super) elapsed_edit_input: String,
     pub(super) elapsed_return_to_edit: bool, // true when opened from EditTask dialog
@@ -522,7 +522,11 @@ impl<'a> App<'a> {
         match self.tasks_view {
             TasksView::Panes => {
                 for pane_idx in 0..4 {
-                    if let Some(pos) = self.panes[pane_idx].tasks.iter().position(|t| t.id == task_id) {
+                    if let Some(pos) = self.panes[pane_idx]
+                        .tasks
+                        .iter()
+                        .position(|t| t.id == task_id)
+                    {
                         self.active_pane = pane_idx;
                         self.panes[pane_idx].list_state.select(Some(pos));
                         break;
@@ -548,9 +552,15 @@ impl<'a> App<'a> {
                 }
             }
             TasksView::Calendar => {
-                let found = self.calendar_tasks_by_date.iter().find_map(|(date, tasks)| {
-                    tasks.iter().position(|t| t.id == task_id).map(|pos| (*date, pos))
-                });
+                let found = self
+                    .calendar_tasks_by_date
+                    .iter()
+                    .find_map(|(date, tasks)| {
+                        tasks
+                            .iter()
+                            .position(|t| t.id == task_id)
+                            .map(|pos| (*date, pos))
+                    });
                 if let Some((date, pos)) = found {
                     self.calendar_selected = date;
                     self.calendar_task_selected = pos;
@@ -774,10 +784,18 @@ impl<'a> App<'a> {
         if self.report_offset == 0 {
             match self.report_range {
                 ReportRange::Day => format!("Today ({})", today.format("%b %d")),
-                _ => format!("{} \u{2013} {}", from_date.format("%b %d"), to_date.format("%b %d, %Y")),
+                _ => format!(
+                    "{} \u{2013} {}",
+                    from_date.format("%b %d"),
+                    to_date.format("%b %d, %Y")
+                ),
             }
         } else {
-            format!("{} \u{2013} {}", from_date.format("%b %d"), to_date.format("%b %d, %Y"))
+            format!(
+                "{} \u{2013} {}",
+                from_date.format("%b %d"),
+                to_date.format("%b %d, %Y")
+            )
         }
     }
 
@@ -1030,9 +1048,10 @@ impl<'a> App<'a> {
         let today = dodo::today();
 
         // Find today's header index so we can set scroll to show it at the top
-        let today_header_idx = self.daily_entries.iter().position(|e| {
-            matches!(e, DailyEntry::Header { is_today: true, .. })
-        });
+        let today_header_idx = self
+            .daily_entries
+            .iter()
+            .position(|e| matches!(e, DailyEntry::Header { is_today: true, .. }));
 
         // Find the first Task entry on today's date (skip the header)
         for (i, entry) in self.daily_entries.iter().enumerate() {
@@ -1285,9 +1304,7 @@ impl<'a> App<'a> {
                 task.project.clone().unwrap_or_default(),
                 task.context.clone().unwrap_or_default(),
                 task.tags.clone().unwrap_or_default(),
-                task.estimate_minutes
-                    .map(format_est)
-                    .unwrap_or_default(),
+                task.estimate_minutes.map(format_est).unwrap_or_default(),
                 task.deadline
                     .map(|d| d.format("%Y-%m-%d").to_string())
                     .unwrap_or_default(),

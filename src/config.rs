@@ -11,7 +11,6 @@ pub enum WeekStart {
     Monday,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferencesConfig {
     #[serde(default)]

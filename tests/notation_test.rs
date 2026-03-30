@@ -100,7 +100,11 @@ fn date_mmdd() {
     let today = Local::now().date_naive();
     let year = today.year();
     // Pick a date in the future
-    let future_month = if today.month() < 12 { today.month() + 1 } else { 1 };
+    let future_month = if today.month() < 12 {
+        today.month() + 1
+    } else {
+        1
+    };
     let future_year = if future_month == 1 { year + 1 } else { year };
     let input = format!("{:02}15", future_month);
     assert_eq!(
@@ -324,7 +328,7 @@ fn five_bangs_not_priority() {
 
 // ── Recurrence notation ────────────────────────────────────────────
 
-use dodo::notation::{parse_recurrence, next_occurrence};
+use dodo::notation::{next_occurrence, parse_recurrence};
 
 #[test]
 fn recurrence_daily() {

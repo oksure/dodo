@@ -162,9 +162,13 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 };
                 let pct = remaining as f64 / (est_min * 60) as f64;
                 let style = if pct > 0.5 {
-                    Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(ACCENT_GREEN)
+                        .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(ACCENT_YELLOW).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(ACCENT_YELLOW)
+                        .add_modifier(Modifier::BOLD)
                 };
                 (title_str, timer, style)
             } else {
@@ -178,18 +182,30 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
                 let style = if app.tick_count.is_multiple_of(2) {
                     Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::Rgb(200, 80, 100)).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(Color::Rgb(200, 80, 100))
+                        .add_modifier(Modifier::BOLD)
                 };
                 (title_str, timer, style)
             }
         } else {
             let elapsed = info.elapsed_seconds as u64;
             let timer = if elapsed >= 3600 {
-                format!(" \u{23F1} {}h{:02}m ", elapsed / 3600, (elapsed % 3600) / 60)
+                format!(
+                    " \u{23F1} {}h{:02}m ",
+                    elapsed / 3600,
+                    (elapsed % 3600) / 60
+                )
             } else {
                 format!(" \u{23F1} {}m ", elapsed / 60)
             };
-            (title_str, timer, Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD))
+            (
+                title_str,
+                timer,
+                Style::default()
+                    .fg(ACCENT_GREEN)
+                    .add_modifier(Modifier::BOLD),
+            )
         }
     } else {
         (String::new(), String::new(), Style::default())
@@ -197,7 +213,9 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
     // 3b: solid green for running task title (no 3-phase colour animation).
     let running_style = if app.running_task.is_some() {
-        Style::default().fg(ACCENT_GREEN).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(ACCENT_GREEN)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
@@ -214,34 +232,37 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let dim = Style::default().fg(FG_OVERLAY);
     let legend_spans: Vec<Span> = vec![
         Span::raw("  "),
-        Span::styled("\u{25CB}", Style::default().fg(FG_SUBTEXT)),    // ○ pending
+        Span::styled("\u{25CB}", Style::default().fg(FG_SUBTEXT)), // ○ pending
         Span::raw(" "),
-        Span::styled("\u{25B6}", Style::default().fg(ACCENT_GREEN)),  // ▶ running
+        Span::styled("\u{25B6}", Style::default().fg(ACCENT_GREEN)), // ▶ running
         Span::raw(" "),
         Span::styled("\u{23F8}", Style::default().fg(ACCENT_YELLOW)), // ⏸ paused
         Span::raw(" "),
-        Span::styled("\u{2713}", Style::default().fg(FG_OVERLAY)),    // ✓ done
+        Span::styled("\u{2713}", Style::default().fg(FG_OVERLAY)), // ✓ done
         Span::raw(" "),
-        Span::styled("\u{21BB}", Style::default().fg(ACCENT_GREEN)),  // ↻ recurring
+        Span::styled("\u{21BB}", Style::default().fg(ACCENT_GREEN)), // ↻ recurring
         Span::raw("  "),
-        Span::styled("+", Style::default().fg(ACCENT_MAUVE)),          // +project
+        Span::styled("+", Style::default().fg(ACCENT_MAUVE)), // +project
         Span::raw(" "),
-        Span::styled("@", Style::default().fg(ACCENT_TEAL)),           // @context
+        Span::styled("@", Style::default().fg(ACCENT_TEAL)), // @context
         Span::raw(" "),
-        Span::styled("#", Style::default().fg(ACCENT_PEACH)),          // #tag
+        Span::styled("#", Style::default().fg(ACCENT_PEACH)), // #tag
         Span::raw(" "),
-        Span::styled("~", Style::default().fg(FG_SUBTEXT)),            // ~estimate
+        Span::styled("~", Style::default().fg(FG_SUBTEXT)), // ~estimate
         Span::raw(" "),
-        Span::styled("^", Style::default().fg(ACCENT_RED)),            // ^deadline
+        Span::styled("^", Style::default().fg(ACCENT_RED)), // ^deadline
         Span::raw(" "),
-        Span::styled("=", Style::default().fg(ACCENT_BLUE)),           // =scheduled
+        Span::styled("=", Style::default().fg(ACCENT_BLUE)), // =scheduled
         Span::raw(" "),
-        Span::styled("!", Style::default().fg(ACCENT_RED)),            // !priority
+        Span::styled("!", Style::default().fg(ACCENT_RED)), // !priority
         Span::raw("  "),
         Span::styled(date_str, dim),
         Span::raw(" "),
     ];
-    let legend_width: u16 = legend_spans.iter().map(|s| s.content.chars().count() as u16).sum();
+    let legend_width: u16 = legend_spans
+        .iter()
+        .map(|s| s.content.chars().count() as u16)
+        .sum();
 
     let cols = Layout::default()
         .direction(Direction::Horizontal)
@@ -251,7 +272,9 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let mut left_spans = vec![
         Span::styled(
             " DODO ",
-            Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_BLUE)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(running_info, running_style),
         Span::styled(timer_info, timer_style),
@@ -261,11 +284,18 @@ pub(super) fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     match &app.sync_status {
         SyncStatus::Disabled => {}
         SyncStatus::Idle | SyncStatus::Synced(_) => {
-            left_spans.push(Span::styled(" \u{25CF} ", Style::default().fg(ACCENT_GREEN)));
+            left_spans.push(Span::styled(
+                " \u{25CF} ",
+                Style::default().fg(ACCENT_GREEN),
+            ));
             left_spans.push(Span::styled("synced", Style::default().fg(ACCENT_GREEN)));
         }
         SyncStatus::Syncing => {
-            let icon = if app.tick_count.is_multiple_of(2) { "\u{21BB}" } else { "\u{21BA}" };
+            let icon = if app.tick_count.is_multiple_of(2) {
+                "\u{21BB}"
+            } else {
+                "\u{21BA}"
+            };
             left_spans.push(Span::styled(
                 format!(" {} ", icon),
                 Style::default().fg(ACCENT_YELLOW),
@@ -785,7 +815,11 @@ pub(super) fn draw_tasks_daily(f: &mut Frame, app: &mut App, area: Rect) {
         let mut rows = 0usize;
         let mut count = 0usize;
         for entry in entries.iter().skip(start) {
-            let item_rows = if matches!(entry, DailyEntry::Task(_)) { 2 } else { 1 };
+            let item_rows = if matches!(entry, DailyEntry::Task(_)) {
+                2
+            } else {
+                1
+            };
             if rows + item_rows > height {
                 break;
             }
@@ -815,8 +849,7 @@ pub(super) fn draw_tasks_daily(f: &mut Frame, app: &mut App, area: Rect) {
 
     // Scrollbar
     if app.daily_entries.len() > height {
-        let mut scrollbar_state =
-            ScrollbarState::new(app.daily_entries.len()).position(cursor);
+        let mut scrollbar_state = ScrollbarState::new(app.daily_entries.len()).position(cursor);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .style(Style::default().fg(FG_OVERLAY));
         f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
@@ -842,7 +875,9 @@ pub(super) fn draw_tasks_weekly(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         Paragraph::new(Span::styled(
             week_label,
-            Style::default().fg(ACCENT_BLUE).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(ACCENT_BLUE)
+                .add_modifier(Modifier::BOLD),
         )),
         outer[0],
     );
@@ -1512,7 +1547,10 @@ pub(super) fn draw_report_tab(f: &mut Frame, app: &App, area: Rect) {
     };
     let period_line = Line::from(vec![
         Span::styled("  \u{25CF} ", Style::default().fg(ACCENT_BLUE)),
-        Span::styled(period_label, Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            period_label,
+            Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
+        ),
         Span::styled(nav_hint, Style::default().fg(FG_OVERLAY)),
     ]);
     f.render_widget(Paragraph::new(period_line), header_rows[1]);
@@ -2283,7 +2321,10 @@ pub(super) fn draw_pane(
     let (elapsed, estimate, done, total, on_time, overdue) = pane.stats();
     let stats_spans = build_pane_stats(elapsed, estimate, done, total, on_time, overdue);
     let right_text = format!("{} ", sort_label_str);
-    let left_width = 1 + stats_spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
+    let left_width = 1 + stats_spans
+        .iter()
+        .map(|s| s.content.chars().count())
+        .sum::<usize>();
     let right_width = right_text.chars().count();
     let pad = (chunks[0].width as usize).saturating_sub(left_width + right_width);
     let mut stats_spans_full = vec![Span::raw(" ")];
@@ -2354,7 +2395,14 @@ pub(super) fn draw_pane(
         .enumerate()
         .map(|(idx, task)| {
             let is_selected = is_active && selected_idx == Some(idx);
-            build_task_list_item(task, is_selected, is_active, frame_count, list_area.width, today)
+            build_task_list_item(
+                task,
+                is_selected,
+                is_active,
+                frame_count,
+                list_area.width,
+                today,
+            )
         })
         .collect();
 
@@ -2625,10 +2673,7 @@ pub(super) fn build_compact_meta(task: &Task, today: chrono::NaiveDate) -> Vec<S
                         Style::default().fg(ACCENT_GREEN),
                     )
                 } else {
-                    (
-                        "\u{2713}".to_string(),
-                        Style::default().fg(ACCENT_TEAL),
-                    )
+                    ("\u{2713}".to_string(), Style::default().fg(ACCENT_TEAL))
                 };
                 spans.push(Span::styled(format!("({})", delta_str), delta_style));
             }
@@ -3395,12 +3440,7 @@ pub(super) fn draw_elapsed_edit_modal(f: &mut Frame, app: &App) {
         format!("\u{276F} {}\u{2588}", app.elapsed_edit_input),
         Style::default().fg(FG_TEXT),
     ));
-    let lines = vec![
-        Line::from(""),
-        hint_line,
-        Line::from(""),
-        input_line,
-    ];
+    let lines = vec![Line::from(""), hint_line, Line::from(""), input_line];
     f.render_widget(Paragraph::new(lines), inner);
 }
 

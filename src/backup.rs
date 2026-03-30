@@ -22,15 +22,14 @@ fn block_on_safe<F, T>(rt: &tokio::runtime::Runtime, fut: F) -> Result<T>
 where
     F: std::future::Future<Output = Result<T>>,
 {
-    std::panic::catch_unwind(AssertUnwindSafe(|| rt.block_on(fut)))
-        .unwrap_or_else(|e| {
-            let msg = e
-                .downcast_ref::<String>()
-                .map(|s| s.as_str())
-                .or_else(|| e.downcast_ref::<&str>().copied())
-                .unwrap_or("unknown error");
-            Err(anyhow::anyhow!("Backup operation failed: {}", msg))
-        })
+    std::panic::catch_unwind(AssertUnwindSafe(|| rt.block_on(fut))).unwrap_or_else(|e| {
+        let msg = e
+            .downcast_ref::<String>()
+            .map(|s| s.as_str())
+            .or_else(|| e.downcast_ref::<&str>().copied())
+            .unwrap_or("unknown error");
+        Err(anyhow::anyhow!("Backup operation failed: {}", msg))
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -49,8 +48,7 @@ pub fn create_backup(config: &BackupConfig) -> Result<String> {
     }
 
     // Read and compress
-    let data = std::fs::read(&db_path)
-        .context("Failed to read database file")?;
+    let data = std::fs::read(&db_path).context("Failed to read database file")?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&data)?;
     let compressed = encoder.finish()?;
@@ -115,13 +113,8 @@ pub fn list_backups(config: &BackupConfig) -> Result<Vec<BackupEntry>> {
                 continue;
             }
             let size = obj.size().unwrap_or(0);
-            let timestamp = parse_backup_timestamp(key)
-                .unwrap_or_else(Utc::now);
-            let display_name = key
-                .rsplit('/')
-                .next()
-                .unwrap_or(key)
-                .to_string();
+            let timestamp = parse_backup_timestamp(key).unwrap_or_else(Utc::now);
+            let display_name = key.rsplit('/').next().unwrap_or(key).to_string();
 
             entries.push(BackupEntry {
                 key: key.to_string(),
@@ -156,7 +149,10 @@ pub fn restore_backup(config: &BackupConfig, key: &str) -> Result<()> {
             .await
             .context("Failed to download backup")?;
 
-        let body = resp.body.collect().await
+        let body = resp
+            .body
+            .collect()
+            .await
             .context("Failed to read backup body")?;
         Ok::<Vec<u8>, anyhow::Error>(body.into_bytes().to_vec())
     })?;
@@ -164,19 +160,18 @@ pub fn restore_backup(config: &BackupConfig, key: &str) -> Result<()> {
     // Decompress
     let mut decoder = GzDecoder::new(&compressed[..]);
     let mut restored_data = Vec::new();
-    decoder.read_to_end(&mut restored_data)
+    decoder
+        .read_to_end(&mut restored_data)
         .context("Failed to decompress backup")?;
 
     // Safety net: save current DB as .pre-restore
     if db_path.exists() {
         let pre_restore = db_path.with_extension("db.pre-restore");
-        std::fs::copy(&db_path, &pre_restore)
-            .context("Failed to create pre-restore backup")?;
+        std::fs::copy(&db_path, &pre_restore).context("Failed to create pre-restore backup")?;
     }
 
     // Write restored data
-    std::fs::write(&db_path, restored_data)
-        .context("Failed to write restored database")?;
+    std::fs::write(&db_path, restored_data).context("Failed to write restored database")?;
 
     Ok(())
 }
@@ -278,18 +273,21 @@ fn parse_backup_timestamp(key: &str) -> Option<DateTime<Utc>> {
 }
 
 async fn build_s3_client(config: &BackupConfig) -> Result<aws_sdk_s3::Client> {
-    let endpoint = config.endpoint.as_deref().context("No endpoint configured")?;
-    let access_key = config.access_key.as_deref().context("No access key configured")?;
-    let secret_key = config.secret_key.as_deref().context("No secret key configured")?;
+    let endpoint = config
+        .endpoint
+        .as_deref()
+        .context("No endpoint configured")?;
+    let access_key = config
+        .access_key
+        .as_deref()
+        .context("No access key configured")?;
+    let secret_key = config
+        .secret_key
+        .as_deref()
+        .context("No secret key configured")?;
     let region = config.region.as_deref().unwrap_or("us-east-1");
 
-    let creds = aws_sdk_s3::config::Credentials::new(
-        access_key,
-        secret_key,
-        None,
-        None,
-        "dodo",
-    );
+    let creds = aws_sdk_s3::config::Credentials::new(access_key, secret_key, None, None, "dodo");
 
     let s3_config = aws_sdk_s3::Config::builder()
         .behavior_version_latest()
@@ -416,7 +414,10 @@ mod tests {
         let ts = parse_backup_timestamp("dodo/dodo-2026-02-12T030000Z.db.gz");
         assert!(ts.is_some());
         let dt = ts.unwrap();
-        assert_eq!(dt.format("%Y-%m-%d %H:%M:%S").to_string(), "2026-02-12 03:00:00");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2026-02-12 03:00:00"
+        );
     }
 
     #[test]
@@ -424,7 +425,10 @@ mod tests {
         let ts = parse_backup_timestamp("dodo/dodo-2025-01-01T120000Z.db.gz");
         assert!(ts.is_some());
         let dt = ts.unwrap();
-        assert_eq!(dt.format("%Y-%m-%d %H:%M:%S").to_string(), "2025-01-01 12:00:00");
+        assert_eq!(
+            dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            "2025-01-01 12:00:00"
+        );
     }
 
     #[test]

@@ -11,9 +11,45 @@ fn test_db() -> Database {
 #[test]
 fn add_returns_incrementing_numeric_ids() {
     let db = test_db();
-    let id1 = db.add_task("Buy groceries", Area::Today, None, None, None, None, None, None, None).unwrap();
-    let id2 = db.add_task("Reply to email", Area::Today, None, None, None, None, None, None, None).unwrap();
-    let id3 = db.add_task("Fix faucet", Area::Today, None, None, None, None, None, None, None).unwrap();
+    let id1 = db
+        .add_task(
+            "Buy groceries",
+            Area::Today,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let id2 = db
+        .add_task(
+            "Reply to email",
+            Area::Today,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let id3 = db
+        .add_task(
+            "Fix faucet",
+            Area::Today,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
     assert_eq!(id3, 3);
@@ -22,9 +58,42 @@ fn add_returns_incrementing_numeric_ids() {
 #[test]
 fn list_shows_today_tasks() {
     let db = test_db();
-    db.add_task("Task A", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Task B", Area::ThisWeek, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Task C", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Task A",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Task B",
+        Area::ThisWeek,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Task C",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let tasks = db.list_tasks(None).unwrap();
     // Default list shows Today area only (+ running)
@@ -35,7 +104,18 @@ fn list_shows_today_tasks() {
 #[test]
 fn start_and_done_completes_task() {
     let db = test_db();
-    db.add_task("Buy groceries", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Buy groceries",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     db.start_timer("1").unwrap();
 
     let running = db.get_running_task().unwrap();
@@ -55,7 +135,18 @@ fn start_and_done_completes_task() {
 #[test]
 fn pomodoro_start_pause_resume() {
     let db = test_db();
-    db.add_task("Draft blog post", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Draft blog post",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // Pomodoro 1
     db.start_timer("blog").unwrap();
@@ -77,8 +168,30 @@ fn pomodoro_start_pause_resume() {
 #[test]
 fn starting_new_task_pauses_current() {
     let db = test_db();
-    db.add_task("Task A", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Task B", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Task A",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Task B",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.start_timer("1").unwrap();
     let running = db.get_running_task().unwrap().unwrap();
@@ -106,11 +219,44 @@ fn gtd_four_horizons() {
     let far_future = today + chrono::Duration::days(30);
 
     // Someday/maybe — scheduled far out → LONG
-    db.add_task("Learn piano", Area::LongTerm, None, None, None, None, Some(far_future), None, None).unwrap();
+    db.add_task(
+        "Learn piano",
+        Area::LongTerm,
+        None,
+        None,
+        None,
+        None,
+        Some(far_future),
+        None,
+        None,
+    )
+    .unwrap();
     // Active project — scheduled within a week → WEEK
-    db.add_task("Prepare talk", Area::ThisWeek, None, None, None, None, Some(next_week), None, None).unwrap();
+    db.add_task(
+        "Prepare talk",
+        Area::ThisWeek,
+        None,
+        None,
+        None,
+        None,
+        Some(next_week),
+        None,
+        None,
+    )
+    .unwrap();
     // Next action — scheduled today → TODAY
-    db.add_task("Call dentist", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    db.add_task(
+        "Call dentist",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let long = db.list_tasks(Some(Area::LongTerm)).unwrap();
     assert_eq!(long.len(), 1);
@@ -131,8 +277,30 @@ fn gtd_four_horizons() {
 #[test]
 fn gtd_contexts_stored_and_displayed() {
     let db = test_db();
-    db.add_task("Call dentist", Area::Today, None, Some("phone".into()), None, None, None, None, None).unwrap();
-    db.add_task("Order cables", Area::Today, None, Some("computer".into()), None, None, None, None, None).unwrap();
+    db.add_task(
+        "Call dentist",
+        Area::Today,
+        None,
+        Some("phone".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Order cables",
+        Area::Today,
+        None,
+        Some("computer".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     assert_eq!(tasks.len(), 2);
@@ -148,7 +316,18 @@ fn gtd_contexts_stored_and_displayed() {
 #[test]
 fn gtd_projects_stored_and_displayed() {
     let db = test_db();
-    db.add_task("Fix bug", Area::Today, Some("acme".into()), None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Fix bug",
+        Area::Today,
+        Some("acme".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = &tasks[0];
@@ -163,11 +342,44 @@ fn eisenhower_quadrants() {
     let db = test_db();
 
     // Urgent+Important → today
-    db.add_task("Fix production bug", Area::Today, Some("acme".into()), None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Fix production bug",
+        Area::Today,
+        Some("acme".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     // Important, not urgent → week
-    db.add_task("Write test suite", Area::ThisWeek, Some("acme".into()), None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Write test suite",
+        Area::ThisWeek,
+        Some("acme".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     // Neither → long
-    db.add_task("Refactor auth module", Area::LongTerm, Some("acme".into()), None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Refactor auth module",
+        Area::LongTerm,
+        Some("acme".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     assert_eq!(db.list_tasks(Some(Area::Today)).unwrap().len(), 1);
     assert_eq!(db.list_tasks(Some(Area::ThisWeek)).unwrap().len(), 1);
@@ -179,8 +391,30 @@ fn eisenhower_quadrants() {
 #[test]
 fn freelance_multiple_projects() {
     let db = test_db();
-    db.add_task("Design landing page", Area::Today, Some("clientA".into()), None, None, None, None, None, None).unwrap();
-    db.add_task("API integration", Area::Today, Some("clientB".into()), None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Design landing page",
+        Area::Today,
+        Some("clientA".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "API integration",
+        Area::Today,
+        Some("clientB".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // Work on clientA
     db.start_timer("landing").unwrap();
@@ -204,9 +438,42 @@ fn freelance_multiple_projects() {
 #[test]
 fn start_by_numeric_id() {
     let db = test_db();
-    db.add_task("Task Alpha", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Task Beta", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Task Gamma", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Task Alpha",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Task Beta",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Task Gamma",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.start_timer("2").unwrap();
     let running = db.get_running_task().unwrap().unwrap();
@@ -216,8 +483,30 @@ fn start_by_numeric_id() {
 #[test]
 fn delete_by_numeric_id() {
     let db = test_db();
-    db.add_task("Task Alpha", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Task Beta", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Task Alpha",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Task Beta",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.delete_task("1").unwrap();
 
@@ -229,7 +518,18 @@ fn delete_by_numeric_id() {
 #[test]
 fn numeric_id_not_found_falls_back_to_fuzzy() {
     let db = test_db();
-    db.add_task("Task 42 is special", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Task 42 is special",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // "42" as numeric ID doesn't exist (task has num_id=1), so it falls through
     // to fuzzy search where "42" matches substring in "Task 42 is special"
@@ -243,8 +543,30 @@ fn numeric_id_not_found_falls_back_to_fuzzy() {
 #[test]
 fn fuzzy_start_by_substring() {
     let db = test_db();
-    db.add_task("Write quarterly report", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Fix production bug", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Write quarterly report",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Fix production bug",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.start_timer("report").unwrap();
     let running = db.get_running_task().unwrap().unwrap();
@@ -254,8 +576,30 @@ fn fuzzy_start_by_substring() {
 #[test]
 fn fuzzy_prefers_better_match() {
     let db = test_db();
-    db.add_task("Overwrite config", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Write unit tests", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Overwrite config",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Write unit tests",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // "Write" is a prefix of "Write unit tests" (75) but substring of "Overwrite config" (50)
     db.start_timer("Write").unwrap();
@@ -266,7 +610,18 @@ fn fuzzy_prefers_better_match() {
 #[test]
 fn fuzzy_no_match_errors() {
     let db = test_db();
-    db.add_task("Buy groceries", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Buy groceries",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let _result = db.start_timer("zzz_nonexistent");
     // All tasks score 0 for "zzz_nonexistent" but find_best_match still
@@ -286,11 +641,44 @@ fn academic_multi_area_with_projects() {
     let db = test_db();
 
     // Long-term reading
-    db.add_task("Read DDIA", Area::LongTerm, Some("thesis".into()), None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Read DDIA",
+        Area::LongTerm,
+        Some("thesis".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     // This week's writing
-    db.add_task("Write literature review", Area::ThisWeek, Some("thesis".into()), Some("writing".into()), None, None, None, None, None).unwrap();
+    db.add_task(
+        "Write literature review",
+        Area::ThisWeek,
+        Some("thesis".into()),
+        Some("writing".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     // Today's action
-    db.add_task("Email advisor", Area::Today, Some("thesis".into()), Some("email".into()), None, None, None, None, None).unwrap();
+    db.add_task(
+        "Email advisor",
+        Area::Today,
+        Some("thesis".into()),
+        Some("email".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // All three areas populated
     assert_eq!(db.list_tasks(Some(Area::LongTerm)).unwrap().len(), 1);
@@ -314,8 +702,30 @@ fn academic_multi_area_with_projects() {
 #[test]
 fn done_tasks_leave_active_lists() {
     let db = test_db();
-    db.add_task("Task A", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Task B", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Task A",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Task B",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.start_timer("1").unwrap();
     db.complete_task().unwrap();
@@ -345,7 +755,18 @@ fn session_elapsed_seconds_works() {
 #[test]
 fn pause_records_duration() {
     let db = test_db();
-    db.add_task("Timed task", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Timed task",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.start_timer("1").unwrap();
     // Immediately pause — duration should be >= 0
@@ -362,7 +783,18 @@ fn pause_records_duration() {
 #[test]
 fn task_with_estimate_stored_and_displayed() {
     let db = test_db();
-    db.add_task("Design mockup", Area::Today, None, None, Some(120), None, None, None, None).unwrap();
+    db.add_task(
+        "Design mockup",
+        Area::Today,
+        None,
+        None,
+        Some(120),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = &tasks[0];
@@ -374,7 +806,18 @@ fn task_with_estimate_stored_and_displayed() {
 #[test]
 fn elapsed_time_shows_in_list() {
     let db = test_db();
-    db.add_task("Track me", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Track me",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.start_timer("1").unwrap();
     // Elapsed time should be computed from session JOIN
@@ -389,7 +832,18 @@ fn elapsed_time_shows_in_list() {
 #[test]
 fn note_append_and_retrieve() {
     let db = test_db();
-    db.add_task("Buy milk", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Buy milk",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.append_note("1", "Need whole milk").unwrap();
     let (title, notes) = db.get_task_notes("1").unwrap();
@@ -411,7 +865,18 @@ fn note_append_and_retrieve() {
 #[test]
 fn note_clear() {
     let db = test_db();
-    db.add_task("Task with notes", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Task with notes",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     db.append_note("1", "Some note").unwrap();
     db.clear_notes("1").unwrap();
@@ -426,7 +891,18 @@ fn edit_updates_task_fields() {
     use dodo::notation::parse_notation;
 
     let db = test_db();
-    db.add_task("Fix bug", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Fix bug",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // Edit deadline and estimate
     let parsed = parse_notation("1 ~2h");
@@ -442,10 +918,23 @@ fn edit_updates_area() {
     use dodo::notation::parse_notation;
 
     let db = test_db();
-    db.add_task("Move me", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Move me",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let parsed = parse_notation("1");
-    let _ = db.update_task_fields(&parsed.title, &parsed, Some(Area::ThisWeek)).unwrap();
+    let _ = db
+        .update_task_fields(&parsed.title, &parsed, Some(Area::ThisWeek))
+        .unwrap();
 
     let task = db.find_task_by_num_id(1).unwrap().unwrap();
     assert_eq!(task.area, dodo::task::Area::ThisWeek);
@@ -456,7 +945,18 @@ fn edit_updates_area() {
 #[test]
 fn multiple_contexts_stored() {
     let db = test_db();
-    db.add_task("Team meeting", Area::Today, None, Some("john,sarah".into()), None, None, None, None, None).unwrap();
+    db.add_task(
+        "Team meeting",
+        Area::Today,
+        None,
+        Some("john,sarah".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = &tasks[0];
@@ -471,7 +971,18 @@ fn multiple_contexts_stored() {
 #[test]
 fn tags_stored_and_displayed() {
     let db = test_db();
-    db.add_task("Fix critical issue", Area::Today, None, None, None, None, None, Some("urgent,bug".into()), None).unwrap();
+    db.add_task(
+        "Fix critical issue",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("urgent,bug".into()),
+        None,
+    )
+    .unwrap();
 
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = &tasks[0];
@@ -490,7 +1001,18 @@ fn deadline_and_scheduled_stored() {
     let db = test_db();
     let dl = NaiveDate::from_ymd_opt(2025, 6, 15).unwrap();
     let sc = NaiveDate::from_ymd_opt(2025, 6, 10).unwrap();
-    db.add_task("Project milestone", Area::Today, None, None, None, Some(dl), Some(sc), None, None).unwrap();
+    db.add_task(
+        "Project milestone",
+        Area::Today,
+        None,
+        None,
+        None,
+        Some(dl),
+        Some(sc),
+        None,
+        None,
+    )
+    .unwrap();
 
     let task = db.find_task_by_num_id(1).unwrap().unwrap();
     assert_eq!(task.deadline, Some(dl));
@@ -502,7 +1024,18 @@ fn deadline_and_scheduled_stored() {
 #[test]
 fn priority_stored_and_displayed() {
     let db = test_db();
-    db.add_task("Critical bug", Area::Today, None, None, None, None, None, None, Some(3)).unwrap();
+    db.add_task(
+        "Critical bug",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(3),
+    )
+    .unwrap();
 
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = &tasks[0];
@@ -517,10 +1050,19 @@ fn priority_stored_and_displayed() {
 fn recurring_add_template_creates_template_and_instance() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    let num_id = db.add_template(
-        "standup", "daily", Some("work".into()), None,
-        Some(15), None, Some(today), None, None,
-    ).unwrap();
+    let num_id = db
+        .add_template(
+            "standup",
+            "daily",
+            Some("work".into()),
+            None,
+            Some(15),
+            None,
+            Some(today),
+            None,
+            None,
+        )
+        .unwrap();
     assert_eq!(num_id, 1);
 
     // Template should be in templates list
@@ -542,8 +1084,30 @@ fn recurring_add_template_creates_template_and_instance() {
 fn recurring_templates_excluded_from_normal_listings() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("standup", "daily", None, None, Some(15), None, Some(today), None, None).unwrap();
-    db.add_task("normal task", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    db.add_template(
+        "standup",
+        "daily",
+        None,
+        None,
+        Some(15),
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "normal task",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
     // Should see instance + normal task, but NOT the template
@@ -555,7 +1119,18 @@ fn recurring_templates_excluded_from_normal_listings() {
 fn recurring_delete_template_removes_template_and_active_instance() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+    db.add_template(
+        "standup",
+        "daily",
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let templates = db.list_templates().unwrap();
     assert_eq!(templates.len(), 1);
@@ -575,7 +1150,18 @@ fn recurring_delete_template_removes_template_and_active_instance() {
 fn recurring_complete_instance_generates_next() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("standup", "daily", None, None, Some(15), None, Some(today), None, None).unwrap();
+    db.add_template(
+        "standup",
+        "daily",
+        None,
+        None,
+        Some(15),
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     // Find the instance
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
@@ -587,8 +1173,14 @@ fn recurring_complete_instance_generates_next() {
 
     // Should now have a new instance (old one is in Done)
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
-    let non_done: Vec<_> = all.iter().filter(|t| t.status != dodo::task::TaskStatus::Done).collect();
-    let done: Vec<_> = all.iter().filter(|t| t.status == dodo::task::TaskStatus::Done).collect();
+    let non_done: Vec<_> = all
+        .iter()
+        .filter(|t| t.status != dodo::task::TaskStatus::Done)
+        .collect();
+    let done: Vec<_> = all
+        .iter()
+        .filter(|t| t.status == dodo::task::TaskStatus::Done)
+        .collect();
     assert_eq!(non_done.len(), 1, "should have 1 active instance");
     assert_eq!(done.len(), 1, "should have 1 done instance");
     assert_eq!(non_done[0].title, "standup");
@@ -598,7 +1190,18 @@ fn recurring_complete_instance_generates_next() {
 fn recurring_one_active_instance_constraint() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+    db.add_template(
+        "standup",
+        "daily",
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     // Generate should create nothing since there's already an active instance
     let created = db.generate_instances().unwrap();
@@ -609,7 +1212,18 @@ fn recurring_one_active_instance_constraint() {
 fn recurring_generate_after_delete_recreates() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+    db.add_template(
+        "standup",
+        "daily",
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     // Delete the instance (skip)
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
@@ -634,7 +1248,18 @@ fn recurring_generate_after_delete_recreates() {
 fn recurring_pause_stops_generation() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+    db.add_template(
+        "standup",
+        "daily",
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let templates = db.list_templates().unwrap();
     let tid = templates[0].id.clone();
@@ -648,8 +1273,15 @@ fn recurring_pause_stops_generation() {
 
     // Should NOT generate a new instance since template is paused
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
-    let non_done: Vec<_> = all.iter().filter(|t| t.status != dodo::task::TaskStatus::Done).collect();
-    assert_eq!(non_done.len(), 0, "paused template should not generate new instance");
+    let non_done: Vec<_> = all
+        .iter()
+        .filter(|t| t.status != dodo::task::TaskStatus::Done)
+        .collect();
+    assert_eq!(
+        non_done.len(),
+        0,
+        "paused template should not generate new instance"
+    );
 
     // Resume and generate
     db.resume_template(&tid).unwrap();
@@ -663,7 +1295,18 @@ fn recurring_pause_stops_generation() {
 fn recurring_history_shows_completed_instances() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+    db.add_template(
+        "standup",
+        "daily",
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let templates = db.list_templates().unwrap();
     let tid = templates[0].id.clone();
@@ -672,7 +1315,10 @@ fn recurring_history_shows_completed_instances() {
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
     db.complete_task_by_id(&all[0].id).unwrap();
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
-    let active: Vec<_> = all.iter().filter(|t| t.status != dodo::task::TaskStatus::Done).collect();
+    let active: Vec<_> = all
+        .iter()
+        .filter(|t| t.status != dodo::task::TaskStatus::Done)
+        .collect();
     db.complete_task_by_id(&active[0].id).unwrap();
 
     let history = db.template_history(&tid).unwrap();
@@ -685,7 +1331,18 @@ fn recurring_history_shows_completed_instances() {
 fn recurring_resolve_template_by_name() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+    db.add_template(
+        "standup",
+        "daily",
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let template = db.resolve_template("standup").unwrap();
     assert!(template.is_template);
@@ -696,7 +1353,19 @@ fn recurring_resolve_template_by_name() {
 fn recurring_resolve_template_by_num_id() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    let num_id = db.add_template("standup", "daily", None, None, None, None, Some(today), None, None).unwrap();
+    let num_id = db
+        .add_template(
+            "standup",
+            "daily",
+            None,
+            None,
+            None,
+            None,
+            Some(today),
+            None,
+            None,
+        )
+        .unwrap();
 
     let template = db.resolve_template(&num_id.to_string()).unwrap();
     assert!(template.is_template);
@@ -709,12 +1378,23 @@ fn recurring_resolve_template_by_num_id() {
 fn update_notes_by_id_sets_notes() {
     let db = test_db();
     let num_id = db
-        .add_task("test task", Area::Today, None, None, None, None, None, None, None)
+        .add_task(
+            "test task",
+            Area::Today,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .unwrap();
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = tasks.iter().find(|t| t.num_id == Some(num_id)).unwrap();
 
-    db.update_notes_by_id(&task.id, "line one\nline two").unwrap();
+    db.update_notes_by_id(&task.id, "line one\nline two")
+        .unwrap();
     let notes = db.get_task_notes_by_id(&task.id).unwrap();
     assert_eq!(notes, Some("line one\nline two".to_string()));
 }
@@ -723,7 +1403,17 @@ fn update_notes_by_id_sets_notes() {
 fn update_notes_by_id_empty_clears_notes() {
     let db = test_db();
     let num_id = db
-        .add_task("test task", Area::Today, None, None, None, None, None, None, None)
+        .add_task(
+            "test task",
+            Area::Today,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .unwrap();
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = tasks.iter().find(|t| t.num_id == Some(num_id)).unwrap();
@@ -740,13 +1430,24 @@ fn update_notes_by_id_empty_clears_notes() {
 fn update_notes_by_id_replaces_existing() {
     let db = test_db();
     let num_id = db
-        .add_task("test task", Area::Today, None, None, None, None, None, None, None)
+        .add_task(
+            "test task",
+            Area::Today,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .unwrap();
     let tasks = db.list_tasks(Some(Area::Today)).unwrap();
     let task = tasks.iter().find(|t| t.num_id == Some(num_id)).unwrap();
 
     db.append_note_by_id(&task.id, "old note").unwrap();
-    db.update_notes_by_id(&task.id, "completely new content").unwrap();
+    db.update_notes_by_id(&task.id, "completely new content")
+        .unwrap();
     let notes = db.get_task_notes_by_id(&task.id).unwrap();
     assert_eq!(notes, Some("completely new content".to_string()));
 }
@@ -774,11 +1475,31 @@ fn export_import_roundtrip_preserves_all_data() {
     )
     .unwrap();
 
-    db1.add_task("Simple task", Area::ThisWeek, None, None, Some(60), None, None, None, None)
-        .unwrap();
+    db1.add_task(
+        "Simple task",
+        Area::ThisWeek,
+        None,
+        None,
+        Some(60),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
-    db1.add_task("Long term task", Area::LongTerm, Some("frontend".into()), None, None, None, None, None, Some(1))
-        .unwrap();
+    db1.add_task(
+        "Long term task",
+        Area::LongTerm,
+        Some("frontend".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(1),
+    )
+    .unwrap();
 
     // Add notes to first task
     db1.append_note("1", "First note line").unwrap();
@@ -820,7 +1541,10 @@ fn export_import_roundtrip_preserves_all_data() {
     assert_eq!(exported_sessions.len(), sessions.len());
 
     // Verify specific task fields survived roundtrip
-    let full_task = exported_tasks.iter().find(|t| t.title == "Task with all fields").unwrap();
+    let full_task = exported_tasks
+        .iter()
+        .find(|t| t.title == "Task with all fields")
+        .unwrap();
     assert_eq!(full_task.project.as_deref(), Some("backend"));
     assert_eq!(full_task.context.as_deref(), Some("work,office"));
     assert_eq!(full_task.estimate_minutes, Some(120));
@@ -832,12 +1556,18 @@ fn export_import_roundtrip_preserves_all_data() {
     assert_eq!(full_task.status, TaskStatus::Paused);
 
     // Verify completed task
-    let simple_task = exported_tasks.iter().find(|t| t.title == "Simple task").unwrap();
+    let simple_task = exported_tasks
+        .iter()
+        .find(|t| t.title == "Simple task")
+        .unwrap();
     assert_eq!(simple_task.status, TaskStatus::Done);
     assert!(simple_task.completed.is_some());
 
     // Verify template survived
-    let template = exported_tasks.iter().find(|t| t.title == "standup" && t.is_template).unwrap();
+    let template = exported_tasks
+        .iter()
+        .find(|t| t.title == "standup" && t.is_template)
+        .unwrap();
     assert_eq!(template.recurrence.as_deref(), Some("daily"));
     assert_eq!(template.project.as_deref(), Some("team"));
     assert_eq!(template.priority, Some(2));
@@ -856,13 +1586,34 @@ fn export_import_roundtrip_preserves_all_data() {
 #[test]
 fn done_specific_task_by_id() {
     let db = test_db();
-    db.add_task("Task A", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Task B", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Task A",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Task B",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // Complete task 2 by numeric ID (not running)
-    db.complete_task_by_id(
-        &db.find_task_by_num_id(2).unwrap().unwrap().id
-    ).unwrap();
+    db.complete_task_by_id(&db.find_task_by_num_id(2).unwrap().unwrap().id)
+        .unwrap();
 
     let task = db.find_task_by_num_id(2).unwrap().unwrap();
     assert_eq!(task.status, TaskStatus::Done);
@@ -875,8 +1626,30 @@ fn done_specific_task_by_id() {
 #[test]
 fn done_specific_task_by_fuzzy() {
     let db = test_db();
-    db.add_task("Fix login bug", Area::Today, None, None, None, None, None, None, None).unwrap();
-    db.add_task("Update docs", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Fix login bug",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    db.add_task(
+        "Update docs",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let task = db.resolve_task("login").unwrap();
     db.complete_task_by_id(&task.id).unwrap();
@@ -889,17 +1662,34 @@ fn done_specific_task_by_fuzzy() {
 #[test]
 fn undone_reopens_task() {
     let db = test_db();
-    db.add_task("Write tests", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Write tests",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     // Complete it
     let task = db.resolve_task("1").unwrap();
     db.complete_task_by_id(&task.id).unwrap();
-    assert_eq!(db.find_task_by_num_id(1).unwrap().unwrap().status, TaskStatus::Done);
+    assert_eq!(
+        db.find_task_by_num_id(1).unwrap().unwrap().status,
+        TaskStatus::Done
+    );
 
     // Undo it
     let done_task = db.resolve_done_task("1").unwrap();
     db.uncomplete_task_by_id(&done_task.id).unwrap();
-    assert_eq!(db.find_task_by_num_id(1).unwrap().unwrap().status, TaskStatus::Pending);
+    assert_eq!(
+        db.find_task_by_num_id(1).unwrap().unwrap().status,
+        TaskStatus::Pending
+    );
 }
 
 // ── Phase 2: Move task between areas ────────────────────────────────
@@ -908,7 +1698,18 @@ fn undone_reopens_task() {
 fn move_task_to_week() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_task("Weekly review", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    db.add_task(
+        "Weekly review",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let task = db.resolve_task("1").unwrap();
     let date = dodo::task::Area::ThisWeek.to_scheduled_date();
@@ -922,7 +1723,18 @@ fn move_task_to_week() {
 fn move_task_to_today() {
     let db = test_db();
     let future = chrono::Local::now().date_naive() + chrono::Duration::days(10);
-    db.add_task("Long term goal", Area::Today, None, None, None, None, Some(future), None, None).unwrap();
+    db.add_task(
+        "Long term goal",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(future),
+        None,
+        None,
+    )
+    .unwrap();
 
     // Should be in LongTerm initially
     let task = db.find_task_by_num_id(1).unwrap().unwrap();
@@ -953,9 +1765,21 @@ fn report_empty_range() {
 #[test]
 fn note_delete_line() {
     let db = test_db();
-    db.add_task("Note task", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Note task",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     let task = db.resolve_task("1").unwrap();
-    db.update_notes_by_id(&task.id, "line one\nline two\nline three").unwrap();
+    db.update_notes_by_id(&task.id, "line one\nline two\nline three")
+        .unwrap();
 
     // Delete line 2
     let notes = db.get_task_notes_by_id(&task.id).unwrap().unwrap();
@@ -970,9 +1794,21 @@ fn note_delete_line() {
 #[test]
 fn note_edit_line() {
     let db = test_db();
-    db.add_task("Note task", Area::Today, None, None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Note task",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     let task = db.resolve_task("1").unwrap();
-    db.update_notes_by_id(&task.id, "line one\nline two\nline three").unwrap();
+    db.update_notes_by_id(&task.id, "line one\nline two\nline three")
+        .unwrap();
 
     // Edit line 2
     let notes = db.get_task_notes_by_id(&task.id).unwrap().unwrap();
@@ -987,7 +1823,18 @@ fn note_edit_line() {
 #[test]
 fn report_with_data() {
     let db = test_db();
-    db.add_task("Report task", Area::Today, Some("backend".into()), None, None, None, None, None, None).unwrap();
+    db.add_task(
+        "Report task",
+        Area::Today,
+        Some("backend".into()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     db.start_timer("1").unwrap();
     db.complete_task().unwrap();
 
@@ -1008,7 +1855,18 @@ fn merge_remote_newer_wins() {
 
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_task("Original title", Area::Today, Some("old_proj".into()), None, Some(60), None, Some(today), None, None).unwrap();
+    db.add_task(
+        "Original title",
+        Area::Today,
+        Some("old_proj".into()),
+        None,
+        Some(60),
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let task = db.find_task_by_num_id(1).unwrap().unwrap();
 
@@ -1031,7 +1889,18 @@ fn merge_local_newer_wins() {
 
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_task("Local title", Area::Today, Some("local_proj".into()), None, None, None, Some(today), None, None).unwrap();
+    db.add_task(
+        "Local title",
+        Area::Today,
+        Some("local_proj".into()),
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let task = db.find_task_by_num_id(1).unwrap().unwrap();
 
@@ -1055,7 +1924,18 @@ fn merge_new_remote_task_no_conflict() {
 
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_task("Local task", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    db.add_task(
+        "Local task",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     // Create a brand new remote task with num_id=2 (no conflict)
     let remote_task = Task {
@@ -1100,7 +1980,18 @@ fn merge_num_id_conflict_earlier_wins() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
     // Local task created "now" with num_id=1
-    db.add_task("Local task", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    db.add_task(
+        "Local task",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
     let _local = db.find_task_by_num_id(1).unwrap().unwrap();
 
     // Remote task also wants num_id=1, but was created EARLIER
@@ -1146,7 +2037,18 @@ fn merge_sessions_ignore_duplicates() {
 
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_task("Task", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    db.add_task(
+        "Task",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
     let task = db.find_task_by_num_id(1).unwrap().unwrap();
 
     // Create a session
@@ -1166,7 +2068,10 @@ fn merge_sessions_ignore_duplicates() {
 
     // Verify only one session exists
     let (_, sessions) = db.export_all_data().unwrap();
-    let matching: Vec<_> = sessions.iter().filter(|s| s.id == "test-session-id").collect();
+    let matching: Vec<_> = sessions
+        .iter()
+        .filter(|s| s.id == "test-session-id")
+        .collect();
     assert_eq!(matching.len(), 1);
     assert_eq!(matching[0].duration, 300);
 }
@@ -1180,7 +2085,18 @@ fn deleted_task_not_resurrected_by_merge() {
 
     let db = test_db();
     let today = chrono::Local::now().date_naive();
-    db.add_task("Will be deleted", Area::Today, None, None, None, None, Some(today), None, None).unwrap();
+    db.add_task(
+        "Will be deleted",
+        Area::Today,
+        None,
+        None,
+        None,
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let task = db.find_task_by_num_id(1).unwrap().unwrap();
     let task_id = task.id.clone();
@@ -1232,8 +2148,18 @@ fn deleted_template_instances_not_resurrected_by_merge() {
     let today = chrono::Local::now().date_naive();
 
     // Create a recurring template
-    db.add_template("Daily standup", "daily", Some("work".into()), None,
-        Some(60), None, Some(today), None, None).unwrap();
+    db.add_template(
+        "Daily standup",
+        "daily",
+        Some("work".into()),
+        None,
+        Some(60),
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
 
     let templates = db.list_templates().unwrap();
     assert_eq!(templates.len(), 1);
@@ -1241,7 +2167,10 @@ fn deleted_template_instances_not_resurrected_by_merge() {
 
     // Get the instance that was auto-created
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
-    let instance = all.iter().find(|t| t.template_id.as_deref() == Some(&template_id)).unwrap();
+    let instance = all
+        .iter()
+        .find(|t| t.template_id.as_deref() == Some(&template_id))
+        .unwrap();
     let instance_id = instance.id.clone();
 
     // Delete the template (records tombstones for template + instances)
@@ -1298,7 +2227,8 @@ fn deleted_template_instances_not_resurrected_by_merge() {
     };
 
     // Merge should skip both tombstoned tasks
-    db.merge_remote_data(&[remote_template, remote_instance], &[]).unwrap();
+    db.merge_remote_data(&[remote_template, remote_instance], &[])
+        .unwrap();
 
     // Neither should come back
     assert!(db.list_templates().unwrap().is_empty());
