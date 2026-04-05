@@ -5,7 +5,7 @@ pub use crate::task::Area;
 #[derive(Parser)]
 #[command(name = "dodo")]
 #[command(about = "Keyboard-first todo + time tracker CLI")]
-#[command(version = "0.1.0")]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(disable_help_subcommand = true)]
 pub struct Cli {
     #[command(subcommand)]

@@ -1,0 +1,245 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Test before release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm64
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-13
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-14
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../dodo-${{ matrix.target }}.tar.gz dodo
+          cd ../../..
+          shasum -a 256 dodo-${{ matrix.target }}.tar.gz > dodo-${{ matrix.target }}.tar.gz.sha256
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/dodo.exe -DestinationPath dodo-${{ matrix.target }}.zip
+          $hash = (Get-FileHash dodo-${{ matrix.target }}.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  dodo-${{ matrix.target }}.zip" | Out-File -Encoding ASCII dodo-${{ matrix.target }}.zip.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dodo-${{ matrix.target }}
+          path: |
+            dodo-${{ matrix.target }}.*
+          if-no-files-found: error
+
+  universal-macos:
+    name: Universal macOS binary
+    needs: build
+    runs-on: macos-14
+    steps:
+      - name: Download macOS x86_64
+        uses: actions/download-artifact@v4
+        with:
+          name: dodo-x86_64-apple-darwin
+          path: x86_64
+
+      - name: Download macOS aarch64
+        uses: actions/download-artifact@v4
+        with:
+          name: dodo-aarch64-apple-darwin
+          path: aarch64
+
+      - name: Create universal binary
+        run: |
+          mkdir universal
+          cd x86_64 && tar xzf dodo-x86_64-apple-darwin.tar.gz && cd ..
+          cd aarch64 && tar xzf dodo-aarch64-apple-darwin.tar.gz && cd ..
+          lipo -create -output universal/dodo x86_64/dodo aarch64/dodo
+          file universal/dodo
+          cd universal
+          tar czf ../dodo-universal-apple-darwin.tar.gz dodo
+          cd ..
+          shasum -a 256 dodo-universal-apple-darwin.tar.gz > dodo-universal-apple-darwin.tar.gz.sha256
+
+      - name: Upload universal artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dodo-universal-apple-darwin
+          path: |
+            dodo-universal-apple-darwin.*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [build, universal-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release files
+        run: |
+          mkdir release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp {} release/ \;
+          ls -la release/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+
+  update-tap:
+    name: Update Homebrew tap
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download checksums
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect SHA256 values
+        id: shas
+        run: |
+          get_sha() {
+            local file="artifacts/dodo-$1/dodo-$1.tar.gz.sha256"
+            awk '{print $1}' "$file"
+          }
+          echo "x86_64_linux=$(get_sha x86_64-unknown-linux-gnu)" >> "$GITHUB_OUTPUT"
+          echo "aarch64_linux=$(get_sha aarch64-unknown-linux-gnu)" >> "$GITHUB_OUTPUT"
+          echo "universal_macos=$(awk '{print $1}' artifacts/dodo-universal-apple-darwin/dodo-universal-apple-darwin.tar.gz.sha256)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: oksure/homebrew-dodo
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: homebrew-dodo
+
+      - name: Update formula
+        env:
+          VERSION: ${{ github.ref_name }}
+          SHA_X86_64_LINUX: ${{ steps.shas.outputs.x86_64_linux }}
+          SHA_AARCH64_LINUX: ${{ steps.shas.outputs.aarch64_linux }}
+          SHA_UNIVERSAL_MACOS: ${{ steps.shas.outputs.universal_macos }}
+        run: |
+          TAG="${VERSION}"
+          VER="${VERSION#v}"
+          BASE="https://github.com/oksure/dodo/releases/download/${TAG}"
+
+          cat > homebrew-dodo/Formula/dodo.rb <<FORMULA
+          class Dodo < Formula
+            desc "Keyboard-first todo + time tracker CLI"
+            homepage "https://github.com/oksure/dodo"
+            version "${VER}"
+            license "MIT"
+
+            on_macos do
+              url "${BASE}/dodo-universal-apple-darwin.tar.gz"
+              sha256 "${SHA_UNIVERSAL_MACOS}"
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "${BASE}/dodo-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_AARCH64_LINUX}"
+              else
+                url "${BASE}/dodo-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_X86_64_LINUX}"
+              end
+            end
+
+            def install
+              bin.install "dodo"
+            end
+
+            livecheck do
+              url :stable
+              strategy :github_latest
+            end
+
+            def caveats
+              <<~EOS
+                Data is stored in ~/.local/share/dodo/dodo.db
+                Config file: ~/.config/dodo/config.toml
+                Run `dodo` to launch the TUI, or `dodo help` for CLI usage.
+              EOS
+            end
+
+            test do
+              assert_match "dodo #{version}", shell_output("#{bin}/dodo --version")
+            end
+          end
+          FORMULA
+
+      - name: Validate formula syntax
+        run: ruby -c homebrew-dodo/Formula/dodo.rb
+
+      - name: Push formula update
+        working-directory: homebrew-dodo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/dodo.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "Update dodo to ${GITHUB_REF_NAME}"
+          git push
