@@ -1115,9 +1115,8 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
 
         for col in 0..7 {
             let cell_idx = row * 7 + col;
-            let day_num = cell_idx as u32 - start_weekday + 1;
 
-            if cell_idx < start_weekday as usize || day_num > days_in {
+            if (cell_idx as u32) < start_weekday || cell_idx as u32 >= start_weekday + days_in {
                 // Empty cell (outside month)
                 let block = Block::bordered()
                     .border_type(BorderType::Rounded)
@@ -1126,6 +1125,7 @@ pub(super) fn draw_tasks_calendar(f: &mut Frame, app: &App, area: Rect) {
                 continue;
             }
 
+            let day_num = cell_idx as u32 - start_weekday + 1;
             let cell_date =
                 chrono::NaiveDate::from_ymd_opt(app.calendar_year, app.calendar_month, day_num)
                     .unwrap_or(today);
