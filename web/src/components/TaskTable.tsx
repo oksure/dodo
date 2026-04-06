@@ -100,13 +100,6 @@ function areaGroup(task: Task): string {
   return "Long Term"
 }
 
-const GROUP_ORDER: Record<string, number> = {
-  "Today": 0,
-  "This Week": 1,
-  "Long Term": 2,
-  "Done": 3,
-}
-
 function parseTask(row: Record<string, string | null>): Task {
   return {
     id: row.id || "",
