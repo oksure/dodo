@@ -57,6 +57,9 @@ aws-sdk-s3 = "1.47"
 # Compression for backups
 flate2 = "1.0"
 
+# Archive extraction for self-update
+tar = "0.4"
+
 # HTTP client for Resend email API
 ureq = "3"
 

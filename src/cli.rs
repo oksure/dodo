@@ -75,6 +75,10 @@ pub enum Commands {
     /// Send email digest
     Email(EmailArgs),
 
+    /// Update dodo to the latest version
+    #[command(visible_alias = "up")]
+    Update,
+
     /// Open TUI
     #[command(visible_alias = "t")]
     Tui,

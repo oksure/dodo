@@ -5,6 +5,7 @@ use colored::Colorize;
 use std::io::{self, BufRead};
 
 mod tui;
+mod update;
 
 use dodo::backup;
 use dodo::cli::{BackupAction, Cli, Commands, EmailAction, RecurringAction, SyncAction};
@@ -61,6 +62,7 @@ fn main() -> Result<()> {
         Some(Commands::Sync(args)) => cmd_sync(&db, args),
         Some(Commands::Backup(args)) => cmd_backup(args),
         Some(Commands::Email(args)) => cmd_email(&db, args),
+        Some(Commands::Update) => update::check_update(),
         Some(Commands::Tui) => tui::run_tui(&db),
     }
 }
