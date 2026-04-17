@@ -249,21 +249,21 @@ where
                                             let _ = app.refresh_report();
                                         }
                                         // [ / J = go back one period in time
-                                        KeyCode::Char('[') | KeyCode::Char('J') => {
+                                        KeyCode::Char('[') | KeyCode::Char('J')
                                             if !matches!(
                                                 app.report_range,
                                                 dodo::cli::ReportRange::All
-                                            ) {
-                                                app.report_offset += 1;
-                                                let _ = app.refresh_report();
-                                            }
+                                            ) =>
+                                        {
+                                            app.report_offset += 1;
+                                            let _ = app.refresh_report();
                                         }
                                         // ] / K = go forward one period in time
-                                        KeyCode::Char(']') | KeyCode::Char('K') => {
-                                            if app.report_offset > 0 {
-                                                app.report_offset -= 1;
-                                                let _ = app.refresh_report();
-                                            }
+                                        KeyCode::Char(']') | KeyCode::Char('K')
+                                            if app.report_offset > 0 =>
+                                        {
+                                            app.report_offset -= 1;
+                                            let _ = app.refresh_report();
                                         }
                                         _ => {}
                                     }
@@ -318,24 +318,21 @@ where
                             KeyCode::Esc | KeyCode::Char('q') => {
                                 app.mode = AppMode::Normal;
                             }
-                            KeyCode::Char('j') | KeyCode::Down => {
+                            KeyCode::Char('j') | KeyCode::Down
                                 // Templates only have fields 0-8 (with 8=Recurrence)
                                 // Regular tasks also 0-8 (with 8=Notes)
-                                if app.edit_field_index < 8 {
+                                if app.edit_field_index < 8 => {
                                     app.edit_field_index += 1;
                                 }
-                            }
-                            KeyCode::Char('k') | KeyCode::Up => {
-                                if app.edit_field_index > 0 {
+                            KeyCode::Char('k') | KeyCode::Up
+                                if app.edit_field_index > 0 => {
                                     app.edit_field_index -= 1;
                                 }
-                            }
-                            KeyCode::Char('e') => {
+                            KeyCode::Char('e')
                                 // Open elapsed-time edit modal (only for regular tasks, not templates)
-                                if !app.edit_is_template {
+                                if !app.edit_is_template => {
                                     app.start_elapsed_edit();
                                 }
-                            }
                             KeyCode::Enter => {
                                 // Enter edit mode for the selected field
                                 app.enter_edit_field();
@@ -509,24 +506,21 @@ where
                                     KeyCode::Esc => {
                                         app.mode = AppMode::EditTask;
                                     }
-                                    KeyCode::Char('j') | KeyCode::Down => {
+                                    KeyCode::Char('j') | KeyCode::Down
                                         if !app.note_lines.is_empty()
-                                            && app.note_selected < app.note_lines.len() - 1
-                                        {
-                                            app.note_selected += 1;
-                                        }
+                                            && app.note_selected < app.note_lines.len() - 1 =>
+                                    {
+                                        app.note_selected += 1;
                                     }
-                                    KeyCode::Char('k') | KeyCode::Up => {
-                                        if app.note_selected > 0 {
-                                            app.note_selected -= 1;
-                                        }
+                                    KeyCode::Char('k') | KeyCode::Up if app.note_selected > 0 => {
+                                        app.note_selected -= 1;
                                     }
-                                    KeyCode::Enter | KeyCode::Char('e') => {
-                                        if app.note_selected < app.note_lines.len() {
-                                            app.edit_field_input =
-                                                app.note_lines[app.note_selected].clone();
-                                            app.note_editing = true;
-                                        }
+                                    KeyCode::Enter | KeyCode::Char('e')
+                                        if app.note_selected < app.note_lines.len() =>
+                                    {
+                                        app.edit_field_input =
+                                            app.note_lines[app.note_selected].clone();
+                                        app.note_editing = true;
                                     }
                                     KeyCode::Char('a') => {
                                         // Append new note — switch to EditTaskField for notes
@@ -534,18 +528,18 @@ where
                                         app.edit_field_input.clear();
                                         app.mode = AppMode::EditTaskField;
                                     }
-                                    KeyCode::Char('d') | KeyCode::Delete => {
-                                        if app.note_selected < app.note_lines.len() {
-                                            app.note_lines.remove(app.note_selected);
-                                            if app.note_selected >= app.note_lines.len()
-                                                && app.note_selected > 0
-                                            {
-                                                app.note_selected -= 1;
-                                            }
-                                            let _ = app.save_notes();
-                                            if app.note_lines.is_empty() {
-                                                app.mode = AppMode::EditTask;
-                                            }
+                                    KeyCode::Char('d') | KeyCode::Delete
+                                        if app.note_selected < app.note_lines.len() =>
+                                    {
+                                        app.note_lines.remove(app.note_selected);
+                                        if app.note_selected >= app.note_lines.len()
+                                            && app.note_selected > 0
+                                        {
+                                            app.note_selected -= 1;
+                                        }
+                                        let _ = app.save_notes();
+                                        if app.note_lines.is_empty() {
+                                            app.mode = AppMode::EditTask;
                                         }
                                     }
                                     _ => {}
@@ -691,11 +685,9 @@ where
                                 app.edit_field_input.push_str(&text.replace('\n', " "));
                             }
                         }
-                        AppMode::NoteView => {
-                            if app.note_editing {
-                                // Preserve newlines in note editing
-                                app.edit_field_input.push_str(&text);
-                            }
+                        AppMode::NoteView if app.note_editing => {
+                            // Preserve newlines in note editing
+                            app.edit_field_input.push_str(&text);
                         }
                         AppMode::Search => {
                             app.search_input.push_str(&text.replace('\n', " "));
@@ -1047,14 +1039,13 @@ pub(super) fn handle_daily_nav(app: &mut App, code: KeyCode, count: usize) {
                 let _ = app.refresh_daily();
             }
         }
-        KeyCode::Char('z') => {
+        KeyCode::Char('z')
             // zz: center cursor (vim-style)
             // Only for Daily view
-            if app.tasks_view == TasksView::Daily {
+            if app.tasks_view == TasksView::Daily => {
                 // Center the cursor (simple centering)
                 app.daily_scroll = app.daily_cursor.saturating_sub(3);
             }
-        }
         _ => {}
     }
 }
@@ -1075,15 +1066,11 @@ fn handle_weekly_nav(app: &mut App, code: KeyCode, count: usize) {
                 app.weekly_panes[app.weekly_active].jump_back(count);
             }
         }
-        KeyCode::Char('h') | KeyCode::Left => {
-            if app.weekly_active > 0 {
-                app.weekly_active -= 1;
-            }
+        KeyCode::Char('h') | KeyCode::Left if app.weekly_active > 0 => {
+            app.weekly_active -= 1;
         }
-        KeyCode::Char('l') | KeyCode::Right => {
-            if app.weekly_active < 7 {
-                app.weekly_active += 1;
-            }
+        KeyCode::Char('l') | KeyCode::Right if app.weekly_active < 7 => {
+            app.weekly_active += 1;
         }
         KeyCode::Char('[') => {
             // Previous week
@@ -1218,26 +1205,21 @@ fn handle_calendar_nav(app: &mut App, code: KeyCode, _count: usize) {
                 }
                 let _ = app.refresh_calendar();
             }
-            KeyCode::Tab => {
-                if !app.calendar_tasks.is_empty() {
-                    app.calendar_focus = CalendarFocus::TaskList;
-                    app.calendar_task_selected = 0;
-                }
+            KeyCode::Tab if !app.calendar_tasks.is_empty() => {
+                app.calendar_focus = CalendarFocus::TaskList;
+                app.calendar_task_selected = 0;
             }
             _ => {}
         },
         CalendarFocus::TaskList => match code {
-            KeyCode::Char('j') | KeyCode::Down => {
+            KeyCode::Char('j') | KeyCode::Down
                 if !app.calendar_tasks.is_empty()
-                    && app.calendar_task_selected < app.calendar_tasks.len() - 1
-                {
-                    app.calendar_task_selected += 1;
-                }
+                    && app.calendar_task_selected < app.calendar_tasks.len() - 1 =>
+            {
+                app.calendar_task_selected += 1;
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                if app.calendar_task_selected > 0 {
-                    app.calendar_task_selected -= 1;
-                }
+            KeyCode::Char('k') | KeyCode::Up if app.calendar_task_selected > 0 => {
+                app.calendar_task_selected -= 1;
             }
             KeyCode::Tab | KeyCode::Esc => {
                 app.calendar_focus = CalendarFocus::Grid;
@@ -1264,24 +1246,20 @@ fn days_in_month(year: i32, month: u32) -> u32 {
 
 pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if !app.templates.is_empty() && app.template_selected < app.templates.len() - 1 {
-                app.template_selected += 1;
-            }
+        KeyCode::Char('j') | KeyCode::Down
+            if !app.templates.is_empty() && app.template_selected < app.templates.len() - 1 =>
+        {
+            app.template_selected += 1;
         }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if app.template_selected > 0 {
-                app.template_selected -= 1;
-            }
+        KeyCode::Char('k') | KeyCode::Up if app.template_selected > 0 => {
+            app.template_selected -= 1;
         }
         KeyCode::Char('a') => {
             app.rec_add_input.clear();
             app.mode = AppMode::RecAddTemplate;
         }
-        KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => {
-            if !app.templates.is_empty() {
-                app.mode = AppMode::RecConfirmDelete;
-            }
+        KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace if !app.templates.is_empty() => {
+            app.mode = AppMode::RecConfirmDelete;
         }
         KeyCode::Char('p') => {
             if let Some(template) = app.templates.get(app.template_selected) {
@@ -1296,10 +1274,8 @@ pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
                 }
             }
         }
-        KeyCode::Char('G') => {
-            if !app.templates.is_empty() {
-                app.template_selected = app.templates.len() - 1;
-            }
+        KeyCode::Char('G') if !app.templates.is_empty() => {
+            app.template_selected = app.templates.len() - 1;
         }
         KeyCode::Char('g') => {
             app.pending_g = true;
@@ -1345,19 +1321,15 @@ pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
 
 pub(super) fn handle_backup_key(app: &mut App, code: KeyCode) {
     match code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            if !app.backup_entries.is_empty() {
-                app.backup_selected = (app.backup_selected + 1) % app.backup_entries.len();
-            }
+        KeyCode::Char('j') | KeyCode::Down if !app.backup_entries.is_empty() => {
+            app.backup_selected = (app.backup_selected + 1) % app.backup_entries.len();
         }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if !app.backup_entries.is_empty() {
-                app.backup_selected = if app.backup_selected == 0 {
-                    app.backup_entries.len() - 1
-                } else {
-                    app.backup_selected - 1
-                };
-            }
+        KeyCode::Char('k') | KeyCode::Up if !app.backup_entries.is_empty() => {
+            app.backup_selected = if app.backup_selected == 0 {
+                app.backup_entries.len() - 1
+            } else {
+                app.backup_selected - 1
+            };
         }
         KeyCode::Char('u') => {
             if app.backup_config.is_ready() {

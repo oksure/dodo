@@ -1387,12 +1387,11 @@ impl<'a> App<'a> {
         if let Some(ref task_id) = self.edit_task_id {
             let val = &self.edit_field_values[idx];
             match idx {
-                0 => {
+                0
                     // Title
-                    if !val.is_empty() {
+                    if !val.is_empty() => {
                         self.db.update_task_title_by_id(task_id, val)?;
                     }
-                }
                 1 => {
                     // Project
                     let mut parsed = dodo::notation::ParsedInput::default();
@@ -1462,20 +1461,18 @@ impl<'a> App<'a> {
                         self.db.update_task_fields_by_id(task_id, &parsed, None)?;
                     }
                 }
-                8 if self.edit_is_template => {
+                8 if self.edit_is_template
                     // Recurrence pattern for recurring templates
-                    if !saved_input.is_empty() {
+                    && !saved_input.is_empty() => {
                         self.db.update_recurrence_by_id(task_id, &saved_input)?;
                     }
-                }
-                8 => {
+                8
                     // Notes (append) for regular tasks
-                    if !saved_input.is_empty() {
+                    if !saved_input.is_empty() => {
                         self.db.append_note_by_id(task_id, &saved_input)?;
                         let notes = self.db.get_task_notes_by_id(task_id)?;
                         self.edit_field_values[8] = notes.unwrap_or_default();
                     }
-                }
                 _ => {}
             }
             self.refresh_current_view()?;
