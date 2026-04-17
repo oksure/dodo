@@ -340,11 +340,17 @@ fn cmd_remove(db: &Database, args: dodo::cli::RemoveArgs) -> Result<()> {
             eprintln!("Warning: failed to generate next recurring instance: {e}");
         }
         db.delete_task_by_id(&task.id)?;
-        println!("Skipped recurring instance [#{}] {}; next occurrence generated.", num_id, title);
+        println!(
+            "Skipped recurring instance [#{}] {}; next occurrence generated.",
+            num_id, title
+        );
     } else {
         db.delete_task_by_id(&task.id)?;
         if task.template_id.is_some() {
-            println!("Removed recurring instance [#{}] {}; series NOT extended (--series flag).", num_id, title);
+            println!(
+                "Removed recurring instance [#{}] {}; series NOT extended (--series flag).",
+                num_id, title
+            );
         } else {
             println!("Deleted: {} [#{}]", title, num_id);
         }

@@ -2297,14 +2297,34 @@ fn num_id_conflict_resolution_both_directions() {
 
     // Add task_a with an early creation; it holds num_id 1
     let num_a = db_a
-        .add_task("Task A", Area::Today, None, None, None, None, None, None, None)
+        .add_task(
+            "Task A",
+            Area::Today,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .unwrap();
     assert_eq!(num_a, 1);
 
     // DB B: task_b created later, also gets num_id=1 (conflict)
     let db_b = test_db();
     let num_b = db_b
-        .add_task("Task B", Area::Today, None, None, None, None, None, None, None)
+        .add_task(
+            "Task B",
+            Area::Today,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
         .unwrap();
     assert_eq!(num_b, 1);
 
@@ -2320,25 +2340,49 @@ fn num_id_conflict_resolution_both_directions() {
 
     // Merge A→B: task_a (earlier) should keep num_id=1; task_b (later) gets bumped
     let db_merged_ab = test_db();
-    db_merged_ab.merge_remote_data(&[task_a.clone()], &[]).unwrap();
-    db_merged_ab.merge_remote_data(&[task_b.clone()], &[]).unwrap();
-    let all_ab = db_merged_ab.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    db_merged_ab
+        .merge_remote_data(&[task_a.clone()], &[])
+        .unwrap();
+    db_merged_ab
+        .merge_remote_data(&[task_b.clone()], &[])
+        .unwrap();
+    let all_ab = db_merged_ab
+        .list_all_tasks(dodo::cli::SortBy::Created)
+        .unwrap();
     assert_eq!(all_ab.len(), 2);
     let a_in_ab = all_ab.iter().find(|t| t.id == task_a.id).unwrap();
     let b_in_ab = all_ab.iter().find(|t| t.id == task_b.id).unwrap();
     assert_eq!(a_in_ab.num_id, Some(1), "Earlier task should keep num_id=1");
-    assert_ne!(b_in_ab.num_id, Some(1), "Later task should be bumped off num_id=1");
+    assert_ne!(
+        b_in_ab.num_id,
+        Some(1),
+        "Later task should be bumped off num_id=1"
+    );
 
     // Merge B→A: same invariant regardless of merge order
     let db_merged_ba = test_db();
-    db_merged_ba.merge_remote_data(&[task_b.clone()], &[]).unwrap();
-    db_merged_ba.merge_remote_data(&[task_a.clone()], &[]).unwrap();
-    let all_ba = db_merged_ba.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    db_merged_ba
+        .merge_remote_data(&[task_b.clone()], &[])
+        .unwrap();
+    db_merged_ba
+        .merge_remote_data(&[task_a.clone()], &[])
+        .unwrap();
+    let all_ba = db_merged_ba
+        .list_all_tasks(dodo::cli::SortBy::Created)
+        .unwrap();
     assert_eq!(all_ba.len(), 2);
     let a_in_ba = all_ba.iter().find(|t| t.id == task_a.id).unwrap();
     let b_in_ba = all_ba.iter().find(|t| t.id == task_b.id).unwrap();
-    assert_eq!(a_in_ba.num_id, Some(1), "Earlier task should keep num_id=1 in reverse merge");
-    assert_ne!(b_in_ba.num_id, Some(1), "Later task should be bumped in reverse merge");
+    assert_eq!(
+        a_in_ba.num_id,
+        Some(1),
+        "Earlier task should keep num_id=1 in reverse merge"
+    );
+    assert_ne!(
+        b_in_ba.num_id,
+        Some(1),
+        "Later task should be bumped in reverse merge"
+    );
 }
 
 // ── 5d: concurrent-generate dedup ─────────────────────────────────────
@@ -2410,11 +2454,17 @@ fn dedup_keeps_earliest_created_instance() {
     let (tasks_after, _) = db.export_all_data().unwrap();
     let active_instances: Vec<_> = tasks_after
         .iter()
-        .filter(|t| !t.is_template && t.template_id.is_some() && t.status == dodo::task::TaskStatus::Pending)
+        .filter(|t| {
+            !t.is_template && t.template_id.is_some() && t.status == dodo::task::TaskStatus::Pending
+        })
         .collect();
 
     // Exactly one Pending instance should remain
-    assert_eq!(active_instances.len(), 1, "Dedup should leave exactly one active instance");
+    assert_eq!(
+        active_instances.len(),
+        1,
+        "Dedup should leave exactly one active instance"
+    );
     // It should be the earlier one (the original first_instance)
     assert_eq!(
         active_instances[0].id, first_instance.id,

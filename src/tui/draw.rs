@@ -2804,7 +2804,9 @@ pub(super) fn draw_delete_modal(f: &mut Frame, app: &App) {
         let block = Block::bordered()
             .title(Span::styled(
                 " Skip Occurrence ",
-                Style::default().fg(ACCENT_TEAL).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(ACCENT_TEAL)
+                    .add_modifier(Modifier::BOLD),
             ))
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(ACCENT_TEAL))
@@ -2834,7 +2836,10 @@ pub(super) fn draw_delete_modal(f: &mut Frame, app: &App) {
                 Span::styled(" skip  ", Style::default().fg(FG_SUBTEXT)),
                 Span::styled(" Esc/n ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
                 Span::styled(" cancel  ", Style::default().fg(FG_SUBTEXT)),
-                Span::styled("(d on Recurring tab = delete series)", Style::default().fg(FG_OVERLAY)),
+                Span::styled(
+                    "(d on Recurring tab = delete series)",
+                    Style::default().fg(FG_OVERLAY),
+                ),
             ]),
         ];
 

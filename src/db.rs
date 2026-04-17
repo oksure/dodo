@@ -386,9 +386,10 @@ impl Database {
         if let Some(row) = rows.next().await? {
             let existing_id = val_string(&row, 0)?;
             let existing_created_str = val_string(&row, 1)?;
-            let existing_created: DateTime<Utc> = DateTime::parse_from_rfc3339(&existing_created_str)
-                .map_err(|e| anyhow::anyhow!("Invalid created timestamp: {e}"))?
-                .into();
+            let existing_created: DateTime<Utc> =
+                DateTime::parse_from_rfc3339(&existing_created_str)
+                    .map_err(|e| anyhow::anyhow!("Invalid created timestamp: {e}"))?
+                    .into();
 
             // Earlier created keeps num_id; later created gets bumped to MAX+1
             let mut max_rows = self
