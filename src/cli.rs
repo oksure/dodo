@@ -184,6 +184,10 @@ pub struct RemoveArgs {
     /// Task to delete (numeric ID or fuzzy text)
     #[arg(trailing_var_arg = true, required = true)]
     pub task: Vec<String>,
+
+    /// For recurring instances: skip generating next instance (truncate series)
+    #[arg(long, default_value_t = false)]
+    pub series: bool,
 }
 
 #[derive(Parser)]

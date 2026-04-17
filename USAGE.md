@@ -438,4 +438,54 @@ dodo ls
 # [5] [x] DONE write tests (45m 0s)
 ```
 
+---
+
+## 16. Recurring Tasks
+
+Recurring tasks use a template-plus-instance model. The template lives in the Recurring tab (`c`); each time an instance is completed, the next one is auto-generated.
+
+### Recurrence patterns
+
+| Pattern | Meaning |
+|---------|---------|
+| `*daily` | Every day |
+| `*3d` | Every 3 days |
+| `*weekly` | Every 7 days |
+| `*2w` | Every 2 weeks |
+| `*monthly` | Every calendar month (see caveat below) |
+| `*3m` | Every 3 months |
+| `*mon,wed,fri` | Specific weekdays |
+| `*day15` | Day 15 of each month |
+| `*day31` | Day 31 of each long month (skips Feb, Apr, Jun, Sep, Nov) |
+
+```bash
+# Create a recurring template
+dodo rec add daily standup *daily ~15m =today
+
+# List templates
+dodo rec
+
+# Pause / resume a template
+dodo rec pause standup
+dodo rec resume standup
+
+# Skip an occurrence (TUI: Backspace on instance, Enter to confirm)
+# Next occurrence is generated automatically.
+
+# Delete the entire series (TUI: Recurring tab, d key)
+dodo rec delete standup
+```
+
+### Monthly drift caveat
+
+`*monthly` (and `*Nm` interval patterns) use date arithmetic that **clamps** to the last day of the target month when the anchor day does not exist there. This causes permanent drift after the first February crossing:
+
+```
+Jan 31 + 1 month = Feb 28   (clamped -- Feb has no day 31)
+Feb 28 + 1 month = Mar 28   (not Mar 31 -- anchor has drifted to day 28)
+Mar 28 + 1 month = Apr 28   ... and stays on day 28 forever
+```
+
+For stable end-of-month recurrence, use `*day31` instead. The `day31` pattern skips months where day 31 does not exist and fires exactly on day 31 of every eligible month (January, March, May, July, August, October, December).
+
 DONE is limited to 5 tasks. Use `dodo ls done` to see all completed tasks.

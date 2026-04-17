@@ -330,8 +330,26 @@ fn cmd_status(db: &Database) -> Result<()> {
 
 fn cmd_remove(db: &Database, args: dodo::cli::RemoveArgs) -> Result<()> {
     let query = args.task.join(" ");
-    let (title, num_id) = db.delete_task(&query)?;
-    println!("Deleted: {} [#{}]", title, num_id);
+    let task = db.resolve_task(&query)?;
+    let title = task.title.clone();
+    let num_id = task.num_id.unwrap_or(0);
+
+    if task.template_id.is_some() && !args.series {
+        // Recurring instance: generate next occurrence before deleting (matches TUI Backspace)
+        if let Err(e) = db.complete_recurring_instance(&task.id) {
+            eprintln!("Warning: failed to generate next recurring instance: {e}");
+        }
+        db.delete_task_by_id(&task.id)?;
+        println!("Skipped recurring instance [#{}] {}; next occurrence generated.", num_id, title);
+    } else {
+        db.delete_task_by_id(&task.id)?;
+        if task.template_id.is_some() {
+            println!("Removed recurring instance [#{}] {}; series NOT extended (--series flag).", num_id, title);
+        } else {
+            println!("Deleted: {} [#{}]", title, num_id);
+        }
+    }
+
     Ok(())
 }
 

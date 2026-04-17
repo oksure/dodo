@@ -257,6 +257,21 @@ pub fn parse_recurrence(s: &str) -> Option<String> {
 }
 
 /// Compute the next occurrence date from a recurrence pattern and a reference date.
+///
+/// # Monthly drift caveat
+///
+/// The `monthly` (and `Nm` interval) patterns use Chrono's `checked_add_months`, which clamps
+/// to the last day of the target month when the anchor day does not exist there. This causes
+/// **permanent drift** once a February crossing occurs:
+///
+/// - Jan 31 + 1 month → Feb 28 (clamped)
+/// - Feb 28 + 1 month → Mar 28 (not Mar 31 — the anchor has drifted to day 28)
+///
+/// After the first short-month crossing, the series stays on day 28 for all subsequent months.
+///
+/// If you need a stable end-of-month recurrence, use `*day31` instead. The `dayN` pattern
+/// skips months where day N does not exist and lands precisely on the 31st of every eligible
+/// month (Jan, Mar, May, Jul, Aug, Oct, Dec).
 pub fn next_occurrence(pattern: &str, from: NaiveDate) -> Option<NaiveDate> {
     let p = pattern.to_lowercase();
 
@@ -282,9 +297,10 @@ pub fn next_occurrence(pattern: &str, from: NaiveDate) -> Option<NaiveDate> {
     }
 
     // Day-of-month: dayN
+    // Returns the next occurrence of day N strictly after `from`.
+    // Months where target_day doesn't fit (e.g., day31 in February) are skipped.
     if let Some(rest) = p.strip_prefix("day") {
         if let Ok(target_day) = rest.parse::<u32>() {
-            // Find next month's target day (or current month if day hasn't passed)
             let mut year = from.year();
             let mut month = from.month();
             let from_day = from.day();
@@ -298,10 +314,19 @@ pub fn next_occurrence(pattern: &str, from: NaiveDate) -> Option<NaiveDate> {
                 }
             }
 
-            // Clamp day to the actual last day of the month
-            let last_day = last_day_of_month(year, month);
-            let day = target_day.min(last_day);
-            return NaiveDate::from_ymd_opt(year, month, day);
+            // Advance month until target_day fits (skip short months like Feb for day31)
+            for _ in 0..12 {
+                let last_day = last_day_of_month(year, month);
+                if last_day >= target_day {
+                    return NaiveDate::from_ymd_opt(year, month, target_day);
+                }
+                month += 1;
+                if month > 12 {
+                    month = 1;
+                    year += 1;
+                }
+            }
+            return None;
         }
     }
 

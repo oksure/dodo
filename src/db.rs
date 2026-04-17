@@ -239,15 +239,19 @@ impl Database {
                         // Remote wins — update local task
                         // First resolve num_id: adopt remote's num_id
                         let remote_num_id = remote_task.num_id;
-                        if let (Some(r_num), Some(l_num)) = (remote_num_id, local_num_id) {
+                        let resolved_num_id = if let (Some(r_num), Some(l_num)) = (remote_num_id, local_num_id) {
                             if r_num != l_num {
                                 // Remote has a different num_id for this task.
                                 // Check if r_num is taken by a DIFFERENT task.
-                                self.resolve_num_id_conflict_async(
+                                Some(self.resolve_num_id_conflict_async(
                                     &remote_task.id, r_num, remote_task.created,
-                                ).await?;
+                                ).await?)
+                            } else {
+                                None
                             }
-                        }
+                        } else {
+                            None
+                        };
 
                         self.conn.execute(
                             "UPDATE tasks SET num_id = ?2, title = ?3, area = ?4, project = ?5, context = ?6,
@@ -258,7 +262,7 @@ impl Database {
                              WHERE id = ?1",
                             params![
                                 remote_task.id.clone(),
-                                remote_task.num_id,
+                                resolved_num_id.or(remote_task.num_id),
                                 remote_task.title.clone(),
                                 remote_task.area.as_str(),
                                 remote_task.project.clone(),
@@ -283,13 +287,12 @@ impl Database {
                 } else {
                     // New task — insert with remote's num_id
                     let num_id = remote_task.num_id.unwrap_or(0);
-                    if num_id > 0 {
+                    let actual_num_id = if num_id > 0 {
+                        // resolve_num_id_conflict_async returns the num_id the caller should use:
+                        // either the original (if incoming is older) or MAX+1 (if existing is older).
                         self.resolve_num_id_conflict_async(
                             &remote_task.id, num_id, remote_task.created,
-                        ).await?;
-                    }
-                    let actual_num_id = if num_id > 0 {
-                        num_id
+                        ).await?
                     } else {
                         // No num_id from remote, assign next available
                         let mut rows = self.conn.query(
@@ -356,26 +359,38 @@ impl Database {
         })
     }
 
-    /// Resolve num_id conflict: if `num_id` is taken by a different task (not `task_id`),
-    /// bump the existing holder to MAX+1 so the incoming task can use `num_id`.
+    /// Resolve num_id conflict: the task with the earlier `created` timestamp keeps the num_id;
+    /// the other (later `created`) gets bumped to MAX+1. This is direction-independent so
+    /// merging from either side produces the same result.
+    ///
+    /// Returns the num_id the caller should use for the incoming task (INSERT or UPDATE).
+    /// - If the existing holder is older (or same age): existing keeps the num_id, incoming must
+    ///   use MAX+1 — the returned value is MAX+1.
+    /// - If the incoming task is older: existing holder gets bumped to MAX+1 via UPDATE, and the
+    ///   returned value is the original `num_id` (unchanged for the incoming task).
+    /// - If there is no conflict: returns `num_id` unchanged.
     async fn resolve_num_id_conflict_async(
         &self,
         incoming_task_id: &str,
         num_id: i64,
-        _incoming_created: DateTime<Utc>,
-    ) -> Result<()> {
+        incoming_created: DateTime<Utc>,
+    ) -> Result<i64> {
         let mut rows = self
             .conn
             .query(
-                "SELECT id FROM tasks WHERE num_id = ?1 AND id != ?2",
+                "SELECT id, created FROM tasks WHERE num_id = ?1 AND id != ?2",
                 params![num_id, incoming_task_id],
             )
             .await?;
 
         if let Some(row) = rows.next().await? {
             let existing_id = val_string(&row, 0)?;
+            let existing_created_str = val_string(&row, 1)?;
+            let existing_created: DateTime<Utc> = DateTime::parse_from_rfc3339(&existing_created_str)
+                .map_err(|e| anyhow::anyhow!("Invalid created timestamp: {e}"))?
+                .into();
 
-            // Bump the existing holder to MAX+1 to make room for the incoming task
+            // Earlier created keeps num_id; later created gets bumped to MAX+1
             let mut max_rows = self
                 .conn
                 .query("SELECT COALESCE(MAX(num_id), 0) + 1 FROM tasks", ())
@@ -383,15 +398,25 @@ impl Database {
             let max_row = max_rows.next().await?.context("No result from MAX query")?;
             let new_num_id = val_i64(&max_row, 0)?;
 
-            self.conn
-                .execute(
-                    "UPDATE tasks SET num_id = ?1 WHERE id = ?2",
-                    params![new_num_id, existing_id],
-                )
-                .await?;
+            if existing_created <= incoming_created {
+                // Existing is older or same age — bump the incoming task.
+                // Return new_num_id so the caller uses it for the INSERT/UPDATE.
+                return Ok(new_num_id);
+            } else {
+                // Incoming is older — bump the existing holder via UPDATE (it already exists).
+                self.conn
+                    .execute(
+                        "UPDATE tasks SET num_id = ?1 WHERE id = ?2",
+                        params![new_num_id, existing_id],
+                    )
+                    .await?;
+                // Return the original num_id so the incoming task keeps it.
+                return Ok(num_id);
+            }
         }
 
-        Ok(())
+        // No conflict — return num_id unchanged.
+        Ok(num_id)
     }
 
     /// Perform a full bidirectional sync with a Turso remote replica.
@@ -462,6 +487,11 @@ impl Database {
         // 6b. Propagate tombstones: delete locally-deleted tasks from sync DB
         local_db.propagate_tombstones(&sync_database)?;
 
+        // 6c. Dedup: if two machines both generated an instance for the same template while
+        // offline, we may now have multiple Pending instances for one template. Keep the
+        // earliest-created one and tombstone+delete the rest.
+        local_db.dedup_active_recurring_instances()?;
+
         // 7. Push to Turso
         sync_database.rt.block_on(async {
             sync_database
@@ -523,6 +553,9 @@ impl Database {
     }
 
     /// Delete tombstoned tasks from another database (used during sync to propagate deletes).
+    /// Operates on the sync replica DB (not the main DB). Before hard-deleting sessions,
+    /// snapshots any accumulated elapsed time into the task's elapsed_snapshot column so
+    /// that time data is preserved even after the sessions are deleted.
     fn propagate_tombstones(&self, target: &Database) -> Result<()> {
         self.rt
             .block_on(async {
@@ -536,6 +569,28 @@ impl Database {
             .into_iter()
             .try_for_each(|id| {
                 target.rt.block_on(async {
+                    // Snapshot session elapsed into elapsed_snapshot before deleting sessions.
+                    // This preserves time data for reporting even after the sessions are hard-deleted.
+                    let affected = target
+                        .conn
+                        .execute(
+                            "UPDATE tasks SET elapsed_snapshot = COALESCE(
+                                (SELECT SUM(duration) FROM sessions WHERE sessions.task_id = tasks.id),
+                                elapsed_snapshot,
+                                0
+                             )
+                             WHERE id = ?1
+                               AND EXISTS (SELECT 1 FROM sessions WHERE task_id = ?1 AND duration > 0)",
+                            params![id.clone()],
+                        )
+                        .await?;
+                    if affected > 0 {
+                        eprintln!(
+                            "Warning: preserved elapsed_snapshot for {} tombstoned task(s) before deletion",
+                            affected
+                        );
+                    }
+
                     target
                         .conn
                         .execute(
@@ -550,6 +605,100 @@ impl Database {
                     Ok::<(), anyhow::Error>(())
                 })
             })
+    }
+
+    /// Deduplicate active recurring instances after a sync merge.
+    /// If two offline machines each generated an instance for the same template,
+    /// we end up with multiple non-Done instances for one template. Keep the
+    /// instance with the earliest `created` timestamp; tombstone and hard-delete
+    /// the rest (plus their sessions).
+    /// Only touches Pending/Running/Paused instances — Done instances are left alone.
+    pub fn dedup_active_recurring_instances(&self) -> Result<()> {
+        self.rt.block_on(async {
+            // Find templates with more than one active (non-Done, non-template) instance
+            let mut rows = self.conn.query(
+                "SELECT template_id, COUNT(*) as cnt FROM tasks
+                 WHERE template_id IS NOT NULL
+                   AND status != 'Done'
+                   AND COALESCE(is_template, 0) = 0
+                 GROUP BY template_id HAVING cnt > 1",
+                (),
+            ).await?;
+
+            let mut dupes: Vec<(String, i64)> = Vec::new();
+            while let Some(row) = rows.next().await? {
+                dupes.push((val_string(&row, 0)?, val_i64(&row, 1)?));
+            }
+
+            if dupes.is_empty() {
+                return Ok(());
+            }
+
+            let mut total_removed = 0usize;
+            let template_count = dupes.len();
+
+            for (template_id, _count) in dupes {
+                // Get all active instances for this template, ordered by created ASC
+                let mut inst_rows = self.conn.query(
+                    "SELECT id FROM tasks
+                     WHERE template_id = ?1
+                       AND status != 'Done'
+                       AND COALESCE(is_template, 0) = 0
+                     ORDER BY created ASC",
+                    params![template_id.clone()],
+                ).await?;
+
+                let mut instance_ids: Vec<String> = Vec::new();
+                while let Some(row) = inst_rows.next().await? {
+                    instance_ids.push(val_string(&row, 0)?);
+                }
+
+                // Keep the first (earliest created), tombstone+delete the rest
+                for loser_id in instance_ids.into_iter().skip(1) {
+                    // Tombstone
+                    let now = chrono::Utc::now().to_rfc3339();
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO deleted_tasks (id, deleted_at) VALUES (?1, ?2)",
+                        params![loser_id.clone(), now],
+                    ).await?;
+                    // Snapshot elapsed time from sessions before deleting them,
+                    // mirroring the pattern from propagate_tombstones.
+                    let preserved = self.conn.execute(
+                        "UPDATE tasks SET elapsed_snapshot = COALESCE(
+                            (SELECT SUM(duration) FROM sessions WHERE task_id = ?1 AND duration > 0),
+                            elapsed_snapshot, 0
+                         )
+                         WHERE id = ?1",
+                        params![loser_id.clone()],
+                    ).await?;
+                    if preserved > 0 {
+                        eprintln!(
+                            "Warning: preserved elapsed_snapshot for {} dedup loser(s) before session deletion",
+                            preserved
+                        );
+                    }
+                    // Delete sessions first, then task
+                    self.conn.execute(
+                        "DELETE FROM sessions WHERE task_id = ?1",
+                        params![loser_id.clone()],
+                    ).await?;
+                    self.conn.execute(
+                        "DELETE FROM tasks WHERE id = ?1",
+                        params![loser_id.clone()],
+                    ).await?;
+                    total_removed += 1;
+                }
+            }
+
+            if total_removed > 0 {
+                eprintln!(
+                    "Warning: deduplicated {} redundant active instance(s) across {} template(s) during sync",
+                    total_removed, template_count
+                );
+            }
+
+            Ok(())
+        })
     }
 
     /// Export all tasks and sessions from the database.
@@ -1775,14 +1924,14 @@ impl Database {
 
             let now = Utc::now().to_rfc3339();
 
-            // Check if this is a recurring instance and update its scheduled date to today
-            let is_template: Option<i64> = tx.query(
-                "SELECT is_template FROM tasks WHERE id = ?1",
+            // Check if this is a recurring instance (has a template_id) and update its scheduled date to today
+            let template_id: Option<String> = tx.query(
+                "SELECT template_id FROM tasks WHERE id = ?1",
                 params![task_id],
-            ).await?.next().await?.map(|r| val_i64(&r, 0)).transpose()?;
+            ).await?.next().await?.map(|r| val_opt_string(&r, 0)).transpose()?.flatten();
 
-            if is_template == Some(0) {
-                // This is an instance (not a template), update scheduled to today
+            if template_id.is_some() {
+                // This is a recurring instance, update scheduled to today
                 let today = crate::today();
                 tx.execute(
                     "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, scheduled = ?2, modified_at = ?1, elapsed_snapshot = ?4 WHERE id = ?3",
@@ -2390,7 +2539,30 @@ impl Database {
         })
     }
 
+    /// Update fields on a recurring template. If the recurrence pattern changes to a new value,
+    /// all active (non-Done) instances are tombstoned and deleted so a fresh instance is generated
+    /// with the new cadence. Editing recurrence to the same value is a no-op for instances.
     pub fn update_template_fields(&self, template_id: &str, input: &ParsedInput) -> Result<()> {
+        // Detect whether recurrence is actually changing before doing the update
+        let recurrence_changed = if let Some(ref new_rec) = input.recurrence {
+            let current_rec: Option<String> = self.rt.block_on(async {
+                let mut rows = self
+                    .conn
+                    .query(
+                        "SELECT recurrence FROM tasks WHERE id = ?1",
+                        params![template_id],
+                    )
+                    .await?;
+                match rows.next().await? {
+                    Some(row) => val_opt_string(&row, 0),
+                    None => Ok(None),
+                }
+            })?;
+            current_rec.as_deref() != Some(new_rec.as_str())
+        } else {
+            false
+        };
+
         self.rt.block_on(async {
             if let Some(ref project) = input.project {
                 self.conn
@@ -2464,8 +2636,45 @@ impl Database {
                     params![Utc::now().to_rfc3339(), template_id],
                 )
                 .await?;
+
+            // If recurrence changed, tombstone + delete all active instances so a fresh
+            // instance is generated with the new cadence. Wrapped in a transaction so
+            // all mutating steps are atomic: either all applied or none.
+            if recurrence_changed {
+                let tx = self.conn.transaction().await?;
+                let now = Utc::now().to_rfc3339();
+                tx.execute(
+                    "INSERT OR IGNORE INTO deleted_tasks (id, deleted_at)
+                     SELECT id, ?2 FROM tasks WHERE template_id = ?1 AND status != 'Done'",
+                    params![template_id, now.clone()],
+                )
+                .await?;
+                tx.execute(
+                    "DELETE FROM sessions WHERE task_id IN (
+                         SELECT id FROM tasks WHERE template_id = ?1 AND status != 'Done'
+                     )",
+                    params![template_id],
+                )
+                .await?;
+                tx.execute(
+                    "DELETE FROM tasks WHERE template_id = ?1 AND status != 'Done'",
+                    params![template_id],
+                )
+                .await?;
+                tx.commit().await?;
+            }
+
             Ok::<(), anyhow::Error>(())
-        })
+        })?;
+
+        // After clearing stale instances, generate a fresh one with the new cadence
+        if recurrence_changed {
+            if let Err(e) = self.generate_instances() {
+                eprintln!("Warning: failed to generate instance after recurrence change: {e}");
+            }
+        }
+
+        Ok(())
     }
 }
 

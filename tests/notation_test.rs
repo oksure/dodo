@@ -467,11 +467,46 @@ fn next_occurrence_day_of_month() {
 
 #[test]
 fn next_occurrence_day31_in_february() {
-    // day31 in February should clamp to Feb 28
+    // Semantics changed: day31 now SKIPS months that don't have day 31 (Feb → March 31)
+    // Previously clamped to Feb 28 but that caused an infinite same-date loop.
     let from = NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
     assert_eq!(
         next_occurrence("day31", from),
-        Some(NaiveDate::from_ymd_opt(2026, 2, 28).unwrap())
+        Some(NaiveDate::from_ymd_opt(2026, 3, 31).unwrap())
+    );
+}
+
+#[test]
+fn next_occurrence_day31_skip_months() {
+    // From Feb 28, day31 should jump to March 31 (not get stuck)
+    let from = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
+    assert_eq!(
+        next_occurrence("day31", from),
+        Some(NaiveDate::from_ymd_opt(2026, 3, 31).unwrap())
+    );
+
+    // From April 30, day31 should jump to May 31 (April has only 30 days)
+    let from = NaiveDate::from_ymd_opt(2026, 4, 30).unwrap();
+    assert_eq!(
+        next_occurrence("day31", from),
+        Some(NaiveDate::from_ymd_opt(2026, 5, 31).unwrap())
+    );
+
+    // Non-leap Feb: day29 should skip to March 29
+    let from = NaiveDate::from_ymd_opt(2027, 2, 28).unwrap();
+    assert_eq!(
+        next_occurrence("day29", from),
+        Some(NaiveDate::from_ymd_opt(2027, 3, 29).unwrap())
+    );
+}
+
+#[test]
+fn next_occurrence_day15_unchanged() {
+    // day15 still works normally when day hasn't passed
+    let from = NaiveDate::from_ymd_opt(2026, 1, 10).unwrap();
+    assert_eq!(
+        next_occurrence("day15", from),
+        Some(NaiveDate::from_ymd_opt(2026, 1, 15).unwrap())
     );
 }
 
@@ -489,4 +524,26 @@ fn next_occurrence_weekday_wraps() {
     let from = NaiveDate::from_ymd_opt(2026, 2, 13).unwrap();
     let next = next_occurrence("mon,wed,fri", from);
     assert_eq!(next, Some(NaiveDate::from_ymd_opt(2026, 2, 16).unwrap()));
+}
+
+// ── 5a: day31 year boundary ───────────────────────────────────────────
+
+#[test]
+fn next_occurrence_day31_year_boundary() {
+    let from = NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+    assert_eq!(
+        next_occurrence("day31", from),
+        Some(NaiveDate::from_ymd_opt(2027, 1, 31).unwrap())
+    );
+}
+
+// ── 5b: day29 from Feb29 leap year ───────────────────────────────────
+
+#[test]
+fn next_occurrence_day29_from_leap_feb29() {
+    let from = NaiveDate::from_ymd_opt(2028, 2, 29).unwrap();
+    assert_eq!(
+        next_occurrence("day29", from),
+        Some(NaiveDate::from_ymd_opt(2028, 3, 29).unwrap())
+    );
 }

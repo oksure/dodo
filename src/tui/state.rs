@@ -232,6 +232,7 @@ pub(super) struct App<'a> {
     // Delete task
     pub(super) delete_task_id: Option<String>,
     pub(super) delete_task_title: String,
+    pub(super) delete_task_is_recurring_instance: bool,
     // Edit task
     pub(super) edit_task_id: Option<String>,
     pub(super) edit_field_index: usize,
@@ -370,6 +371,7 @@ impl<'a> App<'a> {
             move_target: 0,
             delete_task_id: None,
             delete_task_title: String::new(),
+            delete_task_is_recurring_instance: false,
             edit_task_id: None,
             edit_field_index: 0,
             edit_field_values: Default::default(),
@@ -1271,13 +1273,37 @@ impl<'a> App<'a> {
         Ok(())
     }
 
+    /// Returns true if the task to be deleted is a recurring instance (has a template_id).
+    /// Checks the stored delete_task_id against all pane/daily task lists.
+    #[allow(dead_code)]
+    pub(super) fn selected_is_recurring_instance(&self) -> bool {
+        if let Some(ref task_id) = self.delete_task_id {
+            // Search the active pane lists for the task
+            for pane in &self.panes {
+                if let Some(t) = pane.tasks.iter().find(|t| &t.id == task_id) {
+                    return t.template_id.is_some();
+                }
+            }
+            // Also check daily / weekly panes
+            for entry in &self.daily_entries {
+                if let DailyEntry::Task(t) = entry {
+                    if &t.id == task_id {
+                        return t.template_id.is_some();
+                    }
+                }
+            }
+        }
+        false
+    }
+
     pub(super) fn start_delete(&mut self) {
         let info = self
             .current_selected_task()
-            .map(|t| (t.id.clone(), t.title.clone()));
-        if let Some((id, title)) = info {
+            .map(|t| (t.id.clone(), t.title.clone(), t.template_id.is_some()));
+        if let Some((id, title, is_recurring)) = info {
             self.delete_task_id = Some(id);
             self.delete_task_title = title;
+            self.delete_task_is_recurring_instance = is_recurring;
             self.mode = AppMode::ConfirmDelete;
         }
     }

@@ -2799,39 +2799,82 @@ pub(super) fn draw_delete_modal(f: &mut Frame, app: &App) {
     draw_shadow(f, area);
     f.render_widget(Clear, area);
 
-    let block = Block::bordered()
-        .title(Span::styled(
-            " Delete Task ",
-            Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
-        ))
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(ACCENT_RED))
-        .padding(Padding::horizontal(1));
+    if app.delete_task_is_recurring_instance {
+        // Recurring instance: teal "Skip Occurrence" modal
+        let block = Block::bordered()
+            .title(Span::styled(
+                " Skip Occurrence ",
+                Style::default().fg(ACCENT_TEAL).add_modifier(Modifier::BOLD),
+            ))
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT_TEAL))
+            .padding(Padding::horizontal(1));
 
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+        let inner = block.inner(area);
+        f.render_widget(block, area);
 
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  Delete ", Style::default().fg(FG_TEXT)),
-            Span::styled(
-                format!("\"{}\"", app.delete_task_title),
-                Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("?", Style::default().fg(FG_TEXT)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled(" y ", Style::default().fg(FG_TEXT).bg(ACCENT_RED)),
-            Span::styled(" yes  ", Style::default().fg(FG_SUBTEXT)),
-            Span::styled(" n ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
-            Span::styled(" no", Style::default().fg(FG_SUBTEXT)),
-        ]),
-    ];
+        let text = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Skip today's ", Style::default().fg(FG_TEXT)),
+                Span::styled(
+                    format!("\"{}\"", app.delete_task_title),
+                    Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("?", Style::default().fg(FG_TEXT)),
+            ]),
+            Line::from(Span::styled(
+                "  The series continues \u{2014} next occurrence will be generated.",
+                Style::default().fg(FG_SUBTEXT),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(" Enter/y ", Style::default().fg(FG_TEXT).bg(ACCENT_TEAL)),
+                Span::styled(" skip  ", Style::default().fg(FG_SUBTEXT)),
+                Span::styled(" Esc/n ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+                Span::styled(" cancel  ", Style::default().fg(FG_SUBTEXT)),
+                Span::styled("(d on Recurring tab = delete series)", Style::default().fg(FG_OVERLAY)),
+            ]),
+        ];
 
-    f.render_widget(Paragraph::new(text), inner);
+        f.render_widget(Paragraph::new(text), inner);
+    } else {
+        // Regular task: red "Delete Task" modal
+        let block = Block::bordered()
+            .title(Span::styled(
+                " Delete Task ",
+                Style::default().fg(ACCENT_RED).add_modifier(Modifier::BOLD),
+            ))
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(ACCENT_RED))
+            .padding(Padding::horizontal(1));
+
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+
+        let text = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Delete ", Style::default().fg(FG_TEXT)),
+                Span::styled(
+                    format!("\"{}\"", app.delete_task_title),
+                    Style::default().fg(FG_TEXT).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("?", Style::default().fg(FG_TEXT)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(" Enter/y ", Style::default().fg(FG_TEXT).bg(ACCENT_RED)),
+                Span::styled(" delete  ", Style::default().fg(FG_SUBTEXT)),
+                Span::styled(" Esc/n ", Style::default().fg(FG_TEXT).bg(BG_SURFACE)),
+                Span::styled(" cancel", Style::default().fg(FG_SUBTEXT)),
+            ]),
+        ];
+
+        f.render_widget(Paragraph::new(text), inner);
+    }
 }
 
 fn build_multiline_input(input: &str, style: Style) -> Vec<Line<'static>> {

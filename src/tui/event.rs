@@ -306,10 +306,10 @@ where
                             _ => {}
                         },
                         AppMode::ConfirmDelete => match key.code {
-                            KeyCode::Char('y') | KeyCode::Enter => {
+                            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                                 let _ = app.confirm_delete();
                             }
-                            KeyCode::Char('n') | KeyCode::Esc => {
+                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                                 app.mode = AppMode::Normal;
                             }
                             _ => {}
@@ -459,7 +459,7 @@ where
                             _ => {}
                         },
                         AppMode::RecConfirmDelete => match key.code {
-                            KeyCode::Char('y') | KeyCode::Enter => {
+                            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                                 if let Some(template) = app.templates.get(app.template_selected) {
                                     let _ = app.db.delete_template(&template.id);
                                     let _ = app.refresh_templates();
@@ -467,7 +467,7 @@ where
                                 }
                                 app.mode = AppMode::Normal;
                             }
-                            KeyCode::Char('n') | KeyCode::Esc => {
+                            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                                 app.mode = AppMode::Normal;
                             }
                             _ => {}
@@ -1285,12 +1285,15 @@ pub(super) fn handle_recurring_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('p') => {
             if let Some(template) = app.templates.get(app.template_selected) {
-                if template.status == TaskStatus::Paused {
+                let was_paused = template.status == TaskStatus::Paused;
+                if was_paused {
                     let _ = app.db.resume_template(&template.id);
+                    let _ = app.db.generate_instances();
+                    let _ = app.refresh_all();
                 } else {
                     let _ = app.db.pause_template(&template.id);
+                    let _ = app.refresh_templates();
                 }
-                let _ = app.refresh_templates();
             }
         }
         KeyCode::Char('G') => {

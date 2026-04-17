@@ -2235,3 +2235,140 @@ fn deleted_template_instances_not_resurrected_by_merge() {
     let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
     assert_eq!(all.len(), 0);
 }
+
+// ── 5c: num_id conflict reverse direction ─────────────────────────────
+#[test]
+fn num_id_conflict_resolution_both_directions() {
+    use chrono::{Duration, Utc};
+
+    // DB A: task_a was created earlier, gets num_id=1
+    let db_a = test_db();
+    let earlier = Utc::now() - Duration::seconds(60);
+    let later = Utc::now();
+
+    // Add task_a with an early creation; it holds num_id 1
+    let num_a = db_a
+        .add_task("Task A", Area::Today, None, None, None, None, None, None, None)
+        .unwrap();
+    assert_eq!(num_a, 1);
+
+    // DB B: task_b created later, also gets num_id=1 (conflict)
+    let db_b = test_db();
+    let num_b = db_b
+        .add_task("Task B", Area::Today, None, None, None, None, None, None, None)
+        .unwrap();
+    assert_eq!(num_b, 1);
+
+    // Export both, build Task structs with explicit created timestamps to force order
+    let (tasks_a, _) = db_a.export_all_data().unwrap();
+    let (tasks_b, _) = db_b.export_all_data().unwrap();
+    let mut task_a = tasks_a[0].clone();
+    let mut task_b = tasks_b[0].clone();
+    task_a.created = earlier;
+    task_a.modified_at = Some(earlier);
+    task_b.created = later;
+    task_b.modified_at = Some(later);
+
+    // Merge A→B: task_a (earlier) should keep num_id=1; task_b (later) gets bumped
+    let db_merged_ab = test_db();
+    db_merged_ab.merge_remote_data(&[task_a.clone()], &[]).unwrap();
+    db_merged_ab.merge_remote_data(&[task_b.clone()], &[]).unwrap();
+    let all_ab = db_merged_ab.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all_ab.len(), 2);
+    let a_in_ab = all_ab.iter().find(|t| t.id == task_a.id).unwrap();
+    let b_in_ab = all_ab.iter().find(|t| t.id == task_b.id).unwrap();
+    assert_eq!(a_in_ab.num_id, Some(1), "Earlier task should keep num_id=1");
+    assert_ne!(b_in_ab.num_id, Some(1), "Later task should be bumped off num_id=1");
+
+    // Merge B→A: same invariant regardless of merge order
+    let db_merged_ba = test_db();
+    db_merged_ba.merge_remote_data(&[task_b.clone()], &[]).unwrap();
+    db_merged_ba.merge_remote_data(&[task_a.clone()], &[]).unwrap();
+    let all_ba = db_merged_ba.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all_ba.len(), 2);
+    let a_in_ba = all_ba.iter().find(|t| t.id == task_a.id).unwrap();
+    let b_in_ba = all_ba.iter().find(|t| t.id == task_b.id).unwrap();
+    assert_eq!(a_in_ba.num_id, Some(1), "Earlier task should keep num_id=1 in reverse merge");
+    assert_ne!(b_in_ba.num_id, Some(1), "Later task should be bumped in reverse merge");
+}
+
+// ── 5d: concurrent-generate dedup ─────────────────────────────────────
+
+#[test]
+fn dedup_keeps_earliest_created_instance() {
+    use chrono::{Duration, Utc};
+
+    let db = test_db();
+    let today = chrono::Local::now().date_naive();
+
+    // Create a recurring template
+    db.add_template(
+        "dedup test standup",
+        "daily",
+        None,
+        None,
+        Some(15),
+        None,
+        Some(today),
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Generate one instance (the normal one)
+    db.generate_instances().unwrap();
+
+    // Simulate a second instance arriving from a concurrent machine by exporting the
+    // existing instance, cloning it with a new ID and later timestamp, then merging.
+    let (tasks, _sessions) = db.export_all_data().unwrap();
+    let first_instance = tasks
+        .iter()
+        .find(|t| !t.is_template && t.template_id.is_some())
+        .expect("should have at least one instance");
+
+    // Build a second instance with a later created time and distinct ID
+    let second_id = format!("{}_dup", first_instance.id);
+    let second_instance = dodo::task::Task {
+        id: second_id.clone(),
+        num_id: Some(99),
+        title: first_instance.title.clone(),
+        area: first_instance.area.clone(),
+        project: first_instance.project.clone(),
+        context: first_instance.context.clone(),
+        status: dodo::task::TaskStatus::Pending,
+        created: Utc::now() + Duration::seconds(10), // later than first
+        completed: None,
+        estimate_minutes: first_instance.estimate_minutes,
+        elapsed_seconds: None,
+        elapsed_snapshot: None,
+        deadline: None,
+        scheduled: first_instance.scheduled,
+        tags: None,
+        notes: None,
+        priority: None,
+        modified_at: Some(Utc::now() + Duration::seconds(10)),
+        recurrence: None,
+        is_template: false,
+        template_id: first_instance.template_id.clone(),
+    };
+
+    // Merge the duplicate into local DB
+    db.merge_remote_data(&[second_instance], &[]).unwrap();
+
+    // Should now have 2 active instances for this template; dedup removes the later one
+    db.dedup_active_recurring_instances().unwrap();
+
+    let (tasks_after, _) = db.export_all_data().unwrap();
+    let active_instances: Vec<_> = tasks_after
+        .iter()
+        .filter(|t| !t.is_template && t.template_id.is_some() && t.status == dodo::task::TaskStatus::Pending)
+        .collect();
+
+    // Exactly one Pending instance should remain
+    assert_eq!(active_instances.len(), 1, "Dedup should leave exactly one active instance");
+    // It should be the earlier one (the original first_instance)
+    assert_eq!(
+        active_instances[0].id, first_instance.id,
+        "Dedup should keep the earliest-created instance"
+    );
+}
