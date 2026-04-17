@@ -47,6 +47,6 @@ pub fn find_best_match<'a>(tasks: &'a [Task], query: &str) -> Option<&'a Task> {
 /// Score all tasks and return sorted by relevance (best first).
 pub fn rank_matches<'a>(tasks: &'a [Task], query: &str) -> Vec<&'a Task> {
     let mut scored: Vec<_> = tasks.iter().map(|t| (t, score(&t.title, query))).collect();
-    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.sort_by_key(|&(_, s)| std::cmp::Reverse(s));
     scored.into_iter().map(|(t, _)| t).collect()
 }
