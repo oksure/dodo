@@ -31,8 +31,26 @@ interface Task {
   tags: string | null
 }
 
-type SortKey = keyof Pick<Task, "num_id" | "title" | "status" | "area" | "project" | "priority" | "elapsed_seconds" | "created">
+type SortKey = "num_id" | "title" | "status" | "area" | "project" | "priority" | "estimate_minutes" | "elapsed_seconds" | "deadline" | "scheduled" | "created"
 type SortDir = "asc" | "desc"
+
+// Default sort direction when user first clicks a column. `desc` reads like
+// "most urgent/important first" for time-oriented columns.
+const DEFAULT_SORT_DIR: Record<SortKey, SortDir> = {
+  num_id: "asc",
+  title: "asc",
+  status: "asc",
+  area: "asc",
+  project: "asc",
+  priority: "desc",
+  estimate_minutes: "desc",
+  elapsed_seconds: "desc",
+  deadline: "asc",
+  scheduled: "asc",
+  created: "desc",
+}
+
+const STATUS_ORDER: Record<string, number> = { Running: 0, Paused: 1, Pending: 2, Done: 3 }
 
 function formatDuration(seconds: number): string {
   if (seconds <= 0) return "--"
@@ -127,6 +145,7 @@ interface Props {
 export function TaskTable({ config }: Props) {
   const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
+  const [hasLoaded, setHasLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState("")
   const [sortKey, setSortKey] = useState<SortKey>("num_id")
@@ -148,9 +167,8 @@ export function TaskTable({ config }: Props) {
               WHEN t.status = 'Done' THEN COALESCE(t.elapsed_snapshot, 0)
               ELSE COALESCE(
                 (SELECT SUM(
-                  CASE WHEN s.end_time IS NULL
-                    THEN CAST((julianday('now') - julianday(s.start_time)) * 86400 AS INTEGER)
-                    ELSE CAST((julianday(s.end_time) - julianday(s.start_time)) * 86400 AS INTEGER)
+                  CASE WHEN s.ended IS NOT NULL THEN s.duration
+                    ELSE CAST((julianday('now') - julianday(s.started)) * 86400 AS INTEGER)
                   END
                 ) FROM sessions s WHERE s.task_id = t.id),
                 0
@@ -169,7 +187,10 @@ export function TaskTable({ config }: Props) {
           setError(err instanceof Error ? err.message : "Failed to load tasks")
         }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          setHasLoaded(true)
+        }
       }
     }
     load()
@@ -181,7 +202,7 @@ export function TaskTable({ config }: Props) {
       setSortDir(d => d === "asc" ? "desc" : "asc")
     } else {
       setSortKey(key)
-      setSortDir("asc")
+      setSortDir(DEFAULT_SORT_DIR[key])
     }
   }
 
@@ -208,16 +229,30 @@ export function TaskTable({ config }: Props) {
   }, [tasks, search])
 
   const grouped = useMemo(() => {
+    const nullsLast = (v: string | null | number | null) => v === null || v === undefined || v === "" ? 1 : 0
+    const strCmp = (a: string | null, b: string | null) => {
+      const na = nullsLast(a), nb = nullsLast(b)
+      if (na !== nb) return na - nb
+      return (a || "").localeCompare(b || "")
+    }
+    const numCmp = (a: number | null, b: number | null) => {
+      const na = nullsLast(a), nb = nullsLast(b)
+      if (na !== nb) return na - nb
+      return (a ?? 0) - (b ?? 0)
+    }
     const sorted = [...filtered].sort((a, b) => {
       let cmp = 0
       switch (sortKey) {
         case "num_id": cmp = a.num_id - b.num_id; break
         case "title": cmp = a.title.localeCompare(b.title); break
-        case "status": cmp = a.status.localeCompare(b.status); break
+        case "status": cmp = (STATUS_ORDER[a.status] ?? 99) - (STATUS_ORDER[b.status] ?? 99); break
         case "area": cmp = areaGroup(a).localeCompare(areaGroup(b)); break
-        case "project": cmp = (a.project || "").localeCompare(b.project || ""); break
+        case "project": cmp = strCmp(a.project, b.project); break
         case "priority": cmp = a.priority - b.priority; break
+        case "estimate_minutes": cmp = numCmp(a.estimate_minutes, b.estimate_minutes); break
         case "elapsed_seconds": cmp = a.elapsed_seconds - b.elapsed_seconds; break
+        case "deadline": cmp = strCmp(a.deadline, b.deadline); break
+        case "scheduled": cmp = strCmp(a.scheduled, b.scheduled); break
         case "created": cmp = a.created.localeCompare(b.created); break
       }
       return sortDir === "desc" ? -cmp : cmp
@@ -238,7 +273,7 @@ export function TaskTable({ config }: Props) {
     return groups
   }, [filtered, sortKey, sortDir])
 
-  if (loading) {
+  if (loading && !hasLoaded) {
     return <div className="flex items-center justify-center p-8 text-muted-foreground">Loading tasks...</div>
   }
 
@@ -260,8 +295,9 @@ export function TaskTable({ config }: Props) {
           size="sm"
           onClick={() => setRefreshKey(k => k + 1)}
           disabled={loading}
+          aria-busy={loading}
         >
-          {loading ? "Loading..." : "Refresh"}
+          {loading ? "Refreshing..." : "Refresh"}
         </Button>
       </div>
       <div className="text-sm text-muted-foreground">
@@ -292,17 +328,32 @@ export function TaskTable({ config }: Props) {
                   <TableHead className="w-28 cursor-pointer select-none" onClick={() => handleSort("project")}>
                     Project{sortIndicator("project")}
                   </TableHead>
-                  <TableHead className="w-24">Estimate</TableHead>
+                  <TableHead className="w-24 cursor-pointer select-none" onClick={() => handleSort("estimate_minutes")}>
+                    Estimate{sortIndicator("estimate_minutes")}
+                  </TableHead>
                   <TableHead className="w-24 cursor-pointer select-none" onClick={() => handleSort("elapsed_seconds")}>
                     Elapsed{sortIndicator("elapsed_seconds")}
                   </TableHead>
-                  <TableHead className="w-24">Deadline</TableHead>
-                  <TableHead className="w-24">Scheduled</TableHead>
+                  <TableHead className="w-24 cursor-pointer select-none" onClick={() => handleSort("deadline")}>
+                    Deadline{sortIndicator("deadline")}
+                  </TableHead>
+                  <TableHead className="w-24 cursor-pointer select-none" onClick={() => handleSort("scheduled")}>
+                    Scheduled{sortIndicator("scheduled")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {group.tasks.map(t => (
-                  <TableRow key={t.id} className={t.status === "Done" ? "opacity-60" : ""}>
+                  <TableRow
+                    key={t.id}
+                    className={
+                      t.status === "Running"
+                        ? "bg-green-50 dark:bg-green-950/30"
+                        : t.status === "Done"
+                          ? "opacity-60"
+                          : ""
+                    }
+                  >
                     <TableCell className="font-mono text-xs text-muted-foreground">{t.num_id}</TableCell>
                     <TableCell>
                       <span className={t.status === "Done" ? "line-through" : ""}>

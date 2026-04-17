@@ -14,7 +14,7 @@ interface TursoCol {
 }
 
 interface TursoRows {
-  columns: TursoCol[]
+  cols: TursoCol[]
   rows: TursoValue[][]
 }
 
@@ -32,8 +32,8 @@ function parseResult(result: TursoResult): QueryResult {
   if (result.type !== "ok" || !result.response) {
     return { columns: [], rows: [] }
   }
-  const { columns, rows } = result.response.result
-  const colNames = columns.map(c => c.name)
+  const { cols, rows } = result.response.result
+  const colNames = cols.map(c => c.name)
   return {
     columns: colNames,
     rows: rows.map(row =>

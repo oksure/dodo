@@ -7,18 +7,17 @@ import { Layout } from "@/components/Layout"
 
 export default function App() {
   const [config, setConfig] = useState<TursoConfig | null>(null)
-  const [checking, setChecking] = useState(true)
+  const [checking, setChecking] = useState(() => !!getCredentials())
 
   useEffect(() => {
     const saved = getCredentials()
-    if (saved) {
-      validateCredentials(saved)
-        .then(ok => { if (ok) setConfig(saved) })
-        .catch(() => {})
-        .finally(() => setChecking(false))
-    } else {
-      setChecking(false)
-    }
+    if (!saved) return
+    let cancelled = false
+    validateCredentials(saved)
+      .then(ok => { if (!cancelled && ok) setConfig(saved) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setChecking(false) })
+    return () => { cancelled = true }
   }, [])
 
   const handleDisconnect = useCallback(() => {
