@@ -1924,25 +1924,14 @@ impl Database {
 
             let now = Utc::now().to_rfc3339();
 
-            // Check if this is a recurring instance (has a template_id) and update its scheduled date to today
-            let template_id: Option<String> = tx.query(
-                "SELECT template_id FROM tasks WHERE id = ?1",
-                params![task_id],
-            ).await?.next().await?.map(|r| val_opt_string(&r, 0)).transpose()?.flatten();
-
-            if template_id.is_some() {
-                // This is a recurring instance, update scheduled to today
-                let today = crate::today();
-                tx.execute(
-                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, scheduled = ?2, modified_at = ?1, elapsed_snapshot = ?4 WHERE id = ?3",
-                    params![now, today.to_string(), task_id, elapsed_snapshot],
-                ).await?;
-            } else {
-                tx.execute(
-                    "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1, elapsed_snapshot = ?3 WHERE id = ?2",
-                    params![now, task_id, elapsed_snapshot],
-                ).await?;
-            }
+            // Preserve the original scheduled date on completion. `completed` already
+            // records when the user finished the task; overwriting `scheduled` with
+            // today breaks schedule-anchored recurrence (e.g. *day15 completed early
+            // on the 10th would regenerate for the 15th of the SAME month).
+            tx.execute(
+                "UPDATE tasks SET status = 'Done', area = 'Completed', completed = ?1, modified_at = ?1, elapsed_snapshot = ?3 WHERE id = ?2",
+                params![now, task_id, elapsed_snapshot],
+            ).await?;
 
             tx.commit().await?;
             Ok::<(), anyhow::Error>(())

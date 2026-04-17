@@ -1209,6 +1209,55 @@ fn recurring_one_active_instance_constraint() {
 }
 
 #[test]
+fn recurring_complete_early_day15_advances_to_next_month() {
+    // Regression: user has *day15 recurrence, active instance scheduled for
+    // the 15th. They complete it early (e.g. April 10 when target is April 15).
+    // Next instance must be May 15 -- NOT April 15 (the same day they just
+    // completed). Previously broken because complete_task_by_id overwrote
+    // scheduled=today before complete_recurring_instance read it, so
+    // next_occurrence("day15", April 10) stayed in April.
+    use chrono::NaiveDate;
+    let db = test_db();
+    let target = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
+    db.add_template(
+        "haircut",
+        "day15",
+        None,
+        None,
+        Some(30),
+        None,
+        Some(target),
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Find the auto-generated first instance and force its scheduled to April 15
+    // (add_template creates the first instance with scheduled=today; we need to
+    // simulate the state where the user is about to complete an instance whose
+    // scheduled is April 15).
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    assert_eq!(all.len(), 1);
+    let instance_id = all[0].id.clone();
+    db.update_task_scheduled(&instance_id, target).unwrap();
+
+    db.complete_task_by_id(&instance_id).unwrap();
+
+    let all = db.list_all_tasks(dodo::cli::SortBy::Created).unwrap();
+    let non_done: Vec<_> = all
+        .iter()
+        .filter(|t| t.status != dodo::task::TaskStatus::Done)
+        .collect();
+    assert_eq!(non_done.len(), 1, "should have exactly 1 active instance");
+    let next_scheduled = non_done[0].scheduled.expect("next instance has scheduled");
+    assert_eq!(
+        next_scheduled,
+        NaiveDate::from_ymd_opt(2026, 5, 15).unwrap(),
+        "next instance must be May 15, not the same April 15 just completed"
+    );
+}
+
+#[test]
 fn recurring_generate_after_delete_recreates() {
     let db = test_db();
     let today = chrono::Local::now().date_naive();
