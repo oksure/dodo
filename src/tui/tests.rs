@@ -25,7 +25,7 @@ fn buffer_text(buf: &Buffer) -> String {
 }
 
 /// Create an App with N tasks spread across dates to populate the daily view.
-fn app_with_daily_tasks(db: &Database, count: usize) -> App<'_> {
+fn app_with_daily_tasks(db: &mut Database, count: usize) -> App<'_> {
     let today = chrono::Local::now().date_naive();
     for i in 0..count {
         let day_offset = i as i64 / 3; // ~3 tasks per day
@@ -66,8 +66,8 @@ fn trigger_scroll(app: &mut App) {
 
 #[test]
 fn daily_scroll_down_cursor_stays_within_margin() {
-    let db = test_db();
-    let mut app = app_with_daily_tasks(&db, 30);
+    let mut db = test_db();
+    let mut app = app_with_daily_tasks(&mut db, 30);
 
     // Navigate down many times, triggering scroll at each step
     let mut offsets_down = Vec::new();
@@ -97,8 +97,8 @@ fn daily_scroll_down_cursor_stays_within_margin() {
 
 #[test]
 fn daily_scroll_up_cursor_stays_within_margin() {
-    let db = test_db();
-    let mut app = app_with_daily_tasks(&db, 30);
+    let mut db = test_db();
+    let mut app = app_with_daily_tasks(&mut db, 30);
 
     // Go to the bottom first
     for _ in 0..25 {
@@ -143,8 +143,8 @@ fn daily_scroll_up_cursor_stays_within_margin() {
 
 #[test]
 fn daily_scroll_cursor_stays_within_margin() {
-    let db = test_db();
-    let mut app = app_with_daily_tasks(&db, 30);
+    let mut db = test_db();
+    let mut app = app_with_daily_tasks(&mut db, 30);
     let height: usize = 20; // TestBackend height
     let _margin: usize = 3;
 
@@ -197,8 +197,8 @@ fn daily_scroll_cursor_stays_within_margin() {
 
 #[test]
 fn daily_nav_skips_headers() {
-    let db = test_db();
-    let mut app = app_with_daily_tasks(&db, 6);
+    let mut db = test_db();
+    let mut app = app_with_daily_tasks(&mut db, 6);
 
     // Find the first task entry
     let first_task = app
@@ -237,8 +237,8 @@ fn daily_nav_skips_headers() {
 
 #[test]
 fn daily_nav_count_multiplier() {
-    let db = test_db();
-    let mut app = app_with_daily_tasks(&db, 15);
+    let mut db = test_db();
+    let mut app = app_with_daily_tasks(&mut db, 15);
 
     let first_task = app
         .daily_entries
@@ -260,8 +260,8 @@ fn daily_nav_count_multiplier() {
 
 #[test]
 fn daily_nav_g_jumps_to_end() {
-    let db = test_db();
-    let mut app = app_with_daily_tasks(&db, 10);
+    let mut db = test_db();
+    let mut app = app_with_daily_tasks(&mut db, 10);
 
     let first_task = app
         .daily_entries
@@ -286,8 +286,8 @@ fn daily_nav_g_jumps_to_end() {
 
 #[test]
 fn daily_view_renders_without_panic() {
-    let db = test_db();
-    let mut app = app_with_daily_tasks(&db, 10);
+    let mut db = test_db();
+    let mut app = app_with_daily_tasks(&mut db, 10);
 
     let backend = TestBackend::new(120, 30);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -302,8 +302,8 @@ fn daily_view_renders_without_panic() {
 
 #[test]
 fn full_ui_renders_without_panic() {
-    let db = test_db();
-    let mut app = App::new(&db);
+    let mut db = test_db();
+    let mut app = App::new(&mut db);
     app.refresh_all().unwrap();
 
     let backend = TestBackend::new(120, 40);
@@ -342,7 +342,7 @@ fn full_ui_renders_without_panic() {
 
 #[test]
 fn daily_view_renders_task_titles() {
-    let db = test_db();
+    let mut db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_task(
         "Buy groceries",
@@ -369,7 +369,7 @@ fn daily_view_renders_task_titles() {
     )
     .unwrap();
 
-    let mut app = App::new(&db);
+    let mut app = App::new(&mut db);
     app.tasks_view = TasksView::Daily;
     app.refresh_daily().unwrap();
 
@@ -393,7 +393,7 @@ fn daily_view_renders_task_titles() {
 
 #[test]
 fn recurring_mark_rendered() {
-    let db = test_db();
+    let mut db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "Daily standup",
@@ -408,7 +408,7 @@ fn recurring_mark_rendered() {
     )
     .unwrap();
 
-    let mut app = App::new(&db);
+    let mut app = App::new(&mut db);
     app.tasks_view = TasksView::Panes;
     app.refresh_all().unwrap();
 
@@ -427,8 +427,8 @@ fn recurring_mark_rendered() {
 
 #[test]
 fn pane_navigation_wraps() {
-    let db = test_db();
-    let mut app = App::new(&db);
+    let mut db = test_db();
+    let mut app = App::new(&mut db);
     app.tasks_view = TasksView::Panes;
     app.refresh_all().unwrap();
 
@@ -457,8 +457,8 @@ fn handle_tasks_key_wrapper(app: &mut App, code: KeyCode) {
 
 #[test]
 fn view_cycling_with_v() {
-    let db = test_db();
-    let mut app = App::new(&db);
+    let mut db = test_db();
+    let mut app = App::new(&mut db);
     app.tasks_view = TasksView::Panes;
     app.refresh_all().unwrap();
 
@@ -482,7 +482,7 @@ fn view_cycling_with_v() {
 
 #[test]
 fn delete_task_records_tombstone_prevents_merge() {
-    let db = test_db();
+    let mut db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_task(
         "Delete me",
@@ -543,7 +543,7 @@ fn delete_task_records_tombstone_prevents_merge() {
 
 #[test]
 fn done_pane_shows_stats() {
-    let db = test_db();
+    let mut db = test_db();
     let today = chrono::Local::now().date_naive();
 
     // Create and complete some tasks
@@ -567,7 +567,7 @@ fn done_pane_shows_stats() {
         db.complete_task_by_id(&task.id).unwrap();
     }
 
-    let mut app = App::new(&db);
+    let mut app = App::new(&mut db);
     app.tasks_view = TasksView::Panes;
     app.refresh_all().unwrap();
 

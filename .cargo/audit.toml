@@ -1,19 +1,13 @@
 # cargo-audit configuration
 #
-# The advisories below all concern `rustls-webpki 0.101.7` and `0.102.8`,
-# which are transitively pinned by:
+# The advisories below concern `rustls-webpki 0.101.7`,
+# transitively pinned by:
 #   - aws-smithy-http-client 1.1.12 (latest) -> rustls 0.21.12 -> rustls-webpki 0.101.7
-#   - libsql 0.9.30 (latest)                 -> hyper-rustls 0.25.0 -> rustls 0.22.4 -> rustls-webpki 0.102.8
 #
-# Both direct dependencies are at their latest published versions; we cannot
-# upgrade further without [patch.crates-io] overrides, which would risk
-# runtime incompatibility. Ignored here with the understanding that we
-# revisit whenever aws-config or libsql publish a new release that moves
-# to a newer rustls. `rustls-webpki 0.103.12` (the fixed line) is already
-# in the tree for the rustls 0.23 path, which is what dodo's own ureq/TLS
-# usage goes through.
+# libsql replaced by turso crate (2026-04-25), removing the 0.102.8 path.
+# Revisit whenever aws-config publishes a new release moving to newer rustls.
 #
-# Last reviewed: 2026-04-17
+# Last reviewed: 2026-04-25
 
 [advisories]
 ignore = [
