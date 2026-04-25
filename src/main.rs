@@ -30,7 +30,7 @@ fn main() -> Result<()> {
 
     // Initialize database (always local — sync is background-only)
     let _ = Database::clean_sync_metadata(); // clean up old replica metadata from dodo.db
-    let mut db = Database::new()?;
+    let db = Database::new()?;
 
     // Startup backup-age check — auto-backup silently if overdue
     if let Ok(Some(_)) = backup::check_backup_age(&config.backup) {
@@ -40,7 +40,7 @@ fn main() -> Result<()> {
     }
 
     match cli.command {
-        None => tui::run_tui(&mut db),
+        None => tui::run_tui(&db),
         Some(Commands::Help) => {
             use clap::CommandFactory;
             Cli::command().print_help()?;
@@ -49,21 +49,21 @@ fn main() -> Result<()> {
         }
         Some(Commands::Add(args)) => cmd_add(&db, args),
         Some(Commands::List(args)) => cmd_list(&db, args),
-        Some(Commands::Start(args)) => cmd_start(&mut db, args),
-        Some(Commands::Done(args)) => cmd_done(&mut db, args),
+        Some(Commands::Start(args)) => cmd_start(&db, args),
+        Some(Commands::Done(args)) => cmd_done(&db, args),
         Some(Commands::Status) => cmd_status(&db),
         Some(Commands::Remove(args)) => cmd_remove(&db, args),
         Some(Commands::Move(args)) => cmd_move(&db, args),
-        Some(Commands::Edit(args)) => cmd_edit(&mut db, args),
+        Some(Commands::Edit(args)) => cmd_edit(&db, args),
         Some(Commands::Note(args)) => cmd_note(&db, args),
-        Some(Commands::Recurring(args)) => cmd_recurring(&mut db, args),
+        Some(Commands::Recurring(args)) => cmd_recurring(&db, args),
         Some(Commands::Config(args)) => cmd_config(args),
         Some(Commands::Report(args)) => cmd_report(&db, args),
         Some(Commands::Sync(args)) => cmd_sync(&db, args),
         Some(Commands::Backup(args)) => cmd_backup(args),
         Some(Commands::Email(args)) => cmd_email(&db, args),
         Some(Commands::Update) => update::check_update(),
-        Some(Commands::Tui) => tui::run_tui(&mut db),
+        Some(Commands::Tui) => tui::run_tui(&db),
     }
 }
 
@@ -270,7 +270,7 @@ fn cmd_list(db: &Database, args: dodo::cli::ListArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_start(db: &mut Database, args: dodo::cli::StartArgs) -> Result<()> {
+fn cmd_start(db: &Database, args: dodo::cli::StartArgs) -> Result<()> {
     if args.task.is_empty() {
         db.pause_timer()?;
         println!("Timer paused.");
@@ -282,7 +282,7 @@ fn cmd_start(db: &mut Database, args: dodo::cli::StartArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_done(db: &mut Database, args: dodo::cli::DoneArgs) -> Result<()> {
+fn cmd_done(db: &Database, args: dodo::cli::DoneArgs) -> Result<()> {
     let query = args.task.join(" ");
 
     if args.undo {
@@ -372,7 +372,7 @@ fn cmd_move(db: &Database, args: dodo::cli::MoveArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_edit(db: &mut Database, args: dodo::cli::EditArgs) -> Result<()> {
+fn cmd_edit(db: &Database, args: dodo::cli::EditArgs) -> Result<()> {
     let raw_input = args.args.join(" ");
     let parsed = parse_notation(&raw_input);
 
@@ -460,7 +460,7 @@ fn cmd_note(db: &Database, args: dodo::cli::NoteArgs) -> Result<()> {
     Ok(())
 }
 
-fn cmd_recurring(db: &mut Database, args: dodo::cli::RecurringArgs) -> Result<()> {
+fn cmd_recurring(db: &Database, args: dodo::cli::RecurringArgs) -> Result<()> {
     match args.action {
         None => {
             let templates = db.list_templates()?;

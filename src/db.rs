@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
-use turso::{params, Connection, Value};
+use libsql::{params, Connection, Value};
 use std::path::PathBuf;
 use std::sync::mpsc;
 
@@ -11,14 +11,13 @@ use crate::session::Session;
 use crate::task::{Area, Task, TaskStatus};
 
 pub struct Database {
-    #[allow(dead_code)]
-    db: turso::Database,
+    db: libsql::Database,
     conn: Connection,
     rt: tokio::runtime::Runtime,
 }
 
 // Helper to extract Option<String> from a row value
-fn val_opt_string(row: &turso::Row, idx: usize) -> Result<Option<String>> {
+fn val_opt_string(row: &libsql::Row, idx: i32) -> Result<Option<String>> {
     match row.get_value(idx)? {
         Value::Null => Ok(None),
         Value::Text(s) => Ok(Some(s)),
@@ -26,7 +25,7 @@ fn val_opt_string(row: &turso::Row, idx: usize) -> Result<Option<String>> {
     }
 }
 
-fn val_opt_i64(row: &turso::Row, idx: usize) -> Result<Option<i64>> {
+fn val_opt_i64(row: &libsql::Row, idx: i32) -> Result<Option<i64>> {
     match row.get_value(idx)? {
         Value::Null => Ok(None),
         Value::Integer(n) => Ok(Some(n)),
@@ -34,7 +33,7 @@ fn val_opt_i64(row: &turso::Row, idx: usize) -> Result<Option<i64>> {
     }
 }
 
-fn val_opt_bool(row: &turso::Row, idx: usize) -> Result<Option<bool>> {
+fn val_opt_bool(row: &libsql::Row, idx: i32) -> Result<Option<bool>> {
     match row.get_value(idx)? {
         Value::Null => Ok(None),
         Value::Integer(n) => Ok(Some(n != 0)),
@@ -42,15 +41,15 @@ fn val_opt_bool(row: &turso::Row, idx: usize) -> Result<Option<bool>> {
     }
 }
 
-fn val_string(row: &turso::Row, idx: usize) -> Result<String> {
+fn val_string(row: &libsql::Row, idx: i32) -> Result<String> {
     Ok(row.get::<String>(idx)?)
 }
 
-fn val_i64(row: &turso::Row, idx: usize) -> Result<i64> {
+fn val_i64(row: &libsql::Row, idx: i32) -> Result<i64> {
     Ok(row.get::<i64>(idx)?)
 }
 
-fn val_bool(row: &turso::Row, idx: usize) -> Result<bool> {
+fn val_bool(row: &libsql::Row, idx: i32) -> Result<bool> {
     match row.get_value(idx)? {
         Value::Integer(n) => Ok(n != 0),
         _ => Ok(false),
@@ -75,7 +74,7 @@ impl Database {
             .context("Failed to create tokio runtime")?;
         let path_str = path.to_str().context("Invalid database path")?.to_string();
         let db = rt
-            .block_on(async { turso::Builder::new_local(&path_str).build().await })
+            .block_on(async { libsql::Builder::new_local(&path_str).build().await })
             .context("Failed to open database")?;
         let conn = db.connect().context("Failed to connect to database")?;
         let database = Self { db, conn, rt };
@@ -89,7 +88,7 @@ impl Database {
             .build()
             .context("Failed to create tokio runtime")?;
         let db = rt
-            .block_on(async { turso::Builder::new_local(":memory:").build().await })
+            .block_on(async { libsql::Builder::new_local(":memory:").build().await })
             .context("Failed to open in-memory database")?;
         let conn = db.connect().context("Failed to connect to database")?;
         let database = Self { db, conn, rt };
@@ -107,7 +106,7 @@ impl Database {
 
     /// List all auxiliary files for the database (everything matching dodo.db*
     /// except the db itself and .pre-sync backup). Includes WAL, SHM, and any
-    /// sync metadata files.
+    /// libsql sync metadata files (like -info, -client_wal, etc.).
     fn list_auxiliary_db_files() -> Result<Vec<PathBuf>> {
         let db_path = Self::db_path()?;
         let parent = db_path
@@ -421,12 +420,16 @@ impl Database {
         Ok(num_id)
     }
 
-    /// Perform a sync with Turso Cloud using push/pull.
-    /// Opens the main DB with sync capabilities, pulls remote CDC changes,
-    /// pushes local CDC changes, then runs dedup cleanup.
+    /// Perform a full bidirectional sync with a Turso remote replica.
+    /// This is a standalone operation that creates its own DB connections.
     pub fn do_remote_sync(url: &str, token: &str) -> Result<()> {
         let db_path = Self::db_path()?;
-        let db_path_str = db_path.to_str().context("Invalid database path")?.to_string();
+        let sync_path = Self::sync_db_path()?;
+        std::fs::create_dir_all(
+            sync_path
+                .parent()
+                .context("Sync DB path has no parent directory")?,
+        )?;
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -435,35 +438,70 @@ impl Database {
 
         let url = url.to_string();
         let token = token.to_string();
+        let sync_path_str = sync_path
+            .to_str()
+            .context("Invalid sync DB path")?
+            .to_string();
 
-        // Open main DB with sync capabilities
+        // 1. Open the remote replica (sync DB)
         let sync_db = rt
             .block_on(async {
-                turso::sync::Builder::new_remote(&db_path_str)
-                    .with_remote_url(&url)
-                    .with_auth_token(&token)
-                    .bootstrap_if_empty(true)
+                libsql::Builder::new_remote_replica(sync_path_str, url, token)
+                    .read_your_writes(false)
                     .build()
                     .await
             })
-            .context("Failed to open sync database")?;
+            .context("Failed to open sync replica")?;
+        let sync_conn = sync_db
+            .connect()
+            .context("Failed to connect to sync replica")?;
 
-        // Pull remote changes (CDC-based, applied directly)
+        // 2. Pull from Turso
         rt.block_on(async {
-            sync_db.pull().await.context("Failed to pull from Turso")?;
+            sync_db.sync().await.context("Failed to pull from Turso")?;
             Ok::<(), anyhow::Error>(())
         })?;
 
-        // Push local changes
-        rt.block_on(async {
-            sync_db.push().await.context("Failed to push to Turso")?;
-            Ok::<(), anyhow::Error>(())
-        })?;
+        // 3. Run migrations on sync DB
+        let sync_database = Self {
+            db: sync_db,
+            conn: sync_conn,
+            rt,
+        };
+        sync_database.migrate()?;
 
-        // Dedup: if two machines both generated a recurring instance while offline,
-        // we may now have duplicates after pull. Keep earliest-created.
+        // 4. Open local DB (second connection)
         let local_db = Self::open(&db_path)?;
+
+        // 5. Export from sync DB → merge into local (remote changes land locally)
+        let (remote_tasks, remote_sessions) = sync_database.export_all_data()?;
+        if !remote_tasks.is_empty() || !remote_sessions.is_empty() {
+            local_db.merge_remote_data(&remote_tasks, &remote_sessions)?;
+        }
+
+        // 6. Export from local → merge into sync DB (local changes pushed to Turso)
+        let (local_tasks, local_sessions) = local_db.export_all_data()?;
+        if !local_tasks.is_empty() || !local_sessions.is_empty() {
+            sync_database.merge_remote_data(&local_tasks, &local_sessions)?;
+        }
+
+        // 6b. Propagate tombstones: delete locally-deleted tasks from sync DB
+        local_db.propagate_tombstones(&sync_database)?;
+
+        // 6c. Dedup: if two machines both generated an instance for the same template while
+        // offline, we may now have multiple Pending instances for one template. Keep the
+        // earliest-created one and tombstone+delete the rest.
         local_db.dedup_active_recurring_instances()?;
+
+        // 7. Push to Turso
+        sync_database.rt.block_on(async {
+            sync_database
+                .db
+                .sync()
+                .await
+                .context("Failed to push to Turso")?;
+            Ok::<(), anyhow::Error>(())
+        })?;
 
         Ok(())
     }
@@ -479,7 +517,7 @@ impl Database {
         rx
     }
 
-    /// Test sync connection by attempting to open a sync-capable DB in a temp dir.
+    /// Test sync connection by attempting to open a remote replica in a temp dir.
     pub fn test_sync_connection(url: String, token: String) -> Result<()> {
         let tmp_dir = std::env::temp_dir().join("dodo-sync-test");
         std::fs::create_dir_all(&tmp_dir).context("Failed to create temp dir for sync test")?;
@@ -494,16 +532,15 @@ impl Database {
 
             let sync_db = rt
                 .block_on(async {
-                    turso::sync::Builder::new_remote(&tmp_path)
-                        .with_remote_url(&url)
-                        .with_auth_token(&token)
+                    libsql::Builder::new_remote_replica(tmp_path.clone(), url, token)
+                        .read_your_writes(false)
                         .build()
                         .await
                 })
                 .context("Failed to connect to Turso")?;
 
             rt.block_on(async {
-                sync_db.pull().await.context("Failed to pull from Turso")?;
+                sync_db.sync().await.context("Failed to sync with Turso")?;
                 Ok::<(), anyhow::Error>(())
             })?;
 
@@ -514,6 +551,61 @@ impl Database {
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
         result
+    }
+
+    /// Delete tombstoned tasks from another database (used during sync to propagate deletes).
+    /// Operates on the sync replica DB (not the main DB). Before hard-deleting sessions,
+    /// snapshots any accumulated elapsed time into the task's elapsed_snapshot column so
+    /// that time data is preserved even after the sessions are deleted.
+    fn propagate_tombstones(&self, target: &Database) -> Result<()> {
+        self.rt
+            .block_on(async {
+                let mut rows = self.conn.query("SELECT id FROM deleted_tasks", ()).await?;
+                let mut ids = Vec::new();
+                while let Some(row) = rows.next().await? {
+                    ids.push(val_string(&row, 0)?);
+                }
+                Ok::<Vec<String>, anyhow::Error>(ids)
+            })?
+            .into_iter()
+            .try_for_each(|id| {
+                target.rt.block_on(async {
+                    // Snapshot session elapsed into elapsed_snapshot before deleting sessions.
+                    // This preserves time data for reporting even after the sessions are hard-deleted.
+                    let affected = target
+                        .conn
+                        .execute(
+                            "UPDATE tasks SET elapsed_snapshot = COALESCE(
+                                (SELECT SUM(duration) FROM sessions WHERE sessions.task_id = tasks.id),
+                                elapsed_snapshot,
+                                0
+                             )
+                             WHERE id = ?1
+                               AND EXISTS (SELECT 1 FROM sessions WHERE task_id = ?1 AND duration > 0)",
+                            params![id.clone()],
+                        )
+                        .await?;
+                    if affected > 0 {
+                        eprintln!(
+                            "Warning: preserved elapsed_snapshot for {} tombstoned task(s) before deletion",
+                            affected
+                        );
+                    }
+
+                    target
+                        .conn
+                        .execute(
+                            "DELETE FROM sessions WHERE task_id = ?1",
+                            params![id.clone()],
+                        )
+                        .await?;
+                    target
+                        .conn
+                        .execute("DELETE FROM tasks WHERE id = ?1", params![id.clone()])
+                        .await?;
+                    Ok::<(), anyhow::Error>(())
+                })
+            })
     }
 
     /// Deduplicate active recurring instances after a sync merge.
@@ -1120,7 +1212,7 @@ impl Database {
         anyhow::bail!("No completed task found matching '{}'", query);
     }
 
-    pub fn start_timer(&mut self, query: &str) -> Result<(String, i64)> {
+    pub fn start_timer(&self, query: &str) -> Result<(String, i64)> {
         // Pause any running task first
         self.pause_timer()?;
 
@@ -1158,10 +1250,9 @@ impl Database {
         Ok((title, num_id))
     }
 
-    pub fn pause_timer(&mut self) -> Result<()> {
-        let conn = &mut self.conn;
+    pub fn pause_timer(&self) -> Result<()> {
         self.rt.block_on(async {
-            let tx = conn.transaction().await?;
+            let tx = self.conn.transaction().await?;
 
             // Find running task
             let mut rows = tx
@@ -1198,10 +1289,9 @@ impl Database {
         Ok(())
     }
 
-    pub fn complete_task(&mut self) -> Result<Option<(String, i64)>> {
-        let conn = &mut self.conn;
+    pub fn complete_task(&self) -> Result<Option<(String, i64)>> {
         let result = self.rt.block_on(async {
-            let tx = conn.transaction().await?;
+            let tx = self.conn.transaction().await?;
 
             // Find running or paused task
             let mut rows = tx.query(
@@ -1540,10 +1630,9 @@ impl Database {
     /// Set the total elapsed time for a task by adding a manual correction session.
     /// Any currently-running session is stopped first. The correction session adjusts
     /// the sum of all sessions to exactly `target_seconds`.
-    pub fn set_elapsed_seconds_by_id(&mut self, task_id: &str, target_seconds: i64) -> Result<()> {
-        let conn = &mut self.conn;
+    pub fn set_elapsed_seconds_by_id(&self, task_id: &str, target_seconds: i64) -> Result<()> {
         self.rt.block_on(async {
-            let tx = conn.transaction().await?;
+            let tx = self.conn.transaction().await?;
 
             // Stop any running session for this task
             if let Some(mut session) = get_active_session(&tx, task_id).await? {
@@ -1805,10 +1894,9 @@ impl Database {
         })
     }
 
-    pub fn complete_task_by_id(&mut self, task_id: &str) -> Result<()> {
-        let conn = &mut self.conn;
+    pub fn complete_task_by_id(&self, task_id: &str) -> Result<()> {
         self.rt.block_on(async {
-            let tx = conn.transaction().await?;
+            let tx = self.conn.transaction().await?;
 
             if let Some(mut session) = get_active_session(&tx, task_id).await? {
                 if session.is_running() {
@@ -2444,7 +2532,7 @@ impl Database {
     /// Update fields on a recurring template. If the recurrence pattern changes to a new value,
     /// all active (non-Done) instances are tombstoned and deleted so a fresh instance is generated
     /// with the new cadence. Editing recurrence to the same value is a no-op for instances.
-    pub fn update_template_fields(&mut self, template_id: &str, input: &ParsedInput) -> Result<()> {
+    pub fn update_template_fields(&self, template_id: &str, input: &ParsedInput) -> Result<()> {
         // Detect whether recurrence is actually changing before doing the update
         let recurrence_changed = if let Some(ref new_rec) = input.recurrence {
             let current_rec: Option<String> = self.rt.block_on(async {
@@ -2539,16 +2627,11 @@ impl Database {
                 )
                 .await?;
 
-            Ok::<(), anyhow::Error>(())
-        })?;
-
-        // If recurrence changed, tombstone + delete all active instances so a fresh
-        // instance is generated with the new cadence. Wrapped in a transaction so
-        // all mutating steps are atomic: either all applied or none.
-        if recurrence_changed {
-            let conn = &mut self.conn;
-            self.rt.block_on(async {
-                let tx = conn.transaction().await?;
+            // If recurrence changed, tombstone + delete all active instances so a fresh
+            // instance is generated with the new cadence. Wrapped in a transaction so
+            // all mutating steps are atomic: either all applied or none.
+            if recurrence_changed {
+                let tx = self.conn.transaction().await?;
                 let now = Utc::now().to_rfc3339();
                 tx.execute(
                     "INSERT OR IGNORE INTO deleted_tasks (id, deleted_at)
@@ -2569,9 +2652,10 @@ impl Database {
                 )
                 .await?;
                 tx.commit().await?;
-                Ok::<(), anyhow::Error>(())
-            })?;
-        }
+            }
+
+            Ok::<(), anyhow::Error>(())
+        })?;
 
         // After clearing stale instances, generate a fresh one with the new cadence
         if recurrence_changed {
@@ -2586,7 +2670,7 @@ impl Database {
 
 // ── Standalone helpers ──────────────────────────────────────────────
 
-fn row_to_task(row: &turso::Row) -> Result<Task> {
+fn row_to_task(row: &libsql::Row) -> Result<Task> {
     Ok(Task {
         id: val_string(row, 0)?,
         num_id: val_opt_i64(row, 1)?,
@@ -2636,7 +2720,7 @@ async fn get_active_session(conn: &Connection, task_id: &str) -> Result<Option<S
     }
 }
 
-fn row_to_session(row: &turso::Row) -> Result<Session> {
+fn row_to_session(row: &libsql::Row) -> Result<Session> {
     Ok(Session {
         id: val_string(row, 0)?,
         task_id: val_string(row, 1)?,

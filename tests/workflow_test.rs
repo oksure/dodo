@@ -10,7 +10,7 @@ fn test_db() -> Database {
 
 #[test]
 fn add_returns_incrementing_numeric_ids() {
-    let mut db = test_db();
+    let db = test_db();
     let id1 = db
         .add_task(
             "Buy groceries",
@@ -57,7 +57,7 @@ fn add_returns_incrementing_numeric_ids() {
 
 #[test]
 fn list_shows_today_tasks() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Task A",
         Area::Today,
@@ -103,7 +103,7 @@ fn list_shows_today_tasks() {
 
 #[test]
 fn start_and_done_completes_task() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Buy groceries",
         Area::Today,
@@ -134,7 +134,7 @@ fn start_and_done_completes_task() {
 
 #[test]
 fn pomodoro_start_pause_resume() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Draft blog post",
         Area::Today,
@@ -167,7 +167,7 @@ fn pomodoro_start_pause_resume() {
 
 #[test]
 fn starting_new_task_pauses_current() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Task A",
         Area::Today,
@@ -213,7 +213,7 @@ fn starting_new_task_pauses_current() {
 fn gtd_four_horizons() {
     use chrono::Local;
 
-    let mut db = test_db();
+    let db = test_db();
     let today = Local::now().date_naive();
     let next_week = today + chrono::Duration::days(3);
     let far_future = today + chrono::Duration::days(30);
@@ -276,7 +276,7 @@ fn gtd_four_horizons() {
 
 #[test]
 fn gtd_contexts_stored_and_displayed() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Call dentist",
         Area::Today,
@@ -315,7 +315,7 @@ fn gtd_contexts_stored_and_displayed() {
 
 #[test]
 fn gtd_projects_stored_and_displayed() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Fix bug",
         Area::Today,
@@ -339,7 +339,7 @@ fn gtd_projects_stored_and_displayed() {
 
 #[test]
 fn eisenhower_quadrants() {
-    let mut db = test_db();
+    let db = test_db();
 
     // Urgent+Important → today
     db.add_task(
@@ -390,7 +390,7 @@ fn eisenhower_quadrants() {
 
 #[test]
 fn freelance_multiple_projects() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Design landing page",
         Area::Today,
@@ -437,7 +437,7 @@ fn freelance_multiple_projects() {
 
 #[test]
 fn start_by_numeric_id() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Task Alpha",
         Area::Today,
@@ -482,7 +482,7 @@ fn start_by_numeric_id() {
 
 #[test]
 fn delete_by_numeric_id() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Task Alpha",
         Area::Today,
@@ -517,7 +517,7 @@ fn delete_by_numeric_id() {
 
 #[test]
 fn numeric_id_not_found_falls_back_to_fuzzy() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Task 42 is special",
         Area::Today,
@@ -542,7 +542,7 @@ fn numeric_id_not_found_falls_back_to_fuzzy() {
 
 #[test]
 fn fuzzy_start_by_substring() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Write quarterly report",
         Area::Today,
@@ -575,7 +575,7 @@ fn fuzzy_start_by_substring() {
 
 #[test]
 fn fuzzy_prefers_better_match() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Overwrite config",
         Area::Today,
@@ -609,7 +609,7 @@ fn fuzzy_prefers_better_match() {
 
 #[test]
 fn fuzzy_no_match_errors() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Buy groceries",
         Area::Today,
@@ -629,7 +629,7 @@ fn fuzzy_no_match_errors() {
     // picks it. This is by design — fuzzy always returns something if
     // tasks exist. Only fails on empty DB.
     // So test the truly empty case:
-    let mut db2 = test_db();
+    let db2 = test_db();
     let result = db2.start_timer("anything");
     assert!(result.is_err());
 }
@@ -638,7 +638,7 @@ fn fuzzy_no_match_errors() {
 
 #[test]
 fn academic_multi_area_with_projects() {
-    let mut db = test_db();
+    let db = test_db();
 
     // Long-term reading
     db.add_task(
@@ -701,7 +701,7 @@ fn academic_multi_area_with_projects() {
 
 #[test]
 fn done_tasks_leave_active_lists() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Task A",
         Area::Today,
@@ -754,7 +754,7 @@ fn session_elapsed_seconds_works() {
 
 #[test]
 fn pause_records_duration() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Timed task",
         Area::Today,
@@ -782,7 +782,7 @@ fn pause_records_duration() {
 
 #[test]
 fn task_with_estimate_stored_and_displayed() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Design mockup",
         Area::Today,
@@ -805,7 +805,7 @@ fn task_with_estimate_stored_and_displayed() {
 
 #[test]
 fn elapsed_time_shows_in_list() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Track me",
         Area::Today,
@@ -831,7 +831,7 @@ fn elapsed_time_shows_in_list() {
 
 #[test]
 fn note_append_and_retrieve() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Buy milk",
         Area::Today,
@@ -864,7 +864,7 @@ fn note_append_and_retrieve() {
 
 #[test]
 fn note_clear() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Task with notes",
         Area::Today,
@@ -890,7 +890,7 @@ fn note_clear() {
 fn edit_updates_task_fields() {
     use dodo::notation::parse_notation;
 
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Fix bug",
         Area::Today,
@@ -917,7 +917,7 @@ fn edit_updates_task_fields() {
 fn edit_updates_area() {
     use dodo::notation::parse_notation;
 
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Move me",
         Area::Today,
@@ -944,7 +944,7 @@ fn edit_updates_area() {
 
 #[test]
 fn multiple_contexts_stored() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Team meeting",
         Area::Today,
@@ -970,7 +970,7 @@ fn multiple_contexts_stored() {
 
 #[test]
 fn tags_stored_and_displayed() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Fix critical issue",
         Area::Today,
@@ -998,7 +998,7 @@ fn tags_stored_and_displayed() {
 fn deadline_and_scheduled_stored() {
     use chrono::NaiveDate;
 
-    let mut db = test_db();
+    let db = test_db();
     let dl = NaiveDate::from_ymd_opt(2025, 6, 15).unwrap();
     let sc = NaiveDate::from_ymd_opt(2025, 6, 10).unwrap();
     db.add_task(
@@ -1023,7 +1023,7 @@ fn deadline_and_scheduled_stored() {
 
 #[test]
 fn priority_stored_and_displayed() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Critical bug",
         Area::Today,
@@ -1048,7 +1048,7 @@ fn priority_stored_and_displayed() {
 
 #[test]
 fn recurring_add_template_creates_template_and_instance() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     let num_id = db
         .add_template(
@@ -1082,7 +1082,7 @@ fn recurring_add_template_creates_template_and_instance() {
 
 #[test]
 fn recurring_templates_excluded_from_normal_listings() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "standup",
@@ -1117,7 +1117,7 @@ fn recurring_templates_excluded_from_normal_listings() {
 
 #[test]
 fn recurring_delete_template_removes_template_and_active_instance() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "standup",
@@ -1148,7 +1148,7 @@ fn recurring_delete_template_removes_template_and_active_instance() {
 
 #[test]
 fn recurring_complete_instance_generates_next() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "standup",
@@ -1188,7 +1188,7 @@ fn recurring_complete_instance_generates_next() {
 
 #[test]
 fn recurring_one_active_instance_constraint() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "standup",
@@ -1217,7 +1217,7 @@ fn recurring_complete_early_day15_advances_to_next_month() {
     // scheduled=today before complete_recurring_instance read it, so
     // next_occurrence("day15", April 10) stayed in April.
     use chrono::NaiveDate;
-    let mut db = test_db();
+    let db = test_db();
     let target = NaiveDate::from_ymd_opt(2026, 4, 15).unwrap();
     db.add_template(
         "haircut",
@@ -1259,7 +1259,7 @@ fn recurring_complete_early_day15_advances_to_next_month() {
 
 #[test]
 fn recurring_generate_after_delete_recreates() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "standup",
@@ -1295,7 +1295,7 @@ fn recurring_generate_after_delete_recreates() {
 
 #[test]
 fn recurring_pause_stops_generation() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "standup",
@@ -1342,7 +1342,7 @@ fn recurring_pause_stops_generation() {
 
 #[test]
 fn recurring_history_shows_completed_instances() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "standup",
@@ -1378,7 +1378,7 @@ fn recurring_history_shows_completed_instances() {
 
 #[test]
 fn recurring_resolve_template_by_name() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_template(
         "standup",
@@ -1400,7 +1400,7 @@ fn recurring_resolve_template_by_name() {
 
 #[test]
 fn recurring_resolve_template_by_num_id() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     let num_id = db
         .add_template(
@@ -1425,7 +1425,7 @@ fn recurring_resolve_template_by_num_id() {
 
 #[test]
 fn update_notes_by_id_sets_notes() {
-    let mut db = test_db();
+    let db = test_db();
     let num_id = db
         .add_task(
             "test task",
@@ -1450,7 +1450,7 @@ fn update_notes_by_id_sets_notes() {
 
 #[test]
 fn update_notes_by_id_empty_clears_notes() {
-    let mut db = test_db();
+    let db = test_db();
     let num_id = db
         .add_task(
             "test task",
@@ -1477,7 +1477,7 @@ fn update_notes_by_id_empty_clears_notes() {
 
 #[test]
 fn update_notes_by_id_replaces_existing() {
-    let mut db = test_db();
+    let db = test_db();
     let num_id = db
         .add_task(
             "test task",
@@ -1505,7 +1505,7 @@ fn update_notes_by_id_replaces_existing() {
 
 #[test]
 fn export_import_roundtrip_preserves_all_data() {
-    let mut db1 = test_db();
+    let db1 = test_db();
 
     // Add tasks with various field types
     let today = chrono::Local::now().date_naive();
@@ -1581,7 +1581,7 @@ fn export_import_roundtrip_preserves_all_data() {
     assert!(!sessions.is_empty());
 
     // Import into a fresh database
-    let mut db2 = test_db();
+    let db2 = test_db();
     db2.import_all_data(&tasks, &sessions).unwrap();
 
     // Verify tasks
@@ -1634,7 +1634,7 @@ fn export_import_roundtrip_preserves_all_data() {
 
 #[test]
 fn done_specific_task_by_id() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Task A",
         Area::Today,
@@ -1674,7 +1674,7 @@ fn done_specific_task_by_id() {
 
 #[test]
 fn done_specific_task_by_fuzzy() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Fix login bug",
         Area::Today,
@@ -1710,7 +1710,7 @@ fn done_specific_task_by_fuzzy() {
 
 #[test]
 fn undone_reopens_task() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Write tests",
         Area::Today,
@@ -1745,7 +1745,7 @@ fn undone_reopens_task() {
 
 #[test]
 fn move_task_to_week() {
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_task(
         "Weekly review",
@@ -1770,7 +1770,7 @@ fn move_task_to_week() {
 
 #[test]
 fn move_task_to_today() {
-    let mut db = test_db();
+    let db = test_db();
     let future = chrono::Local::now().date_naive() + chrono::Duration::days(10);
     db.add_task(
         "Long term goal",
@@ -1801,7 +1801,7 @@ fn move_task_to_today() {
 
 #[test]
 fn report_empty_range() {
-    let mut db = test_db();
+    let db = test_db();
     let range = dodo::cli::ReportRange::Month;
     let (from, to) = range.date_range();
 
@@ -1813,7 +1813,7 @@ fn report_empty_range() {
 
 #[test]
 fn note_delete_line() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Note task",
         Area::Today,
@@ -1842,7 +1842,7 @@ fn note_delete_line() {
 
 #[test]
 fn note_edit_line() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Note task",
         Area::Today,
@@ -1871,7 +1871,7 @@ fn note_edit_line() {
 
 #[test]
 fn report_with_data() {
-    let mut db = test_db();
+    let db = test_db();
     db.add_task(
         "Report task",
         Area::Today,
@@ -1902,7 +1902,7 @@ fn report_with_data() {
 fn merge_remote_newer_wins() {
     use chrono::{Duration, Utc};
 
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_task(
         "Original title",
@@ -1936,7 +1936,7 @@ fn merge_remote_newer_wins() {
 fn merge_local_newer_wins() {
     use chrono::{Duration, Utc};
 
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_task(
         "Local title",
@@ -1971,7 +1971,7 @@ fn merge_new_remote_task_no_conflict() {
     use chrono::Utc;
     use dodo::task::Task;
 
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_task(
         "Local task",
@@ -2026,7 +2026,7 @@ fn merge_num_id_conflict_earlier_wins() {
     use chrono::{Duration, Utc};
     use dodo::task::Task;
 
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     // Local task created "now" with num_id=1
     db.add_task(
@@ -2084,7 +2084,7 @@ fn merge_sessions_ignore_duplicates() {
     use chrono::Utc;
     use dodo::session::Session;
 
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_task(
         "Task",
@@ -2132,7 +2132,7 @@ fn deleted_task_not_resurrected_by_merge() {
     use chrono::Utc;
     use dodo::task::Task;
 
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
     db.add_task(
         "Will be deleted",
@@ -2193,7 +2193,7 @@ fn deleted_template_instances_not_resurrected_by_merge() {
     use chrono::Utc;
     use dodo::task::Task;
 
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
 
     // Create a recurring template
@@ -2391,7 +2391,7 @@ fn num_id_conflict_resolution_both_directions() {
 fn dedup_keeps_earliest_created_instance() {
     use chrono::{Duration, Utc};
 
-    let mut db = test_db();
+    let db = test_db();
     let today = chrono::Local::now().date_naive();
 
     // Create a recurring template

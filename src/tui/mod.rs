@@ -20,7 +20,7 @@ mod tests;
 use event::run_app;
 use state::{App, TasksView};
 
-pub fn run_tui(db: &mut Database) -> Result<()> {
+pub fn run_tui(db: &Database) -> Result<()> {
     enable_raw_mode()?;
     let mut stderr = io::stderr();
     execute!(

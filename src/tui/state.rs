@@ -212,7 +212,7 @@ pub(super) struct App<'a> {
     pub(super) panes: [PaneState; 4],
     pub(super) active_pane: usize,
     pub(super) running_task: Option<RunningTaskInfo>,
-    pub(super) db: &'a mut Database,
+    pub(super) db: &'a Database,
     pub(super) mode: AppMode,
     pub(super) last_ding_tick: u64,
     // Tabs & report
@@ -334,7 +334,7 @@ pub(super) fn split_note_entries(text: &str) -> Vec<String> {
 }
 
 impl<'a> App<'a> {
-    pub(super) fn new(db: &'a mut Database) -> Self {
+    pub(super) fn new(db: &'a Database) -> Self {
         let mut panes = [
             PaneState::new(),
             PaneState::new(),
