@@ -51,7 +51,7 @@ dirs = "6.0"
 colored = "3"
 
 # AWS SDK for S3-compatible backup
-aws-config = "1.5"
+aws-config = "1.8"
 aws-sdk-s3 = "1.47"
 
 # Compression for backups
